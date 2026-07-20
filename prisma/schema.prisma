@@ -1,0 +1,144 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum ArticleStatus {
+  draft
+  outlined
+  generated
+  edited
+  checked
+  pushed
+  failed
+}
+
+enum VersionType {
+  outline
+  generated
+  polished
+  manual_edit
+}
+
+enum VersionSource {
+  ai
+  user
+  system
+}
+
+enum ImageType {
+  cover
+  inline
+}
+
+enum ImageSource {
+  ai
+  upload
+  external
+}
+
+enum PublishStatus {
+  pending
+  success
+  failed
+}
+
+model Article {
+  id                   String           @id @default(cuid())
+  topic                String
+  keywords             String?
+  title                String?
+  subtitle             String?
+  summary              String?
+  outline              Json?
+  content              String?
+  style                String?
+  audience             String?
+  goal                 String?
+  wordCount            Int?
+  outlineCount         Int?              @default(3)
+  status               ArticleStatus    @default(draft)
+  coverImageUrl        String?
+  selectedOutlineIndex Int?
+  wechatDraftId        String?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  images         ImageAsset[]
+  publishRecords PublishRecord[]
+  riskChecks     RiskCheck[]
+  versions       ArticleVersion[]
+}
+
+model ArticleVersion {
+  id          String        @id @default(cuid())
+  articleId   String
+  versionType VersionType
+  source      VersionSource @default(ai)
+  title       String?
+  summary     String?
+  outline     Json?
+  content     String?
+  createdAt   DateTime      @default(now())
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@index([articleId])
+}
+
+model ImageAsset {
+  id            String      @id @default(cuid())
+  articleId     String
+  type          ImageType
+  source        ImageSource
+  url           String?
+  localPath     String?
+  prompt        String?
+  wechatMediaId String?
+  sortOrder     Int         @default(0)
+  createdAt     DateTime    @default(now())
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@index([articleId])
+}
+
+model PublishRecord {
+  id              String        @id @default(cuid())
+  articleId       String
+  channel         String        @default("wechat")
+  status          PublishStatus @default(pending)
+  requestPayload  String?
+  responsePayload String?
+  errorMessage    String?
+  createdAt       DateTime      @default(now())
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@index([articleId])
+}
+
+model RiskCheck {
+  id          String   @id @default(cuid())
+  articleId   String
+  score       Int?
+  issues      String?
+  suggestions String?
+  createdAt   DateTime @default(now())
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@index([articleId])
+}
+
+model AppConfig {
+  id          String   @id @default(cuid())
+  configKey   String   @unique
+  configValue String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
