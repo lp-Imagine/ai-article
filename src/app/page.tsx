@@ -6,6 +6,14 @@ import { useEffect, useState } from "react";
 import { ArrowRight, RefreshCw } from "lucide-react";
 import { FieldLabel, PageHeader, SectionCard } from "@/components/app-shell";
 import { useToast } from "@/components/toast";
+import {
+  clearArticleBackgroundTask,
+  getArticleBackgroundTask,
+  registerArticleTaskAbortController,
+  startArticleBackgroundTask,
+  unregisterArticleTaskAbortController,
+} from "@/lib/article-task-tracker";
+import { useArticleBackgroundTasks } from "@/hooks/use-article-background-tasks";
 
 type RecentArticle = {
   id: string;
@@ -48,6 +56,7 @@ export default function HomePage() {
     outlineCount: 3,
   });
   const [recent, setRecent] = useState<RecentArticle[]>([]);
+  const { runningTaskIds } = useArticleBackgroundTasks();
 
   useEffect(() => {
     fetchRecent();
@@ -71,14 +80,16 @@ export default function HomePage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.topic.trim()) return;
+    if (!form.topic.trim() || loading) return;
     setLoading(true);
+    const topic = form.topic.trim();
+
     try {
       const created = await fetch("/api/articles", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          topic: form.topic.trim(),
+          topic,
           keywords: form.keywords,
           style: form.style,
           wordCount: Number(form.wordCount),
@@ -92,16 +103,42 @@ export default function HomePage() {
         throw new Error(createdJson.message || "创建失败");
       }
       const articleId = createdJson.data.id;
+      const ctrl = new AbortController();
 
-      const outlineRes = await fetch(`/api/articles/${articleId}/generate-outline`, {
+      startArticleBackgroundTask({
+        articleId,
+        label: "生成大纲",
+        title: "正在生成大纲方案",
+        articleLabel: topic,
+        startedAt: Date.now(),
+        statusAtStart: "draft",
+        contentLengthAtStart: 0,
+      });
+      registerArticleTaskAbortController(articleId, ctrl);
+
+      void fetch(`/api/articles/${articleId}/generate-outline`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ outlineCount: form.outlineCount }),
-      });
-      const outlineJson = await outlineRes.json();
-      if (outlineJson.code !== 0) {
-        throw new Error(outlineJson.message || "生成大纲失败");
-      }
+        signal: ctrl.signal,
+      })
+        .then(async (res) => {
+          const outlineJson = await res.json();
+          if (outlineJson.code !== 0) {
+            throw new Error(outlineJson.message || "生成大纲失败");
+          }
+        })
+        .then(() => {
+          clearArticleBackgroundTask(articleId);
+          unregisterArticleTaskAbortController(articleId, ctrl);
+        })
+        .catch((err) => {
+          unregisterArticleTaskAbortController(articleId, ctrl);
+          clearArticleBackgroundTask(articleId);
+          if (err instanceof Error && err.name === "AbortError") return;
+          const message = err instanceof Error ? err.message : "生成大纲失败";
+          toast.show({ title: "生成大纲失败", message, variant: "error", duration: 6000 });
+        });
 
       router.push(`/articles/${articleId}`);
     } catch (err) {
@@ -263,6 +300,8 @@ export default function HomePage() {
             <ul className="space-y-3">
               {recent.slice(0, 6).map((item) => {
                 const s = statusMap[item.status] ?? statusMap.draft;
+                const backgroundTask = getArticleBackgroundTask(item.id);
+                const isRunning = runningTaskIds.has(item.id);
                 return (
                   <li key={item.id}>
                     <Link href={`/articles/${item.id}`} className="recent-item">
@@ -279,7 +318,14 @@ export default function HomePage() {
                           })}
                         </p>
                       </div>
-                      <span className={`badge shrink-0 ${s.color}`}>{s.label}</span>
+                      <div className="flex shrink-0 flex-col items-end gap-1.5 sm:flex-row sm:items-center">
+                        {isRunning ? (
+                          <span className="badge badge-accent">
+                            {backgroundTask?.label ?? "生成中"}…
+                          </span>
+                        ) : null}
+                        <span className={`badge ${s.color}`}>{s.label}</span>
+                      </div>
                     </Link>
                   </li>
                 );

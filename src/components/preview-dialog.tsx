@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { X } from "lucide-react";
 import ArticleHtmlContent from "@/components/article-html-content";
 import { normalizeCalloutBlocks, wrapSummarySection } from "@/lib/wechat-style";
 
@@ -17,11 +18,47 @@ type Props = {
 
 type Mode = "phone" | "desktop";
 
+function useIsMobilePreview() {
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 1023px)");
+    const sync = () => setIsMobile(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
+  return isMobile;
+}
+
 function plainTextLength(html: string) {
   if (typeof window === "undefined") return html.length;
   const div = document.createElement("div");
   div.innerHTML = html;
   return (div.textContent || "").replace(/\s+/g, "").length;
+}
+
+function PreviewArticleBody({
+  title,
+  summary,
+  displayContent,
+  coverImageUrl,
+}: {
+  title: string;
+  summary?: string | null;
+  displayContent: string;
+  coverImageUrl?: string | null;
+}) {
+  return (
+    <>
+      {coverImageUrl ? <img src={coverImageUrl} alt="cover" className="mp-cover" /> : null}
+      <h1>{title}</h1>
+      <div className="mp-meta">{summary ? summary : "（未填写摘要）"}</div>
+      <ArticleHtmlContent html={`<article>${displayContent}</article>`} />
+      <div className="mp-preview-end">— 全文完 —</div>
+    </>
+  );
 }
 
 export default function PreviewDialog({
@@ -35,37 +72,81 @@ export default function PreviewDialog({
   targetWords,
 }: Props) {
   const [mode, setMode] = useState<Mode>("phone");
+  const isMobile = useIsMobilePreview();
+
+  useEffect(() => {
+    if (!open || !isMobile) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open, isMobile]);
 
   if (!open) return null;
 
   const safeContent = content && content.trim().length > 0
     ? content
-    : `<p>（尚无正文）请在左侧生成或粘贴内容，再回到这里预览。</p>`;
+    : `<p>（尚无正文）请先生成或粘贴内容，再回到这里预览。</p>`;
 
   const displayContent = normalizeCalloutBlocks(wrapSummarySection(safeContent));
-
   const safeTitle = title || topic || "未命名标题";
   const charCount = plainTextLength(safeContent);
   const ratio = targetWords ? Math.min(1, charCount / targetWords) : 1;
 
+  if (isMobile) {
+    return (
+      <div className="preview-mobile-overlay" role="dialog" aria-modal="true" aria-label="文章预览">
+        <header className="preview-mobile-header">
+          <div className="preview-mobile-header-main">
+            <p className="preview-mobile-eyebrow">公众号预览</p>
+            <div className="preview-mobile-stats">
+              <span className="badge badge-accent">{charCount} 字</span>
+              {targetWords ? (
+                <span
+                  className={
+                    ratio >= 0.9
+                      ? "badge badge-success"
+                      : ratio >= 0.6
+                        ? "badge badge-warning"
+                        : "badge badge-danger"
+                  }
+                >
+                  {Math.round(ratio * 100)}%
+                </span>
+              ) : null}
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="preview-mobile-close" aria-label="关闭预览">
+            <X size={20} />
+          </button>
+        </header>
+
+        <div className="preview-mobile-scroll mp-preview">
+          <PreviewArticleBody
+            title={safeTitle}
+            summary={summary}
+            displayContent={displayContent}
+            coverImageUrl={coverImageUrl}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(21,19,17,0.35)] backdrop-blur-md p-4"
+      className="preview-desktop-overlay"
       onClick={onClose}
     >
       <div
-        className="glass-strong flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-[24px]"
+        className="preview-desktop-panel glass-strong"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* 顶部栏 */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-6 py-4">
-          <div className="flex items-center gap-3">
-            <h3 className="editorial-title text-lg font-semibold text-[var(--foreground)]">
-              预览
-            </h3>
-            <span className="badge badge-accent">
-              {charCount} 字
-            </span>
+        <div className="preview-desktop-toolbar">
+          <div className="flex flex-wrap items-center gap-3">
+            <h3 className="editorial-title text-lg font-semibold text-[var(--foreground)]">预览</h3>
+            <span className="badge badge-accent">{charCount} 字</span>
             {targetWords ? (
               <span
                 className={
@@ -82,75 +163,55 @@ export default function PreviewDialog({
           </div>
 
           <div className="flex items-center gap-2">
-            {/* 模式切换 */}
-            <div className="flex overflow-hidden rounded-full border border-[var(--line)] text-xs p-0.5 bg-[rgba(255,255,255,0.6)]">
+            <div className="preview-mode-switch">
               <button
+                type="button"
                 onClick={() => setMode("phone")}
-                className={`rounded-full px-3.5 py-1.5 transition-colors ${
-                  mode === "phone"
-                    ? "bg-[var(--accent)] text-white font-semibold shadow-sm"
-                    : "text-[var(--muted)] hover:text-[var(--foreground)]"
-                }`}
+                className={mode === "phone" ? "preview-mode-btn-active" : "preview-mode-btn"}
               >
                 手机
               </button>
               <button
+                type="button"
                 onClick={() => setMode("desktop")}
-                className={`rounded-full px-3.5 py-1.5 transition-colors ${
-                  mode === "desktop"
-                    ? "bg-[var(--accent)] text-white font-semibold shadow-sm"
-                    : "text-[var(--muted)] hover:text-[var(--foreground)]"
-                }`}
+                className={mode === "desktop" ? "preview-mode-btn-active" : "preview-mode-btn"}
               >
                 电脑
               </button>
             </div>
-            <button onClick={onClose} className="btn-secondary text-sm py-1.5 px-3">
+            <button type="button" onClick={onClose} className="btn-secondary text-sm py-1.5 px-3">
               关闭
             </button>
           </div>
         </div>
 
-        {/* 预览区域 */}
-        <div className="flex-1 overflow-auto bg-[var(--background)] p-6">
+        <div className="preview-desktop-body">
           {mode === "phone" ? (
-            <div className="mx-auto flex h-full max-w-[420px] flex-col rounded-[36px] border-[10px] border-[#1a1a2e] bg-white shadow-2xl shadow-black/30">
-              <div className="flex items-center justify-between px-4 py-2 text-[10px] text-[#888] border-b border-[#f0f0f0]">
+            <div className="preview-phone-frame">
+              <div className="preview-phone-status">
                 <span>9:41</span>
                 <span className="font-medium">公众号预览</span>
                 <span>•••</span>
               </div>
-              <div className="flex-1 overflow-auto px-5 py-4 mp-preview">
-                {coverImageUrl ? (
-                  <img src={coverImageUrl} alt="cover" className="mp-cover" />
-                ) : null}
-                <h1>{safeTitle}</h1>
-                <div className="mp-meta">
-                  {summary ? summary : "（未填写摘要）"}
-                </div>
-                <ArticleHtmlContent html={`<article>${displayContent}</article>`} />
-                <div className="mt-8 border-t border-dashed border-[#e6dccb] pt-4 text-center text-xs text-[#999]">
-                  — 全文完 —
-                </div>
+              <div className="preview-phone-scroll mp-preview">
+                <PreviewArticleBody
+                  title={safeTitle}
+                  summary={summary}
+                  displayContent={displayContent}
+                  coverImageUrl={coverImageUrl}
+                />
               </div>
             </div>
           ) : (
-            <div className="mx-auto max-w-3xl rounded-xl border border-[var(--line)] bg-white shadow-lg">
-              <div className="border-b border-[#f0e8d5] bg-[#faf7ef] px-5 py-2.5 text-xs text-[var(--muted)]">
-                模拟公众号文章页（桌面宽度）
-              </div>
+            <div className="preview-desktop-article">
+              <div className="preview-desktop-article-label">模拟公众号文章页（桌面宽度）</div>
               <div className="mp-preview px-8 py-6">
-                {coverImageUrl ? (
-                  <img src={coverImageUrl} alt="cover" className="mp-cover" />
-                ) : null}
-                <h1>{safeTitle}</h1>
-                <div className="mp-meta">
-                  {summary ? summary : "（未填写摘要）"}
-                </div>
-                <ArticleHtmlContent html={`<article>${displayContent}</article>`} />
-                <div className="mt-10 border-t border-dashed border-[#e6dccb] pt-4 text-center text-xs text-[#999]">
-                  — 全文完 —
-                </div>
+                <PreviewArticleBody
+                  title={safeTitle}
+                  summary={summary}
+                  displayContent={displayContent}
+                  coverImageUrl={coverImageUrl}
+                />
               </div>
             </div>
           )}

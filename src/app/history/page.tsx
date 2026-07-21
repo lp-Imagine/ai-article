@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ArrowRight, FileText } from "lucide-react";
 import { PageHeader, SectionCard } from "@/components/app-shell";
+import { getArticleBackgroundTask } from "@/lib/article-task-tracker";
+import { useArticleBackgroundTasks } from "@/hooks/use-article-background-tasks";
 
 type Article = {
   id: string;
@@ -38,6 +40,7 @@ const statusLabel: Record<string, string> = {
 export default function HistoryPage() {
   const [articles, setArticles] = useState<Article[]>([]);
   const [loading, setLoading] = useState(true);
+  const { runningTaskIds } = useArticleBackgroundTasks();
 
   useEffect(() => {
     (async () => {
@@ -78,34 +81,52 @@ export default function HistoryPage() {
             </Link>
           </div>
         ) : (
-          <div className="space-y-3">
-            {articles.map((article) => (
-              <Link key={article.id} href={`/articles/${article.id}`} className="history-row">
-                <div className="min-w-0 flex-1">
-                  <h2 className="truncate text-sm font-semibold">
-                    {article.title ?? article.topic}
-                  </h2>
-                  <p className="mt-1.5 text-xs leading-relaxed text-[var(--muted)]">
-                    {article.topic}
-                    {article.style ? ` · ${article.style}` : ""}
-                    {article.wordCount ? ` · ${article.wordCount} 字` : ""}
-                    {" · "}
-                    {new Date(article.updatedAt).toLocaleString("zh-CN", {
-                      month: "2-digit",
-                      day: "2-digit",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-3">
-                  <span className={`badge ${statusBadge[article.status] ?? "badge-muted"}`}>
-                    {statusLabel[article.status] ?? article.status}
-                  </span>
-                  <ArrowRight size={16} className="text-[var(--muted)]" />
-                </div>
-              </Link>
-            ))}
+          <div className="history-list">
+            {articles.map((article) => {
+              const displayTitle = article.title ?? article.topic;
+              const showTopic = Boolean(article.title && article.topic !== article.title);
+              const updatedLabel = new Date(article.updatedAt).toLocaleString("zh-CN", {
+                month: "2-digit",
+                day: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit",
+              });
+              const backgroundTask = getArticleBackgroundTask(article.id);
+              const isRunning = runningTaskIds.has(article.id);
+
+              return (
+                <Link key={article.id} href={`/articles/${article.id}`} className="history-row">
+                  <div className="history-row-body">
+                    <h2 className="history-row-title">{displayTitle}</h2>
+                    {(showTopic || article.style || article.wordCount) ? (
+                      <div className="history-row-tags">
+                        {showTopic ? <span className="history-row-tag">{article.topic}</span> : null}
+                        {article.style ? <span className="history-row-tag">{article.style}</span> : null}
+                        {article.wordCount ? <span className="history-row-tag">{article.wordCount} 字</span> : null}
+                      </div>
+                    ) : null}
+                    <div className="history-row-footer">
+                      <div className="history-row-footer-badges">
+                        {isRunning ? (
+                          <span className="badge badge-accent">{backgroundTask?.label ?? "生成中"}…</span>
+                        ) : null}
+                        <span className={`badge ${statusBadge[article.status] ?? "badge-muted"}`}>
+                          {statusLabel[article.status] ?? article.status}
+                        </span>
+                      </div>
+                      <div className="history-row-footer-end">
+                        <time className="history-row-time" dateTime={article.updatedAt}>
+                          {updatedLabel}
+                        </time>
+                        <span className="history-row-chevron" aria-hidden>
+                          <ArrowRight size={15} />
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </Link>
+              );
+            })}
           </div>
         )}
       </SectionCard>

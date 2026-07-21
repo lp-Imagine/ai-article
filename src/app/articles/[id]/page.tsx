@@ -17,9 +17,21 @@ import {
 } from "lucide-react";
 import PreviewDialog from "@/components/preview-dialog";
 import PushDialog from "@/components/push-dialog";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { FieldLabel } from "@/components/app-shell";
 import { useToast } from "@/components/toast";
 import { ProgressDialog, type ProgressStep } from "@/components/progress-dialog";
+import {
+  clearArticleBackgroundTask,
+  cancelArticleBackgroundTask,
+  getArticleBackgroundTask,
+  isArticleBackgroundTaskComplete,
+  isArticleBackgroundTaskExpired,
+  isOutlineBackgroundTaskLabel,
+  registerArticleTaskAbortController,
+  unregisterArticleTaskAbortController,
+  startArticleBackgroundTask,
+} from "@/lib/article-task-tracker";
 
 type PublishRecord = {
   id: number;
@@ -75,6 +87,8 @@ const statusVariant: Record<string, string> = {
 };
 
 const LONG_RUNNING_ACTIONS: Record<string, { title: string; estimatedSeconds: number }> = {
+  "生成大纲": { title: "正在生成大纲方案", estimatedSeconds: 45 },
+  "重新生成大纲": { title: "正在重新生成大纲", estimatedSeconds: 45 },
   "生成正文": { title: "正在生成正文与封面图", estimatedSeconds: 60 },
   "生成章节配图": { title: "正在为各章节生成配图", estimatedSeconds: 90 },
   "生成封面图": { title: "正在生成封面图（替换）", estimatedSeconds: 30 },
@@ -109,11 +123,13 @@ export default function ArticlePage({
     error?: string | null;
   }>({ open: false, title: "", steps: [] });
   const [progressKey, setProgressKey] = useState(0);
+  const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
 
   const toast = useToast();
   const abortRef = useRef<AbortController | null>(null);
   const actionToastIdRef = useRef<string | null>(null);
   const progressCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
   const inlineImagesPollRef = useRef<{
     sessionId: number;
     baselineFigureCount: number;
@@ -211,8 +227,95 @@ export default function ArticlePage({
     }
   }, [article?.selectedOutlineIndex]);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!id || loading || abortRef.current) return;
+
+    const task = getArticleBackgroundTask(id);
+    if (!task) return;
+
+    if (isArticleBackgroundTaskExpired(task)) {
+      clearArticleBackgroundTask(id);
+      return;
+    }
+
+    let stopped = false;
+    let uiShown = false;
+
+    const resumeProgressUi = () => {
+      if (uiShown) return;
+      uiShown = true;
+      setProgressKey((key) => key + 1);
+      setProgress({
+        open: true,
+        title: task.title,
+        steps: [
+          { label: "准备工作", status: "done" },
+          {
+            label: isOutlineBackgroundTaskLabel(task.label)
+              ? "正在生成大纲方案"
+              : task.label === "生成章节配图"
+                ? "正在生成配图"
+                : "调用 AI 生成中",
+            status: "running",
+          },
+          { label: "保存到草稿", status: "pending" },
+        ],
+        generatedCount: 0,
+        totalCount: 1,
+        error: null,
+      });
+      setBusy(task.label);
+    };
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/articles/${id}?t=${Date.now()}`, { cache: "no-store" });
+        const json = (await res.json()) as ApiResponse<ArticleRecord>;
+        if (stopped || json.code !== 0 || !json.data) return;
+
+        if (isArticleBackgroundTaskComplete(task, json.data)) {
+          clearArticleBackgroundTask(id);
+          if (!mountedRef.current) return;
+          setArticle(json.data);
+          setBusy(null);
+          setProgress(resetProgressState());
+          toast.show({
+            title: "后台任务已完成",
+            message: `${task.label}已完成`,
+            variant: "success",
+          });
+          return;
+        }
+
+        if (mountedRef.current) {
+          resumeProgressUi();
+          setArticle(json.data);
+        }
+      } catch {
+        // ignore transient poll errors
+      }
+    };
+
+    void poll();
+    const timer = setInterval(() => {
+      void poll();
+    }, 2000);
+
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [id, loading, toast, resetProgressState]);
+
   function cancelCurrent() {
-    abortRef.current?.abort();
+    cancelArticleBackgroundTask(id);
     abortRef.current = null;
     inlineImagesPollRef.current.sessionId += 1;
     clearProgressCloseTimer();
@@ -222,7 +325,12 @@ export default function ArticlePage({
     }
     setBusy(null);
     setProgress(resetProgressState());
+    setCancelConfirmOpen(false);
     toast.show({ message: "已取消当前操作", variant: "info" });
+  }
+
+  function requestCancelCurrent() {
+    setCancelConfirmOpen(true);
   }
 
   function applyInlineImagePollProgress(content: string, sessionId: number) {
@@ -389,6 +497,7 @@ export default function ArticlePage({
     const isLong = label in LONG_RUNNING_ACTIONS;
     const longCfg = LONG_RUNNING_ACTIONS[label];
     const isInlineImages = label === "生成章节配图";
+    const isOutline = isOutlineBackgroundTaskLabel(label);
 
     if (isLong) {
       const totalSections = isInlineImages
@@ -402,13 +511,26 @@ export default function ArticlePage({
           { label: "准备工作", status: "running" },
           isInlineImages
             ? { label: "正在生成第 1 张配图", status: "pending" }
-            : { label: "调用 AI 生成中", status: "pending" },
+            : isOutline
+              ? { label: "正在生成大纲方案", status: "pending" }
+              : { label: "调用 AI 生成中", status: "pending" },
           { label: "保存到草稿", status: "pending" },
         ],
         generatedCount: 0,
         totalCount: Math.max(1, totalSections),
         error: null,
       });
+
+      startArticleBackgroundTask({
+        articleId: id,
+        label,
+        title: longCfg.title,
+        articleLabel: article?.title ?? article?.topic ?? "未命名文章",
+        startedAt: Date.now(),
+        statusAtStart: article?.status ?? "draft",
+        contentLengthAtStart: plainTextLengthFromHtml(article?.content ?? ""),
+      });
+      registerArticleTaskAbortController(id, ctrl);
     }
 
     let inlineImagesSessionId = 0;
@@ -506,6 +628,8 @@ export default function ArticlePage({
       await refresh();
 
       if (isLong) {
+        clearArticleBackgroundTask(id);
+        if (!mountedRef.current) return;
         setProgress((p) => ({
           ...p,
           generatedCount: isInlineImages ? (json.data?.total ?? json.data?.images?.length ?? p.totalCount) : p.totalCount,
@@ -527,7 +651,9 @@ export default function ArticlePage({
       actionToastIdRef.current = null;
 
       if (isAbort) {
+        clearArticleBackgroundTask(id);
         if (isLong) {
+          if (!mountedRef.current) return;
           setProgress((p) => ({
             ...p,
             error: "用户已取消",
@@ -539,7 +665,9 @@ export default function ArticlePage({
           scheduleProgressClose(progressSessionId, 1200);
         }
       } else {
+        clearArticleBackgroundTask(id);
         const message = err instanceof Error ? err.message : `${label} 失败`;
+        if (!mountedRef.current) return;
         toast.show({ title: "操作失败", message, variant: "error", duration: 8000 });
         if (isLong) {
           setProgress((p) => ({
@@ -554,6 +682,9 @@ export default function ArticlePage({
       }
     } finally {
       if (pollingTimer) { clearInterval(pollingTimer); pollingTimer = undefined; }
+      if (isLong) {
+        unregisterArticleTaskAbortController(id, ctrl);
+      }
       setBusy(null);
       abortRef.current = null;
     }
@@ -709,7 +840,7 @@ export default function ArticlePage({
               </div>
             ) : null}
             <div className="article-topbar-actions">
-            <button onClick={saveArticle} disabled={saving} className="btn-primary text-sm">
+            <button onClick={saveArticle} disabled={saving} className="btn-secondary text-sm">
               {saving ? (
                 <span className="inline-flex items-center gap-1.5">
                   <span className="inline-block size-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
@@ -722,16 +853,44 @@ export default function ArticlePage({
                 </span>
               )}
             </button>
-            <button
-              onClick={() => setPreviewOpen(true)}
-              disabled={!article.content}
-              className="btn-secondary text-sm"
-            >
-              <span className="inline-flex items-center gap-1.5">
-                <Eye size={14} />
-                预览
-              </span>
-            </button>
+            <div className="article-topbar-publish">
+              <button
+                onClick={() => setPreviewOpen(true)}
+                disabled={!article.content}
+                className="btn-secondary text-sm article-topbar-publish-btn"
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <Eye size={14} />
+                  预览
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => callAction(`/api/articles/${id}/generate-content`, "生成正文")}
+                disabled={busy !== null || !hasSelectedOutline}
+                title={hasSelectedOutline ? undefined : "请先在下方大纲区点击「选择这个大纲」"}
+                className="btn-secondary text-sm article-topbar-publish-btn"
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <FileText size={14} />
+                  {busy === "生成正文" ? "生成中..." : "生成正文"}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPushResult(null);
+                  setPushDialogOpen(true);
+                }}
+                disabled={busy !== null || !article.content}
+                className="btn-primary text-sm article-topbar-publish-btn article-topbar-publish-btn-primary"
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <Send size={14} />
+                  推送草稿箱
+                </span>
+              </button>
+            </div>
           </div>
           </div>
         </div>
@@ -841,6 +1000,7 @@ export default function ArticlePage({
             onClick={() => callAction(`/api/articles/${id}/generate-content`, "生成正文")}
             disabled={!hasSelectedOutline}
             title={hasSelectedOutline ? undefined : "请先在下方大纲区点击「选择这个大纲」"}
+            className="workflow-item-mobile-only"
           />
           <WorkflowButton
             busy={busy}
@@ -854,7 +1014,7 @@ export default function ArticlePage({
               setPushDialogOpen(true);
             }}
             disabled={busy !== null || !article.content}
-            className="workflow-btn workflow-btn-primary"
+            className="workflow-btn workflow-btn-primary workflow-item-mobile-only"
           >
             <Send size={14} />
             推送草稿箱
@@ -1034,6 +1194,12 @@ export default function ArticlePage({
             快捷工具
           </p>
           <div className="tool-chip-grid">
+            <ActionChip
+              busy={busy}
+              label="文章预览"
+              onClick={() => setPreviewOpen(true)}
+              disabled={!article.content}
+            />
             <ActionChip busy={busy} label="生成备选标题" onClick={handleGenerateTitles} />
             <ActionChip busy={busy} label="生成摘要" onClick={handleGenerateSummary} disabled={!article.content && !article.topic} />
             <ActionChip busy={busy} label="扩写正文" onClick={() => callAction(`/api/articles/${id}/expand`, "扩写正文")} disabled={!article.content} />
@@ -1069,7 +1235,16 @@ export default function ArticlePage({
         generatedCount={progress.generatedCount}
         totalCount={progress.totalCount}
         error={progress.error}
-        onCancel={cancelCurrent}
+        onCancel={requestCancelCurrent}
+      />
+
+      <ConfirmDialog
+        open={cancelConfirmOpen}
+        title={busy ? `取消「${busy}」？` : "取消当前任务？"}
+        description={article ? (article.title ?? article.topic) : undefined}
+        confirmLabel="确认取消"
+        onConfirm={cancelCurrent}
+        onCancel={() => setCancelConfirmOpen(false)}
       />
 
       <PushDialog
@@ -1083,6 +1258,39 @@ export default function ArticlePage({
         wordCount={plainCharCount}
         targetWords={article.wordCount}
       />
+
+      <div className="mobile-editor-dock">
+        <button
+          type="button"
+          onClick={saveArticle}
+          disabled={saving}
+          className="mobile-editor-dock-btn mobile-editor-dock-btn-secondary"
+        >
+          <Save size={16} />
+          {saving ? "保存中" : "保存"}
+        </button>
+        <button
+          type="button"
+          onClick={() => setPreviewOpen(true)}
+          disabled={!article.content}
+          className="mobile-editor-dock-btn mobile-editor-dock-btn-secondary"
+        >
+          <Eye size={16} />
+          预览
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setPushResult(null);
+            setPushDialogOpen(true);
+          }}
+          disabled={busy !== null || !article.content}
+          className="mobile-editor-dock-btn mobile-editor-dock-btn-primary"
+        >
+          <Send size={16} />
+          推送
+        </button>
+      </div>
     </>
   );
 }
@@ -1121,6 +1329,7 @@ function WorkflowButton({
   onClick,
   disabled,
   title,
+  className,
 }: {
   busy: string | null;
   label: string;
@@ -1128,6 +1337,7 @@ function WorkflowButton({
   onClick: () => void;
   disabled?: boolean;
   title?: string;
+  className?: string;
 }) {
   const isLoading = busy === label;
   return (
@@ -1136,12 +1346,21 @@ function WorkflowButton({
       onClick={onClick}
       disabled={busy !== null || disabled}
       title={title}
-      className="workflow-btn"
+      className={`workflow-btn ${className ?? ""}`}
     >
       {icon}
       {isLoading ? `${label}中...` : label}
     </button>
   );
+}
+
+function plainTextLengthFromHtml(html: string) {
+  if (typeof document === "undefined") {
+    return html.replace(/<[^>]+>/g, "").replace(/\s+/g, "").length;
+  }
+  const div = document.createElement("div");
+  div.innerHTML = html;
+  return (div.textContent || "").replace(/\s+/g, "").length;
 }
 
 function normalizeTitleText(text: string) {

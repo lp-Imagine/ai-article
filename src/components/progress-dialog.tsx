@@ -138,19 +138,22 @@ export function ProgressDialog({
         </section>
 
         <footer className="progress-dialog-footer">
-          {hasError ? (
-            <p className="progress-dialog-error">{error || "操作失败，请稍后重试"}</p>
-          ) : allDone ? (
-            <p className="progress-dialog-done">全部完成 · 耗时 {formatElapsed(elapsed)}</p>
-          ) : (
-            <p className="progress-dialog-elapsed">已进行 {formatElapsed(elapsed)}</p>
-          )}
-
           {!allDone && !hasError && onCancel ? (
             <button type="button" onClick={onCancel} className="progress-dialog-cancel">
               取消任务
             </button>
           ) : null}
+
+          {hasError ? (
+            <p className="progress-dialog-error">{error || "操作失败，请稍后重试"}</p>
+          ) : allDone ? (
+            <p className="progress-dialog-done">全部完成 · 耗时 {formatElapsed(elapsed)}</p>
+          ) : (
+            <div className="progress-dialog-footer-meta">
+              <p className="progress-dialog-elapsed">已进行 {formatElapsed(elapsed)}</p>
+              <p className="progress-dialog-hint">可切换页面，任务会在后台继续；返回本文可查看进度</p>
+            </div>
+          )}
         </footer>
       </div>
     </div>

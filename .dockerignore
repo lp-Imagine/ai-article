@@ -1,0 +1,17 @@
+node_modules
+.next
+out
+.git
+.gitignore
+.env*
+!.env.example
+README.md
+coverage
+.DS_Store
+*.md
+!README.md
+prisma/dev.db
+prisma/dev.db-journal
+.cursor
+.trae
+terminals

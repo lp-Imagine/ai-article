@@ -57,7 +57,7 @@ const VARIANT_STYLES: Record<ToastVariant, { ring: string; bg: string; icon: str
     badge: "bg-[var(--danger)] text-white",
   },
   info: {
-    ring: "border-[rgba(37,99,235,0.22)]",
+    ring: "border-[rgba(0,113,227,0.22)]",
     bg: "bg-[rgba(255,255,255,0.92)]",
     icon: "ⓘ",
     badge: "bg-[var(--accent)] text-white",
@@ -157,7 +157,7 @@ function ToastViewport({
   onDismiss: (id: string) => void;
 }) {
   return (
-    <div className="pointer-events-none fixed top-4 left-1/2 z-[100] flex -translate-x-1/2 flex-col items-stretch gap-2 sm:top-6">
+    <div className="pointer-events-none fixed top-4 left-1/2 z-[100] flex -translate-x-1/2 flex-col items-stretch gap-2 max-md:top-3 sm:top-6">
       {toasts.map((toast) => {
         const style = VARIANT_STYLES[toast.variant];
         return (

@@ -28,8 +28,14 @@ export default function PushDialog({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(21,19,17,0.35)] backdrop-blur-md p-4" onClick={onClose}>
-      <div className="glass-strong w-[480px] max-w-[90vw] max-h-[85vh] overflow-auto rounded-[24px]" onClick={(e) => e.stopPropagation()}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(21,19,17,0.35)] backdrop-blur-md p-4 mobile-dialog-sheet sm:items-center sm:p-4"
+      onClick={onClose}
+    >
+      <div
+        className="glass-strong w-[480px] max-w-[90vw] max-h-[85vh] overflow-auto rounded-[24px] sm:rounded-[24px]"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="p-6 space-y-5">
           <h2 className="editorial-title text-xl font-semibold text-[var(--foreground)]">
             推送确认
@@ -46,7 +52,7 @@ export default function PushDialog({
               />
             </div>
           ) : (
-            <div className="rounded-lg border border-dashed border-[var(--warning)] bg-[var(--warning-soft)] p-4 text-sm text-[#92400e]">
+            <div className="rounded-lg border border-dashed border-[var(--warning)] bg-[var(--warning-soft)] p-4 text-sm text-[#b45309]">
               暂未生成封面图，推送时系统将自动生成一张。
             </div>
           )}

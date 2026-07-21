@@ -5,6 +5,8 @@ import { usePathname } from "next/navigation";
 import { Clock3, Home, Settings, Sparkles } from "lucide-react";
 import clsx from "clsx";
 import type { ReactNode } from "react";
+import { BackgroundTaskFloat } from "@/components/background-task-float";
+import { BackgroundTaskSidebarHint } from "@/components/background-task-sidebar-hint";
 
 const navItems = [
   { href: "/", label: "工作台", icon: Home },
@@ -12,8 +14,18 @@ const navItems = [
   { href: "/settings", label: "设置", icon: Settings },
 ];
 
+function pageTitleForPath(pathname: string): string | null {
+  if (pathname === "/") return "工作台";
+  if (pathname === "/history") return "历史记录";
+  if (pathname === "/settings") return "设置";
+  if (pathname.startsWith("/articles/")) return "文章编辑";
+  return null;
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const mobileTitle = pageTitleForPath(pathname);
+  const isArticleEditor = pathname.startsWith("/articles/");
 
   return (
     <div className="app-shell">
@@ -48,6 +60,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </nav>
 
         <div className="app-sidebar-footer">
+          <BackgroundTaskSidebarHint />
           <p>选题 → 大纲 → 正文 → 推送</p>
         </div>
       </aside>
@@ -58,29 +71,36 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div className="app-logo">
               <Sparkles size={16} strokeWidth={2.2} />
             </div>
-            <span className="app-brand-title">AI 发文助手</span>
+            <div className="app-mobile-brand-text">
+              <span className="app-brand-title">AI 发文助手</span>
+              {mobileTitle ? <span className="app-mobile-page-title">{mobileTitle}</span> : null}
+            </div>
           </div>
-          <nav className="app-mobile-nav">
-            {navItems.map(({ href, label }) => {
-              const active =
-                href === "/"
-                  ? pathname === "/"
-                  : pathname === href || pathname.startsWith(`${href}/`);
-              return (
-                <Link
-                  key={href}
-                  href={href}
-                  className={clsx("app-mobile-nav-item", active && "app-mobile-nav-item-active")}
-                >
-                  {label}
-                </Link>
-              );
-            })}
-          </nav>
         </header>
 
-        <div className="app-content">{children}</div>
+        <div className={clsx("app-content", isArticleEditor && "app-content-article")}>{children}</div>
+
+        <nav className="app-mobile-bottom-nav" aria-label="主导航">
+          {navItems.map(({ href, label, icon: Icon }) => {
+            const active =
+              href === "/"
+                ? pathname === "/"
+                : pathname === href || pathname.startsWith(`${href}/`);
+            return (
+              <Link
+                key={href}
+                href={href}
+                className={clsx("app-mobile-bottom-item", active && "app-mobile-bottom-item-active")}
+              >
+                <Icon size={20} strokeWidth={active ? 2.2 : 1.8} />
+                <span>{label}</span>
+              </Link>
+            );
+          })}
+        </nav>
       </div>
+
+      <BackgroundTaskFloat />
     </div>
   );
 }
