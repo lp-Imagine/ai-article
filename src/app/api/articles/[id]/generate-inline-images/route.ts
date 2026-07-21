@@ -74,6 +74,13 @@ export async function POST(
         continue;
       }
 
+      const documentOrderIndex = sectionMatches
+        .slice(0, i)
+        .filter((m) => {
+          const h = m[1].replace(/<[^>]+>/g, "").trim();
+          return !h.includes("写在最后") && !h.includes("结尾") && !h.includes("总结");
+        }).length;
+
       // 提取该章节的内容（去掉 HTML 标签，取更多上下文）
       const insertPos = match.index!;
       const afterSection = baseContent.slice(insertPos + match[0].length);
@@ -92,6 +99,7 @@ export async function POST(
           article.style,
           heading,
           sectionContent,
+          { sectionIndex: documentOrderIndex, totalSections: totalToGenerate },
         );
         const { url } = await generateSectionImage(prompt);
 

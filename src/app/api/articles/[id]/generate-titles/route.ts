@@ -24,6 +24,7 @@ export async function POST(
     style: article.style,
     outlineTitle: article.title,
     contentSummary: article.summary,
+    content: article.content,
   });
 
   return NextResponse.json({

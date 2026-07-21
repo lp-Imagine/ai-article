@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { ArrowRight, FileText } from "lucide-react";
+import { PageHeader, SectionCard } from "@/components/app-shell";
 
 type Article = {
   id: string;
@@ -54,40 +56,36 @@ export default function HistoryPage() {
   }, []);
 
   return (
-    <main className="mx-auto w-full max-w-[960px] px-8 py-12">
-      <div className="flex items-center justify-between border-b border-[var(--line)] pb-6">
-        <div>
-          <Link href="/" className="btn-ghost text-xs mb-2 inline-block">
-            ← 返回工作台
-          </Link>
-          <h1 className="editorial-title text-3xl font-bold">历史记录</h1>
-          <p className="mt-1 text-sm text-[var(--muted)]">过往创建的所有文章</p>
-        </div>
-      </div>
+    <>
+      <PageHeader
+        eyebrow="Archive"
+        title="历史记录"
+        description="过往创建的所有文章，点击继续编辑或查看进度。"
+      />
 
-      <section className="mt-8">
+      <SectionCard title={`全部文章${articles.length > 0 ? ` · ${articles.length}` : ""}`}>
         {loading ? (
-          <div className="glass p-8 text-center text-sm text-[var(--muted)]">加载中...</div>
+          <div className="flex items-center gap-3 py-12 text-sm text-[var(--muted)]">
+            <span className="loading-dot" />
+            加载中...
+          </div>
         ) : articles.length === 0 ? (
-          <div className="glass p-8 text-center">
+          <div className="empty-state">
+            <FileText size={28} className="mx-auto mb-3 text-[var(--muted)]" strokeWidth={1.5} />
             <p className="text-sm text-[var(--muted)]">暂无历史文章</p>
-            <Link href="/" className="mt-3 inline-block btn-primary text-sm py-2 px-6">
+            <Link href="/" className="mt-4 inline-block btn-primary text-sm py-2.5 px-6">
               去创作第一篇文章
             </Link>
           </div>
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-3">
             {articles.map((article) => (
-              <Link
-                key={article.id}
-                href={`/articles/${article.id}`}
-                className="glass flex items-center justify-between p-4 transition-all hover:border-[var(--line-strong)]"
-              >
-                <div className="min-w-0 pr-4">
-                  <h2 className="text-sm font-medium truncate">
+              <Link key={article.id} href={`/articles/${article.id}`} className="history-row">
+                <div className="min-w-0 flex-1">
+                  <h2 className="truncate text-sm font-semibold">
                     {article.title ?? article.topic}
                   </h2>
-                  <p className="mt-1 text-xs text-[var(--muted)]">
+                  <p className="mt-1.5 text-xs leading-relaxed text-[var(--muted)]">
                     {article.topic}
                     {article.style ? ` · ${article.style}` : ""}
                     {article.wordCount ? ` · ${article.wordCount} 字` : ""}
@@ -100,14 +98,17 @@ export default function HistoryPage() {
                     })}
                   </p>
                 </div>
-                <span className={`badge shrink-0 ${statusBadge[article.status] ?? "badge-muted"}`}>
-                  {statusLabel[article.status] ?? article.status}
-                </span>
+                <div className="flex shrink-0 items-center gap-3">
+                  <span className={`badge ${statusBadge[article.status] ?? "badge-muted"}`}>
+                    {statusLabel[article.status] ?? article.status}
+                  </span>
+                  <ArrowRight size={16} className="text-[var(--muted)]" />
+                </div>
               </Link>
             ))}
           </div>
         )}
-      </section>
-    </main>
+      </SectionCard>
+    </>
   );
 }

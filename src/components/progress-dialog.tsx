@@ -1,11 +1,19 @@
 "use client";
 
+import { Check, Loader2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 export type ProgressStep = {
   label: string;
   status: "pending" | "running" | "done" | "error";
 };
+
+function formatElapsed(seconds: number) {
+  if (seconds < 60) return `${seconds} 秒`;
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return secs > 0 ? `${mins} 分 ${secs} 秒` : `${mins} 分钟`;
+}
 
 export function ProgressDialog({
   open,
@@ -31,8 +39,8 @@ export function ProgressDialog({
     if (open) {
       setElapsed(0);
       intervalRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
-    } else {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+    } else if (intervalRef.current) {
+      clearInterval(intervalRef.current);
     }
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
@@ -42,82 +50,108 @@ export function ProgressDialog({
   if (!open) return null;
 
   const allDone = steps.every((s) => s.status === "done" || s.status === "error");
-  const hasError = error || steps.some((s) => s.status === "error");
+  const hasError = Boolean(error || steps.some((s) => s.status === "error"));
+  const showImageProgress = totalCount > 1;
+  const progressRatio = totalCount > 0 ? generatedCount / totalCount : 0;
+  const progressPercent = Math.round(progressRatio * 100);
+  const runningStep = steps.find((s) => s.status === "running");
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm">
-      <div className="glass-strong w-[400px] max-w-[90vw] p-6">
-        <h2 className="editorial-title text-lg font-semibold mb-4">{title}</h2>
+    <div
+      className="progress-dialog-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="progress-dialog-title"
+    >
+      <div className="progress-dialog">
+        <header className="progress-dialog-header">
+          <div className="progress-dialog-header-main">
+            <p className="progress-dialog-eyebrow">AI 任务</p>
+            <h2 id="progress-dialog-title" className="progress-dialog-title editorial-title">
+              {title}
+            </h2>
+          </div>
+          <span
+            className={`progress-dialog-badge ${
+              hasError
+                ? "progress-dialog-badge-error"
+                : allDone
+                  ? "progress-dialog-badge-done"
+                  : "progress-dialog-badge-running"
+            }`}
+          >
+            {hasError ? "失败" : allDone ? "已完成" : "进行中"}
+          </span>
+        </header>
 
-        {/* 图片生成进度 */}
-        {totalCount > 1 && (
-          <div className="mb-5">
-            <div className="flex items-center justify-between text-xs text-[var(--muted)] mb-2">
-              <span>配图进度</span>
-              <span>
+        {showImageProgress && (
+          <section className="progress-dialog-metrics" aria-label="配图进度">
+            <div className="progress-dialog-metrics-row">
+              <span className="progress-dialog-metrics-label">配图进度</span>
+              <span className="progress-dialog-metrics-value">
                 {generatedCount} / {totalCount}
+                <span className="progress-dialog-metrics-percent">{progressPercent}%</span>
               </span>
             </div>
-            <div className="progress-bar">
+            <div className="progress-dialog-track" aria-hidden="true">
               <div
-                className="progress-bar-fill"
-                style={{ width: `${Math.round((generatedCount / totalCount) * 100)}%` }}
+                className="progress-dialog-track-fill"
+                style={{ width: `${progressPercent}%` }}
               />
             </div>
-          </div>
+          </section>
         )}
 
-        {/* 步骤列表 */}
-        <ul className="space-y-3 mb-1">
-          {steps.map((step, i) => (
-            <li key={i} className="flex items-center gap-3 text-sm">
-              <span
-                className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
-                  step.status === "done"
-                    ? "bg-[var(--success)] text-white"
-                    : step.status === "error"
-                      ? "bg-[var(--danger)] text-white"
-                      : step.status === "running"
-                        ? "bg-[var(--accent)] text-white animate-pulse"
-                        : "bg-[rgba(0,0,0,0.04)] text-[var(--muted)]"
-                }`}
-              >
-                {step.status === "done" ? "✓" : step.status === "error" ? "✕" : i + 1}
-              </span>
-              <span
-                className={
-                  step.status === "done"
-                    ? "text-[var(--foreground)]"
-                    : step.status === "running"
-                      ? "text-[var(--accent)]"
-                      : step.status === "error"
-                        ? "text-[var(--danger)]"
-                        : "text-[var(--muted)]"
-                }
-              >
-                {step.label}
-              </span>
-            </li>
-          ))}
-        </ul>
+        <section className="progress-dialog-stepper" aria-label="任务步骤">
+          <ol className="progress-stepper-list">
+            {steps.map((step, i) => {
+              const isLast = i === steps.length - 1;
+              return (
+                <li
+                  key={i}
+                  className={`progress-stepper-item progress-stepper-item-${step.status}`}
+                >
+                  <div className="progress-stepper-rail">
+                    <span className={`progress-stepper-marker progress-stepper-marker-${step.status}`}>
+                      {step.status === "done" ? (
+                        <Check size={12} strokeWidth={3} />
+                      ) : step.status === "error" ? (
+                        <X size={12} strokeWidth={3} />
+                      ) : step.status === "running" ? (
+                        <Loader2 size={12} className="progress-stepper-spinner" />
+                      ) : (
+                        <span>{i + 1}</span>
+                      )}
+                    </span>
+                    {!isLast ? <span className="progress-stepper-line" aria-hidden="true" /> : null}
+                  </div>
+                  <div className="progress-stepper-body">
+                    <p className="progress-stepper-label">{step.label}</p>
+                    {step.status === "running" && runningStep === step ? (
+                      <p className="progress-stepper-hint">正在处理，请稍候…</p>
+                    ) : null}
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </section>
 
-        {/* 状态信息 */}
-        {hasError ? (
-          <p className="mt-4 text-sm text-[var(--danger)]">{error || "操作失败"}</p>
-        ) : allDone ? (
-          <p className="mt-4 text-xs text-[var(--success)]">
-            全部完成 · 耗时 {elapsed} 秒
-          </p>
-        ) : (
-          <p className="mt-4 text-xs text-[var(--muted)]">
-            已进行 {elapsed} 秒
-            {onCancel && (
-              <button onClick={onCancel} className="ml-3 text-[var(--accent)] hover:underline">
-                取消
-              </button>
-            )}
-          </p>
-        )}
+        <footer className="progress-dialog-footer">
+          {hasError ? (
+            <p className="progress-dialog-error">{error || "操作失败，请稍后重试"}</p>
+          ) : allDone ? (
+            <p className="progress-dialog-done">全部完成 · 耗时 {formatElapsed(elapsed)}</p>
+          ) : (
+            <p className="progress-dialog-elapsed">已进行 {formatElapsed(elapsed)}</p>
+          )}
+
+          {!allDone && !hasError && onCancel ? (
+            <button type="button" onClick={onCancel} className="progress-dialog-cancel">
+              取消任务
+            </button>
+          ) : null}
+        </footer>
       </div>
     </div>
   );

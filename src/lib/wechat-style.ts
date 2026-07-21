@@ -57,21 +57,71 @@ const LIST_CARD = {
   body: "#555555",
 };
 
-const STRONG_STYLE =
-  "color:#111111;font-weight:bold;background-color:#fff8e6;padding:0 3px;";
+const STRONG_STYLE = "color:#111111;font-weight:bold;";
 
 function stripTags(html: string): string {
   return html.replace(/<[^>]+>/g, "").trim();
 }
 
+function escapeHtmlText(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function plainTextKey(text: string): string {
+  return text.replace(/<[^>]+>/g, "").replace(/\s+/g, "").trim();
+}
+
+/** 将摘要插入微信正文顶部（与预览 mp-meta 一致），digest 字段仅用于消息列表 */
+export function prependWechatDigest(html: string, digest: string): string {
+  const text = digest.trim();
+  if (!text) return html;
+
+  const digestKey = plainTextKey(text);
+  if (digestKey && plainTextKey(html).startsWith(digestKey)) {
+    return html;
+  }
+
+  const block =
+    `<section style="margin:0 0 18px;padding-bottom:14px;border-bottom:1px solid #f0e8d5;">` +
+    `<p style="margin:0;font-size:13px;color:#999999;line-height:1.75;letter-spacing:0.06em;text-align:justify;">${escapeHtmlText(text)}</p>` +
+    `</section>`;
+
+  return block + html;
+}
+
 function normalizeListItemInner(inner: string): string {
   return inner
     .trim()
-    .replace(/^<p(?:\s[^>]*)?>/i, "")
-    .replace(/<\/p>$/i, "")
+    .replace(/<p(?:\s[^>]*)?>/gi, "")
+    .replace(/<\/p>/gi, " ")
     .replace(/<br\s*\/?>/gi, " ")
+    .replace(/\s+/g, " ")
     .replace(/\s+[：:]\s+/g, " ")
-    .replace(/^[：:]\s*/, "");
+    .replace(/^[：:]\s*/, "")
+    .trim();
+}
+
+/** 修复 AI 常见的嵌套 <li><li>、多余 </li> 等脏列表结构 */
+export function normalizeListHtml(html: string): string {
+  let result = html;
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    const flattened = result.replace(/<li(\s[^>]*)?>\s*<li(\s[^>]*)?>/gi, "<li$2>");
+    if (flattened !== result) {
+      result = flattened;
+      changed = true;
+    }
+  }
+
+  result = result.replace(/<\/li>\s*<\/li>/gi, "</li>");
+  result = result.replace(/<li(\s[^>]*)?>\s*<\/li>/gi, "");
+  return result;
 }
 
 function parseListItemTitleBody(inner: string): { title: string; body: string } | null {
@@ -81,10 +131,145 @@ function parseListItemTitleBody(inner: string): { title: string; body: string } 
 
   const title = stripTags(match[1]);
   let body = match[2].trim().replace(/^[：:]\s*/, "");
-  body = body.replace(/^<p(?:\s[^>]*)?>/i, "").replace(/<\/p>$/i, "").trim();
-  if (!title || !body || stripTags(body).length < 4) return null;
+  if (!title || stripTags(body).length < 2) return null;
 
   return { title, body };
+}
+
+function collectListItems(html: string): string[] {
+  const items: string[] = [];
+  const re = /<li(?:\s[^>]*)?>([\s\S]*?)<\/li>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(html)) !== null) {
+    items.push(normalizeListItemInner(match[1]));
+  }
+  return items.filter(Boolean);
+}
+
+function paragraphToListItem(pInner: string, index: number): string {
+  const clean = normalizeListItemInner(pInner);
+  if (!clean) return "";
+  if (/^<strong(?:\s[^>]*)?>/i.test(clean)) {
+    return `<li>${clean}</li>`;
+  }
+  return `<li><strong>要点 ${index}</strong>${clean}</li>`;
+}
+
+/** 生成后兜底：把 mp-tip / mp-warning 等 callout 修正为微信可渲染的固定结构 */
+export function enforceArticleHtmlFormat(html: string): string {
+  let result = html;
+
+  result = result.replace(/<div class="mp-tip">([\s\S]*?)<\/div>/gi, (_full, inner: string) => {
+    let body = inner.trim();
+    body = body.replace(/<ul(\s[^>]*)?>/gi, "<ol$1>").replace(/<\/ul>/gi, "</ol>");
+
+    const listItems = collectListItems(body);
+    const orphanParagraphs: string[] = [];
+    body.replace(/<p(?:\s[^>]*)?>([\s\S]*?)<\/p>/gi, (_m, pInner: string) => {
+      orphanParagraphs.push(pInner);
+      return "";
+    });
+
+    const mergedItems = [...listItems];
+    orphanParagraphs.forEach((pInner, idx) => {
+      const item = paragraphToListItem(pInner, mergedItems.length + idx + 1);
+      if (item) mergedItems.push(item.replace(/^<li>|<\/li>$/g, ""));
+    });
+
+    if (mergedItems.length === 0) {
+      return `<div class="mp-tip">${body}</div>`;
+    }
+
+    const ol = `<ol>${mergedItems.map((item) => `<li>${item}</li>`).join("")}</ol>`;
+    return `<div class="mp-tip">${ol}</div>`;
+  });
+
+  result = result.replace(/<div class="mp-warning">([\s\S]*?)<\/div>/gi, (_full, inner: string) => {
+    let body = inner.trim();
+    if (!/<(?:ol|ul)\b/i.test(body)) {
+      return `<div class="mp-warning">${body}</div>`;
+    }
+
+    const paragraphs = collectListItems(body).map((item) => `<p>${item}</p>`);
+    if (paragraphs.length === 0) {
+      return `<div class="mp-warning">${body}</div>`;
+    }
+    return `<div class="mp-warning">${paragraphs.join("")}</div>`;
+  });
+
+  result = result.replace(/<div class="mp-summary">([\s\S]*?)<\/div>/gi, (_full, inner: string) => {
+    const body = inner.trim();
+    if (/<p(?:\s[^>]*)?>/i.test(body)) {
+      return `<div class="mp-summary">${body}</div>`;
+    }
+    const paragraphs = body
+      .split(/\n{2,}/)
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => `<p>${part}</p>`);
+    return `<div class="mp-summary">${paragraphs.join("")}</div>`;
+  });
+
+  return result;
+}
+
+/** 将 callout 内 prose 与列表拆开，列表走正文同一套 transformListBlock，避免嵌套表格在微信里错位 */
+function splitCalloutContent(inner: string): { prose: string; lists: string } {
+  let cleaned = normalizeListHtml(inner.trim());
+  const listParts: string[] = [];
+  cleaned = cleaned.replace(/(<ol[^>]*>[\s\S]*?<\/ol>|<ul[^>]*>[\s\S]*?<\/ul>)/gi, (match) => {
+    listParts.push(match);
+    return "";
+  });
+  return { prose: cleaned.trim(), lists: listParts.join("") };
+}
+
+function dedupeConsecutiveFigures(html: string): string {
+  return html.replace(/(?:<figure[\s\S]*?<\/figure>\s*){2,}/gi, (block) => {
+    const figures = [...block.matchAll(/<figure[\s\S]*?<\/figure>/gi)].map((m) => m[0]);
+    const srcs = figures
+      .map((f) => f.match(/\bsrc=["']([^"']+)["']/i)?.[1])
+      .filter(Boolean);
+    if (srcs.length >= 2 && srcs.every((s) => s === srcs[0])) {
+      return figures[0];
+    }
+    return block;
+  });
+}
+
+/** 去掉 figcaption、修复 AI 乱用标签；配图只保留系统插入的 figure */
+export function normalizeArticleMarkup(html: string): string {
+  let result = html;
+
+  result = result.replace(/<div class="blockquote">([\s\S]*?)<\/div>/gi, "<blockquote>$1</blockquote>");
+  result = result.replace(/<div class="quote">([\s\S]*?)<\/div>/gi, "<blockquote>$1</blockquote>");
+
+  const preservedFigures: string[] = [];
+  result = result.replace(/<figure[^>]*>([\s\S]*?)<\/figure>/gi, (full, inner: string) => {
+    if (!/data-progress=/i.test(full)) return "";
+    const imgMatch = inner.match(/<img[^>]*>/i);
+    if (!imgMatch) return "";
+    preservedFigures.push(`<figure>${imgMatch[0]}</figure>`);
+    return `__MP_FIGURE_${preservedFigures.length - 1}__`;
+  });
+
+  result = result.replace(/<img\b[^>]*>/gi, "");
+  for (let i = 0; i < preservedFigures.length; i += 1) {
+    result = result.replace(`__MP_FIGURE_${i}__`, preservedFigures[i]);
+  }
+
+  return dedupeConsecutiveFigures(result);
+}
+
+/** 微信不支持 figure，转成单图 section，避免图片重复渲染 */
+function simplifyFiguresForWechat(html: string): string {
+  let result = dedupeConsecutiveFigures(html);
+  result = result.replace(/<figure[^>]*>([\s\S]*?)<\/figure>/gi, (_full, inner: string) => {
+    const imgMatch = inner.match(/<img[^>]*>/i);
+    if (!imgMatch) return "";
+    return `<section style="margin:20px 0;text-align:center;">${imgMatch[0]}</section>`;
+  });
+  return result;
 }
 
 function buildOrderedListCard(counter: number, title: string, body: string): string {
@@ -149,7 +334,13 @@ function transformListBlock(html: string, ordered: boolean): string {
         }
       } else {
         counter++;
-        items.push(buildPlainListItem(ordered ? counter : null, liInner, ordered));
+        const normalized = normalizeListItemInner(liInner);
+        const strongSplit = normalized.match(/^<strong(?:\s[^>]*)?>([\s\S]*?)<\/strong>\s*([\s\S]+)$/i);
+        if (ordered && strongSplit && stripTags(strongSplit[1]) && stripTags(strongSplit[2]).length >= 2) {
+          items.push(buildOrderedListCard(counter, stripTags(strongSplit[1]), strongSplit[2].trim()));
+        } else {
+          items.push(buildPlainListItem(ordered ? counter : null, liInner, ordered));
+        }
       }
     }
     return `<section style="margin:14px 0 20px;">${items.join("")}</section>`;
@@ -164,7 +355,7 @@ function applyStrongStyles(html: string): string {
       return _full.replace(
         /style\s*=\s*"([^"]*)"/i,
         (_s, existing: string) =>
-          `style="${existing}color:#111111;font-weight:bold;background-color:#fff8e6;padding:0 3px;"`,
+          `style="${existing}color:#111111;font-weight:bold;"`,
       );
     }
     return `<strong style="${STRONG_STYLE}">`;
@@ -172,28 +363,202 @@ function applyStrongStyles(html: string): string {
   return result;
 }
 
-function buildCalloutTable(
-  icon: string,
-  inner: string,
-  options: {
-    border: string;
-    bg: string;
-    headerBg: string;
-    headerBorder: string;
-    label: string;
-    labelColor: string;
-    textColor: string;
-  },
-): string {
-  const cleanInner = inner.trim().replace(/^<p>/i, "").replace(/<\/p>$/i, "");
+type CalloutTableOptions = {
+  border: string;
+  bg: string;
+  headerBg: string;
+  headerBorder: string;
+  label: string;
+  labelColor: string;
+  textColor: string;
+};
+
+function buildCalloutHeaderRow(icon: string, options: CalloutTableOptions): string {
   return (
-    `<table style="width:100%;border-collapse:collapse;margin:20px 0;border-radius:10px;border:1px solid ${options.border};background-color:${options.bg};overflow:hidden;">` +
     `<tr><td style="padding:10px 14px;background-color:${options.headerBg};border-bottom:1px solid ${options.headerBorder};border-left:none;border-right:none;border-top:none;">` +
     `<span style="font-size:17px;margin-right:6px;vertical-align:middle;">${icon}</span>` +
     `<span style="font-size:13px;font-weight:700;color:${options.labelColor};letter-spacing:0.06em;vertical-align:middle;">${options.label}</span>` +
-    `</td></tr>` +
+    `</td></tr>`
+  );
+}
+
+function buildCalloutTable(icon: string, inner: string, options: CalloutTableOptions): string {
+  const cleanInner = inner.trim().replace(/^<p>/i, "").replace(/<\/p>$/i, "");
+  return (
+    `<table style="width:100%;border-collapse:collapse;margin:20px 0;border-radius:10px;border:1px solid ${options.border};background-color:${options.bg};overflow:hidden;">` +
+    buildCalloutHeaderRow(icon, options) +
     `<tr><td style="padding:12px 14px 14px;font-size:15px;line-height:1.85;color:${options.textColor};text-align:justify;border:none;">${cleanInner}</td></tr>` +
     `</table>`
+  );
+}
+
+function buildCalloutForWechat(icon: string, inner: string, options: CalloutTableOptions): string {
+  const { prose, lists } = splitCalloutContent(inner);
+  if (!prose && lists) {
+    return (
+      `<table style="width:100%;border-collapse:collapse;margin:20px 0 8px;border-radius:10px;border:1px solid ${options.border};background-color:${options.bg};overflow:hidden;">` +
+      buildCalloutHeaderRow(icon, options) +
+      `</table>${lists}`
+    );
+  }
+  return buildCalloutTable(icon, prose, options) + lists;
+}
+
+const WARNING_LEAD_LABELS = ["⚠️ 注意", "⚠️", "注意", "警告"];
+const TIP_LEAD_LABELS = ["💡 实用技巧", "💡", "实用技巧", "操作步骤", "小技巧"];
+
+function plainCalloutText(html: string): string {
+  return html
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isOnlyCalloutLabel(inner: string, labels: string[]): boolean {
+  const plain = plainCalloutText(inner);
+  if (!plain) return true;
+  return labels.some((label) => {
+    const normalizedLabel = plainCalloutText(label);
+    return plain === normalizedLabel;
+  });
+}
+
+function stripLeadingLabelParagraphs(inner: string, labels: string[]): string {
+  let cleaned = inner.trim();
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    for (const label of labels) {
+      const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const patterns = [
+        new RegExp(`^\\s*${escaped}\\s*`, "i"),
+        new RegExp(`^\\s*<p[^>]*>\\s*${escaped}\\s*</p>`, "i"),
+        new RegExp(`^\\s*<p[^>]*>\\s*<strong>\\s*${escaped}\\s*</strong>\\s*</p>`, "i"),
+      ];
+      for (const re of patterns) {
+        const next = cleaned.replace(re, "").trim();
+        if (next !== cleaned) {
+          cleaned = next;
+          changed = true;
+        }
+      }
+    }
+  }
+
+  return cleaned;
+}
+
+const NEXT_BLOCK_TAG_RE = /<(?:hr|h[1-6]|div|section|blockquote|p|ol|ul)\b/i;
+
+/** 抓取空壳 callout 后面被 AI 拆出去的正文（含无 <p> 包裹的裸文本） */
+function captureTrailingCalloutContent(afterDiv: string): { body: string; length: number } | null {
+  const blockMatch = afterDiv.match(
+    /^(\s*(?:<(?:p|ol|ul|blockquote)\b[^>]*>[\s\S]*?<\/(?:p|ol|ul|blockquote)>)+)/i,
+  );
+  if (blockMatch) {
+    return { body: blockMatch[1].trim(), length: blockMatch[0].length };
+  }
+
+  const nextBlock = afterDiv.search(NEXT_BLOCK_TAG_RE);
+  const end = nextBlock === -1 ? afterDiv.length : nextBlock;
+  const fragment = afterDiv.slice(0, end).trim();
+  if (!fragment) return null;
+
+  const text = fragment.replace(/<\/p>\s*$/i, "").trim();
+  if (!text) return null;
+
+  if (/^<(?:p|ol|ul|blockquote)\b/i.test(text)) {
+    return { body: text, length: end };
+  }
+
+  return { body: `<p>${text}</p>`, length: end };
+}
+
+/** 修复 AI 把 callout 拆成「空壳 div + 外部段落/裸文本」的 HTML */
+function repairCalloutBlocks(html: string): string {
+  const regex = /<div class="(mp-tip|mp-warning)">([\s\S]*?)<\/div>/gi;
+  let output = "";
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(html)) !== null) {
+    const [full, cls, inner] = match;
+    const start = match.index;
+    const end = start + full.length;
+    const labels = cls === "mp-warning" ? WARNING_LEAD_LABELS : TIP_LEAD_LABELS;
+
+    output += html.slice(lastIndex, start);
+
+    let body = stripLeadingLabelParagraphs(inner, labels);
+    const trailing = captureTrailingCalloutContent(html.slice(end));
+
+    if (isOnlyCalloutLabel(body, labels) && trailing) {
+      body = trailing.body;
+      lastIndex = end + trailing.length;
+    } else {
+      lastIndex = end;
+    }
+
+    if (!plainCalloutText(body)) {
+      output += full;
+      continue;
+    }
+
+    output += `<div class="${cls}">${body}</div>`;
+  }
+
+  output += html.slice(lastIndex);
+  return output;
+}
+
+/** 将 Markdown 加粗 / b 标签统一为 strong */
+function normalizeInlineBold(html: string): string {
+  let result = html.replace(/<b(\s[^>]*)?>/gi, "<strong>");
+  result = result.replace(/<\/b>/gi, "</strong>");
+
+  const segments: string[] = [];
+  const protectedRe = /(<(?:pre|code|section\s+data-mp-cb)[^>]*>[\s\S]*?<\/(?:pre|code|section)>)/gi;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = protectedRe.exec(result)) !== null) {
+    segments.push(
+      result
+        .slice(lastIndex, match.index)
+        .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>"),
+    );
+    segments.push(match[1]);
+    lastIndex = match.index + match[1].length;
+  }
+
+  segments.push(
+    result.slice(lastIndex).replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>"),
+  );
+
+  return segments.join("");
+}
+
+/** 修复并清理 mp-tip / mp-warning 卡片 HTML，同时规范化加粗标记与列表结构 */
+export function normalizeCalloutBlocks(html: string): string {
+  return sanitizeCalloutBlocks(
+    repairCalloutBlocks(
+      normalizeInlineBold(
+        normalizeListHtml(enforceArticleHtmlFormat(normalizeArticleMarkup(html))),
+      ),
+    ),
+  );
+}
+
+/** 去掉 mp-tip / mp-warning 正文中重复的标题行（卡片头由样式或推送模板自动生成） */
+function sanitizeCalloutBlocks(html: string): string {
+  return html.replace(
+    /<div class="(mp-tip|mp-warning)">([\s\S]*?)<\/div>/gi,
+    (full, cls: string, inner: string) => {
+      const labels = cls === "mp-warning" ? WARNING_LEAD_LABELS : TIP_LEAD_LABELS;
+      const cleaned = stripLeadingLabelParagraphs(inner, labels);
+      return `<div class="${cls}">${cleaned}</div>`;
+    },
   );
 }
 
@@ -270,16 +635,19 @@ function buildSummaryBox(inner: string): string {
  * 将文章 HTML 转换为微信公众号兼容的内联样式版本
  */
 export function convertToWechatHtml(html: string): string {
-  let result = wrapSummarySection(html);
+  let result = normalizeCalloutBlocks(wrapSummarySection(html));
 
   // ====== 0. 首段首字下沉（微信不支持 ::first-letter）======
   result = applyDropCapToOpeningParagraph(result);
 
-  // ====== 1. mp-tip 提示卡片 → 蓝色背景卡片 + 💡 图标 ======
+  // ====== 0b. figure → 单图（微信对 figure/figcaption 支持差，易重复渲染）======
+  result = simplifyFiguresForWechat(result);
+
+  // ====== 1. mp-tip 提示卡片 → 蓝色背景卡片 + 💡 图标（列表与正文 ol 同链路，不嵌套在卡片表格内）======
   result = result.replace(
     /<div class="mp-tip">([\s\S]*?)<\/div>/gi,
     (_full, inner: string) =>
-      buildCalloutTable("💡", inner, {
+      buildCalloutForWechat("💡", inner, {
         border: TIP.border,
         bg: TIP.bg,
         headerBg: TIP.headerBg,
@@ -294,7 +662,7 @@ export function convertToWechatHtml(html: string): string {
   result = result.replace(
     /<div class="mp-warning">([\s\S]*?)<\/div>/gi,
     (_full, inner: string) =>
-      buildCalloutTable("⚠️", inner, {
+      buildCalloutForWechat("⚠️", inner, {
         border: WARN.border,
         bg: WARN.bg,
         headerBg: WARN.headerBg,
@@ -367,7 +735,7 @@ export function convertToWechatHtml(html: string): string {
     },
   );
 
-  // ====== 11. figure / figcaption → 居中 + 图注样式 ======
+  // ====== 11. figure / figcaption → 居中 + 图注样式（figure 已在 0b 转为 section，此处兜底）======
   result = result.replace(/<figure([^>]*)>/gi, (_full, attrs: string) => {
     if (/style\s*=\s*["']/i.test(attrs)) {
       return `<figure${attrs.replace(/(style\s*=\s*["'])/i, `$1margin:24px 0;text-align:center;`)}>`;

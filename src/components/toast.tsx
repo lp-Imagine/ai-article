@@ -57,8 +57,8 @@ const VARIANT_STYLES: Record<ToastVariant, { ring: string; bg: string; icon: str
     badge: "bg-[var(--danger)] text-white",
   },
   info: {
-    ring: "border-[rgba(0,113,227,0.25)]",
-    bg: "bg-[rgba(255,255,255,0.88)]",
+    ring: "border-[rgba(37,99,235,0.22)]",
+    bg: "bg-[rgba(255,255,255,0.92)]",
     icon: "ⓘ",
     badge: "bg-[var(--accent)] text-white",
   },
@@ -164,7 +164,7 @@ function ToastViewport({
           <div
             key={toast.id}
             role="alert"
-            className={`pointer-events-auto flex max-w-[min(560px,calc(100vw-2rem))] items-start gap-3 rounded-xl px-4 py-3 border ${style.ring} ${style.bg} backdrop-blur-xl`}
+            className={`pointer-events-auto flex max-w-[min(560px,calc(100vw-2rem))] items-start gap-3 rounded-2xl px-4 py-3.5 border ${style.ring} ${style.bg} backdrop-blur-xl shadow-[var(--shadow-sm)]`}
             style={{
               animation: "toast-in 180ms ease-out",
               boxShadow: toast.variant === "success"

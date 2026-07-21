@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { highlightCodeBlocks } from "@/lib/code-highlight";
+import { normalizeCalloutBlocks } from "@/lib/wechat-style";
 
 export async function POST(
   _req: Request,
@@ -17,13 +18,13 @@ export async function POST(
   }
   if (!article.content) {
     return NextResponse.json(
-      { code: 400, message: "正文为空，无需重新高亮", data: null },
+      { code: 400, message: "正文为空，无需刷新格式", data: null },
       { status: 400 },
     );
   }
 
-  // 重新走一遍代码高亮（替代之前生成时调用过 highlightCodeBlocks 的结果）
-  const highlighted = highlightCodeBlocks(article.content);
+  // 修复卡片/加粗标记，并重新高亮代码块
+  const highlighted = highlightCodeBlocks(normalizeCalloutBlocks(article.content));
 
   await db.article.update({
     where: { id },
@@ -32,7 +33,7 @@ export async function POST(
 
   return NextResponse.json({
     code: 0,
-    message: "代码块已重新高亮",
+    message: "正文格式已刷新",
     data: { content: highlighted },
   });
 }

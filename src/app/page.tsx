@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { ArrowRight, RefreshCw } from "lucide-react";
+import { FieldLabel, PageHeader, SectionCard } from "@/components/app-shell";
 import { useToast } from "@/components/toast";
 
 type RecentArticle = {
@@ -22,6 +24,13 @@ const statusMap: Record<string, { label: string; color: string }> = {
   pushed: { label: "已推送", color: "badge-success" },
   failed: { label: "推送失败", color: "badge-danger" },
 };
+
+const workflowSteps = [
+  { step: "01", label: "填写主题" },
+  { step: "02", label: "选择大纲" },
+  { step: "03", label: "生成正文" },
+  { step: "04", label: "推送草稿" },
+];
 
 type ApiResponse<T> = { code: number; message: string; data: T };
 
@@ -103,67 +112,57 @@ export default function HomePage() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-[1200px] px-8 py-12">
-      {/* 顶部标题区 */}
-      <header className="flex items-end justify-between border-b border-[var(--line)] pb-6">
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-[var(--muted)]">
-            AI-Powered Editorial Workspace
-          </p>
-          <h1 className="editorial-title mt-2 text-4xl font-bold bg-gradient-to-r from-[var(--accent)] via-[#4da8ff] to-[#a78bfa] bg-clip-text text-transparent">
-            公众号 AI 发文助手
-          </h1>
-          <p className="mt-2 max-w-xl text-sm text-[var(--muted)]">
-            从一个主题出发，到推送到公众号草稿箱。把选题、大纲、正文、配图、检测、发布收进同一条工作流。
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Link href="/settings" className="btn-secondary text-sm py-2">
-            设置
-          </Link>
-          <Link href="/history" className="btn-secondary text-sm py-2">
-            查看历史
-          </Link>
-        </div>
-      </header>
+    <>
+      <PageHeader
+        eyebrow="Editorial Workspace"
+        title="公众号 AI 发文助手"
+        description="从一个主题出发，到推送到公众号草稿箱。把选题、大纲、正文、配图、检测、发布收进同一条工作流。"
+      />
 
-      <section className="mt-10 grid grid-cols-1 gap-6 lg:grid-cols-[2fr_1fr]">
-        {/* 快速开始表单 */}
-        <div className="glass p-6">
-          <h2 className="editorial-title text-2xl font-semibold">快速开始</h2>
-          <p className="mt-2 text-sm text-[var(--muted)]">
-            填一个主题，先让 AI 给出 2 到 3 个大纲方案，确定方向后再生成正文。
-          </p>
-          <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
+      <div className="workflow-steps mb-8">
+        {workflowSteps.map((item) => (
+          <div key={item.step} className="workflow-step">
+            <p className="workflow-step-num">{item.step}</p>
+            <p className="workflow-step-label">{item.label}</p>
+          </div>
+        ))}
+      </div>
+
+      <section className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.65fr)_minmax(280px,1fr)]">
+        <SectionCard
+          title="快速开始"
+          description="填一个主题，先让 AI 给出 2 到 3 个大纲方案，确定方向后再生成正文。"
+        >
+          <form className="space-y-6" onSubmit={handleSubmit}>
             <div>
-              <label className="text-xs uppercase tracking-widest text-[var(--muted)]">主题 / 标题</label>
+              <FieldLabel>主题 / 标题</FieldLabel>
               <input
                 type="text"
                 value={form.topic}
                 onChange={(e) => update("topic", e.target.value)}
                 placeholder="例如：用 React 做流式 AI 对话界面 / 普通人如何用 AI 提升效率"
-                className="mt-2 w-full px-4 py-3 text-base"
+                className="mt-2 w-full px-4 py-3.5 text-base"
               />
             </div>
 
             <div>
-              <label className="text-xs uppercase tracking-widest text-[var(--muted)]">关键词</label>
+              <FieldLabel>关键词</FieldLabel>
               <input
                 type="text"
                 value={form.keywords}
                 onChange={(e) => update("keywords", e.target.value)}
                 placeholder="可选，多个用逗号分隔"
-                className="mt-2 w-full px-4 py-2 text-sm"
+                className="mt-2 w-full px-4 py-2.5 text-sm"
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="field-grid field-grid-2">
               <div>
-                <label className="text-xs uppercase tracking-widest text-[var(--muted)]">文章风格</label>
+                <FieldLabel>文章风格</FieldLabel>
                 <select
                   value={form.style}
                   onChange={(e) => update("style", e.target.value)}
-                  className="mt-2 w-full px-4 py-2 text-sm"
+                  className="mt-2 w-full px-4 py-2.5 text-sm"
                 >
                   <option>干货型</option>
                   <option>观点型</option>
@@ -171,11 +170,11 @@ export default function HomePage() {
                 </select>
               </div>
               <div>
-                <label className="text-xs uppercase tracking-widest text-[var(--muted)]">目标字数</label>
+                <FieldLabel>目标字数</FieldLabel>
                 <select
                   value={form.wordCount}
                   onChange={(e) => update("wordCount", Number(e.target.value))}
-                  className="mt-2 w-full px-4 py-2 text-sm"
+                  className="mt-2 w-full px-4 py-2.5 text-sm"
                 >
                   <option value={800}>800</option>
                   <option value={1200}>1,200</option>
@@ -186,25 +185,22 @@ export default function HomePage() {
                   <option value={5000}>5,000</option>
                 </select>
               </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="text-xs uppercase tracking-widest text-[var(--muted)]">目标读者</label>
+                <FieldLabel>目标读者</FieldLabel>
                 <input
                   type="text"
                   value={form.audience}
                   onChange={(e) => update("audience", e.target.value)}
-                  placeholder="例如：前端开发者 / 职场新人 / 泛读者"
-                  className="mt-2 w-full px-4 py-2 text-sm"
+                  placeholder="例如：前端开发者 / 职场新人"
+                  className="mt-2 w-full px-4 py-2.5 text-sm"
                 />
               </div>
               <div>
-                <label className="text-xs uppercase tracking-widest text-[var(--muted)]">文章目标</label>
+                <FieldLabel>文章目标</FieldLabel>
                 <select
                   value={form.goal}
                   onChange={(e) => update("goal", e.target.value)}
-                  className="mt-2 w-full px-4 py-2 text-sm"
+                  className="mt-2 w-full px-4 py-2.5 text-sm"
                 >
                   <option>知识分享</option>
                   <option>涨粉</option>
@@ -212,15 +208,12 @@ export default function HomePage() {
                   <option>品牌表达</option>
                 </select>
               </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="text-xs uppercase tracking-widest text-[var(--muted)]">大纲方案数</label>
+                <FieldLabel>大纲方案数</FieldLabel>
                 <select
                   value={form.outlineCount}
                   onChange={(e) => update("outlineCount", Number(e.target.value))}
-                  className="mt-2 w-full px-4 py-2 text-sm"
+                  className="mt-2 w-full px-4 py-2.5 text-sm"
                 >
                   <option value={2}>2 个</option>
                   <option value={3}>3 个（默认）</option>
@@ -229,68 +222,72 @@ export default function HomePage() {
                   <option value={6}>6 个</option>
                 </select>
               </div>
-              <div aria-hidden className="hidden sm:block" />
             </div>
 
             <button
               type="submit"
               disabled={loading || !form.topic.trim()}
-              className="w-full btn-primary py-3 text-sm"
+              className="w-full btn-primary py-3.5 text-sm"
             >
               {loading ? (
-                <span className="inline-flex items-center gap-2">
+                <span className="inline-flex items-center justify-center gap-2">
                   <span className="inline-block size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
                   生成大纲中...
                 </span>
               ) : (
-                "生成大纲 →"
+                <span className="inline-flex items-center justify-center gap-2">
+                  生成大纲
+                  <ArrowRight size={16} />
+                </span>
               )}
             </button>
           </form>
-        </div>
+        </SectionCard>
 
-        {/* 最近文章 */}
-        <aside className="glass p-6 h-fit">
-          <div className="flex items-center justify-between">
-            <h2 className="editorial-title text-xl font-semibold">最近文章</h2>
-            <button onClick={fetchRecent} className="btn-ghost text-xs">
-              刷新 ↻
+        <SectionCard
+          title="最近文章"
+          description="继续编辑未完成的内容"
+          className="h-fit"
+          headerExtra={
+            <button onClick={fetchRecent} className="btn-ghost inline-flex items-center gap-1 text-xs">
+              <RefreshCw size={12} />
+              刷新
             </button>
-          </div>
+          }
+        >
           {recent.length === 0 ? (
-            <p className="mt-6 text-sm text-[var(--muted)] text-center py-8">
-              还没有文章，在上方开始创作吧
-            </p>
+            <div className="empty-state py-10">
+              <p className="text-sm text-[var(--muted)]">还没有文章，在左侧开始创作吧</p>
+            </div>
           ) : (
-            <ul className="mt-4 divide-y divide-[var(--line)]">
+            <ul className="space-y-3">
               {recent.slice(0, 6).map((item) => {
                 const s = statusMap[item.status] ?? statusMap.draft;
                 return (
-                  <li key={item.id} className="flex items-center justify-between py-3">
-                    <div className="min-w-0 pr-3">
-                      <Link
-                        href={`/articles/${item.id}`}
-                        className="block truncate text-sm font-medium text-[var(--foreground)] hover:text-[var(--accent)] transition-colors"
-                      >
-                        {item.title ?? item.topic}
-                      </Link>
-                      <p className="text-xs text-[var(--muted)]">
-                        {new Date(item.updatedAt).toLocaleString("zh-CN", {
-                          month: "2-digit",
-                          day: "2-digit",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </p>
-                    </div>
-                    <span className={`badge shrink-0 ${s.color}`}>{s.label}</span>
+                  <li key={item.id}>
+                    <Link href={`/articles/${item.id}`} className="recent-item">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold">
+                          {item.title ?? item.topic}
+                        </p>
+                        <p className="mt-1 text-xs text-[var(--muted)]">
+                          {new Date(item.updatedAt).toLocaleString("zh-CN", {
+                            month: "2-digit",
+                            day: "2-digit",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </p>
+                      </div>
+                      <span className={`badge shrink-0 ${s.color}`}>{s.label}</span>
+                    </Link>
                   </li>
                 );
               })}
             </ul>
           )}
-        </aside>
+        </SectionCard>
       </section>
-    </main>
+    </>
   );
 }

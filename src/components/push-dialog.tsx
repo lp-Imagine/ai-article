@@ -28,8 +28,8 @@ export default function PushDialog({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="glass-strong w-[480px] max-w-[90vw] max-h-[85vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(21,19,17,0.35)] backdrop-blur-md p-4" onClick={onClose}>
+      <div className="glass-strong w-[480px] max-w-[90vw] max-h-[85vh] overflow-auto rounded-[24px]" onClick={(e) => e.stopPropagation()}>
         <div className="p-6 space-y-5">
           <h2 className="editorial-title text-xl font-semibold text-[var(--foreground)]">
             推送确认

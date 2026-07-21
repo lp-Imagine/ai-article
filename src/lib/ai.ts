@@ -1,6 +1,7 @@
 import type { OutlineOption } from "@/types/article";
 import { getEnvValue } from "@/lib/config-bridge";
 import { highlightCodeBlocks } from "@/lib/code-highlight";
+import { normalizeCalloutBlocks } from "@/lib/wechat-style";
 
 type TextRole = "outline" | "content" | "summary" | "titles" | "cover-prompt" | "polish" | "expand" | "section-image";
 
@@ -157,6 +158,35 @@ function buildWritingUserPayload(input: WritingParams & { outline?: unknown; out
     ...(input.outlineCount !== undefined ? { outlineCount: input.outlineCount } : {}),
     ...(input.sectionsPerOutline !== undefined ? { sectionsPerOutline: input.sectionsPerOutline } : {}),
   };
+}
+
+/** 正文生成 / 润色共用的微信 HTML 格式规范（违反会导致推送排版错乱） */
+const ARTICLE_HTML_FORMAT_RULES = `
+【微信 HTML 格式（硬性）】
+文章推送微信公众号，只允许下列结构；禁止 Markdown、inline style、自创 class、figure/img/section/table。
+
+- 正文步骤：<ol><li><strong>标题</strong>说明</li></ol>
+- 并列要点：<ul><li><strong>标题</strong>说明</li></ul>
+- mp-tip：div 内只能有单个 <ol>，li 结构与正文 ol 完全相同；禁止 ul、多个 p、嵌套 li、写「实用技巧」等标题
+- mp-warning：div 内只用 <p>...</p>；禁止列表和「注意」标题
+- 总结：<h2>总结</h2> + <div class="mp-summary"><p>...</p></div>
+- 引用：<blockquote><p>...</p></blockquote>
+
+列表项统一写法：<li><strong>2-8字标题</strong>说明正文</li>（标题与说明同一行，不用 br，li 内不用 p）
+`.trim();
+
+/** 润色 / 扩写用的精简版，避免占用过多上下文 */
+const ARTICLE_HTML_FORMAT_RULES_BRIEF = `
+【HTML 格式】保留现有结构；mp-tip 内仅单个 <ol>；mp-warning/mp-summary 内仅 <p>；列表项用 <li><strong>标题</strong>说明</li>；禁止新增 figure/img/section/table/自创 class。
+`.trim();
+
+function computeContentMaxTokens(wordCount: number): number {
+  // 中文 + HTML + JSON 包装，约 2 token/字，留生成余量
+  return Math.min(8192, Math.max(4096, Math.ceil(wordCount * 2.2)));
+}
+
+function countPlainTextChars(html: string): number {
+  return html.replace(/<[^>]+>/g, "").replace(/\s+/g, "").length;
 }
 
 /**
@@ -487,6 +517,8 @@ ${accountBlock}
 
 ${styleGuide}
 
+${ARTICLE_HTML_FORMAT_RULES}
+
 【标题要求】
 - title 简洁有力，包含 1-2 个核心关键词，不超过 20 字
 - 用具体信息或真实疑问吸引点击，不用夸张承诺、不用「震惊」「必看」「颠覆」
@@ -503,11 +535,18 @@ ${styleGuide}
 - 开头只负责「代入」，不要把后文各章节内容提前讲一遍
 
 【逻辑结构】
-- 章节用 <h2>，小节用 <h3>；章节之间用 <hr /> 隔开
+- 章节用 <h2>，章节之间用 <hr /> 隔开；**全文最多 2 个 <h3>**，仅在大章节内确实需要分层时使用
 - 每个 <h2> 章节只推进**一个**新论点，写透即收，不重复前面章节已说的结论
 - 每段只表达一层意思，段首点题即可；段间用一句过渡衔接，禁止段段都用「但真正的问题是…」套话
 - 步骤类内容用 <ol>，并列要点用 <ul>，列表项之间不得语义重复
-- 列表若采用「标题+说明」结构，写法：<li><strong>标题</strong>说明正文（同一行紧接，不要 <br>，不要单独一行冒号）</li>
+- 列表项写法见上方「微信排版格式规范」：<li><strong>标题</strong>说明正文</li>（同一行紧接，不要 <br>）
+- **严禁**嵌套 li、li 内套 ul/ol、li 内包 <p>（详见格式规范）
+
+【HTML 白名单（只能用这些，禁止自创格式）】
+- 允许：\`<p>\` \`<h2>\` \`<h3>\` \`<hr />\` \`<strong>\` \`<code>\` \`<pre><code>\` \`<blockquote>\` \`<ul><li>\` \`<ol><li>\` \`<div class="mp-tip">\` \`<div class="mp-warning">\` \`<div class="mp-summary">\`
+- **禁止**：\`<figure>\` \`<img>\` \`<figcaption>\` — 配图由系统「章节配图」自动插入，正文不要写图片
+- **禁止**：\`<section>\` \`<span style>\` \`<table>\` \`<div>\`（mp-* 除外）及 Markdown 语法
+- 全文组件用量：mp-tip ≤ 2、mp-warning ≤ 2、blockquote ≤ 2；不要每章都堆卡片和列表，以 \`<p>\` 叙述为主
 
 【内容层次（全文交替，非每章堆砌）】
 - 案例、数据、正反面观点在**全文**自然分布即可，不要求每个章节都凑齐「道理+案例+数据+反面」
@@ -517,24 +556,25 @@ ${styleGuide}
 
 【段落节奏与轻重点】
 - 长句与短句交替，每段不超过 4 句
-- <strong> 只在有判断、转折、结论处加，2-8 字短语，一段 0-2 处
+- **重点标注（硬性）**：必须用 HTML \`<strong>\` 标注，禁止 Markdown \`**\` 或纯文本假加粗
+- 每个 \`<p>\` 段落至少 1 处 \`<strong>\`，标注该段核心判断、关键术语或转折结论（2-10 字短语）
+- 全文平均每 150-200 字至少 1 处 \`<strong>\`，让读者扫读时能抓住重点
+- 列表项标题仍用 \`<li><strong>标题</strong>说明正文</li>\` 结构
 - blockquote / mp-tip / mp-warning 全篇各最多 2 次，且必须承载**正文未展开的新信息**，不得把正文原话换个盒子再贴一遍
 
 【结构组件】
-- <blockquote>：非常规但值得单独品味的判断
-- <div class="mp-tip">：可执行步骤（做什么、怎么做、预期结果）
-- <div class="mp-warning">：具体踩坑场景与规避方式
-- 结尾 <h2>总结</h2> + <div class="mp-summary">：用 2-3 句**提炼**全文，给 1 个小行动或思考题；禁止逐章回顾、禁止复述正文原句
+- <blockquote>：非常规但值得单独品味的判断，用 \`<blockquote><p>...</p></blockquote>\`
+- <div class="mp-tip"> / <div class="mp-warning"> / <div class="mp-summary">：结构严格遵循上方「微信排版格式规范」，禁止自创变体
 
 【反重复（硬性）】
 - 禁止用同义词改写重复同一观点（如先说「顺序错了」，后又说「关键在于先后」）
 - 禁止开头、正文、总结三处讲同一个故事或同一个例子
 - 禁止每个章节结尾都写「所以最重要的是…」式收束
 - 若某观点已在 tip/warning/blockquote 里完整表达，正文不要再展开一遍
-- 写完后通读：任意两段去掉一段，文章是否仍然完整？若是，则删掉冗余段
+- 写完后通读：删除**完全重复**的段落即可，不要为压缩篇幅而省略大纲章节应有的论据和案例
 
 【质量标准】
-- 信息密度：每段都有新信息，零重复、零正确的废话
+- 信息密度：每段都有新信息，避免同义反复，但**章节该展开的要写够**
 - 逻辑连贯：论点→论据→结论，前后不矛盾
 - 真实可信：案例具体，数据谨慎，不虚构权威
 - 读者价值：读完有方法、框架或新视角
@@ -568,13 +608,14 @@ JSON：{ "title": string, "summary": string, "content": string }
 - title：简洁有力，含核心关键词，不超过 20 字
 - summary：80-120 字，概括读者收获，不重复正文句子
 - content：完整 HTML（不含 <article>、<h1>，不含签名和关注引导）
-- 目标篇幅约 ${wordCount} 字，按大纲章节自然展开即可；**宁短勿水**，不为凑字数重复观点
-- 每个章节围绕大纲 summary 写一个新角度，不复述其他章节的结论`,
+- 目标篇幅 **${wordCount} 字**（纯文本，去掉 HTML 标签后统计），允许上下浮动 10%，**不得低于 ${Math.floor(wordCount * 0.85)} 字**
+- 每个 <h2> 章节建议 ${perSection} 字左右，用 <p> 叙述展开，不要把整章压缩成短列表了事
+- 避免重复注水，但**必须写够目标字数**；各章节围绕大纲 summary 充分展开，不复述其他章节结论`,
     },
     {
       role: "user",
-      content: JSON.stringify(
-        buildWritingUserPayload({
+      content: JSON.stringify({
+        ...buildWritingUserPayload({
           topic: input.topic,
           style,
           wordCount,
@@ -583,11 +624,18 @@ JSON：{ "title": string, "summary": string, "content": string }
           keywords: input.keywords,
           outline: input.outline,
         }),
-      ),
+        writingRequirements: {
+          targetWordCount: wordCount,
+          minimumWordCount: Math.floor(wordCount * 0.85),
+          suggestedWordsPerSection: perSection,
+          sectionCount: sections.length,
+        },
+      }),
     },
   ];
 
-  const raw = await callChat(prompt, { jsonMode: true, maxTokens: 4096 });
+  const maxTokens = computeContentMaxTokens(wordCount);
+  const raw = await callChat(prompt, { jsonMode: true, maxTokens });
   const parsed = safeParse<{ title?: string; summary?: string; content?: string }>(
     raw,
     {},
@@ -598,8 +646,14 @@ JSON：{ "title": string, "summary": string, "content": string }
     const safeContent = parsed.content
       .replace(/<h1[^>]*>[\s\S]*?<\/h1>/g, "")
       .replace(/<div class="mp-signature">[\s\S]*?<\/div>/g, "");
-    // 后处理：检测并修复未被 <pre><code> 包裹的代码块
-    const fixedContent = dedupeRepeatedBlocks(fixCodeBlocks(safeContent));
+    const fixedContent = dedupeRepeatedBlocks(fixCodeBlocks(normalizeCalloutBlocks(safeContent)));
+    const plainChars = countPlainTextChars(fixedContent);
+    const minWords = Math.floor(wordCount * 0.85);
+    if (plainChars < minWords) {
+      console.warn(
+        `[generateContent] 正文字数 ${plainChars} 低于目标 ${wordCount}（下限 ${minWords}），maxTokens=${maxTokens}`,
+      );
+    }
     // 对代码块进行语法高亮（内联样式，兼容微信公众号）
     const highlightedContent = highlightCodeBlocks(fixedContent);
     return {
@@ -672,11 +726,14 @@ export async function polishContent(input: {
   const prompt: ChatMessage[] = [
     {
       role: "system",
-      content: `你是公众号润色助手。把用户给的 HTML 文章润色成「${input.mode}」风格。要求保留 HTML 结构（h2/h3/p/hr/blockquote/div class="mp-tip|mp-warning|mp-summary"/strong/code），输出 JSON：{ "content": string }。
+      content: `你是公众号润色助手。把用户给的 HTML 文章润色成「${input.mode}」风格。要求保留 HTML 结构，输出 JSON：{ "content": string }。
+
+${ARTICLE_HTML_FORMAT_RULES_BRIEF}
 
 【润色原则】
 - 提升信息密度，**合并或删除重复段落**，同一观点只保留表达最清晰的一处
-- 根据内容自然调整 <strong>，不机械加粗
+- 保留并适当补充 \`<strong>\` 重点标注：每段至少 1 处，标注核心判断或关键术语（2-10 字），禁止删除已有 strong 却不补回
+- 润色时不得改变 mp-tip / mp-warning / mp-summary 的固定结构（见上方格式规范）
 - 案例不够具体时补充细节，但不可虚构数据来源
 - 禁止绝对化表述、空洞鸡汤、夸大承诺、无依据断言
 - 「更营销」也只强调真实价值，不用震惊体或虚假宣传`,
@@ -686,9 +743,9 @@ export async function polishContent(input: {
   const raw = await callChat(prompt, { jsonMode: true, maxTokens: 2048 });
   const parsed = safeParse<{ content?: string }>(raw, {});
   if (parsed.content && parsed.content.length > 200) {
-    return parsed.content;
+    return normalizeCalloutBlocks(parsed.content);
   }
-  return input.content;
+  return normalizeCalloutBlocks(input.content);
 }
 
 export async function expandSection(input: {
@@ -699,7 +756,11 @@ export async function expandSection(input: {
     {
       role: "system",
       content:
-        "你是公众号扩写助手。扩写用户给出的 HTML 段落，输出 JSON：{ \"content\": string }。保持 HTML 结构和整体风格，补充具体案例、步骤或细节。扩写要有实质信息，不注水、不鸡汤；有判断处可自然用 <strong> 标注 2-8 字核心词；禁止绝对化表述和无依据断言。",
+        `你是公众号扩写助手。扩写用户给出的 HTML 段落，输出 JSON：{ "content": string }。保持 HTML 结构和整体风格，补充具体案例、步骤或细节。
+
+${ARTICLE_HTML_FORMAT_RULES_BRIEF}
+
+扩写要有实质信息，不注水、不鸡汤；有判断处可自然用 <strong> 标注 2-8 字核心词；禁止绝对化表述和无依据断言；不得引入格式规范以外的 HTML 结构。`,
     },
     {
       role: "user",
@@ -712,7 +773,7 @@ export async function expandSection(input: {
   const raw = await callChat(prompt, { jsonMode: true, maxTokens: 2048 });
   const parsed = safeParse<{ content?: string }>(raw, {});
   if (parsed.content && parsed.content.length > 200) {
-    return parsed.content;
+    return normalizeCalloutBlocks(parsed.content);
   }
   return padText(
     input.content,
@@ -726,12 +787,17 @@ export async function generateTitles(input: {
   style?: string | null;
   outlineTitle?: string | null;
   contentSummary?: string | null;
-}) {
-  const { topic, style, outlineTitle, contentSummary } = input;
+  content?: string | null;
+}): Promise<Array<{ text: string; style: string }>> {
+  const { topic, style, outlineTitle, contentSummary, content } = input;
   const contextParts: string[] = [];
   if (style) contextParts.push(`写作风格：${style}`);
-  if (outlineTitle) contextParts.push(`大纲标题：${outlineTitle}`);
-  if (contentSummary) contextParts.push(`内容摘要：${contentSummary}`);
+  if (outlineTitle) contextParts.push(`当前标题：${outlineTitle}`);
+  if (contentSummary) contextParts.push(`当前摘要：${contentSummary}`);
+  if (content) {
+    const excerpt = content.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 2500);
+    if (excerpt) contextParts.push(`正文节选：${excerpt}`);
+  }
 
   const prompt: ChatMessage[] = [
     {
@@ -765,23 +831,67 @@ export async function generateTitles(input: {
   const parsed = safeParse<{ titles?: Array<{ text: string; style: string }> }>(raw, {});
 
   if (parsed.titles && parsed.titles.length > 0) {
-    return parsed.titles.map((t) => t.text);
+    return parsed.titles.map((t) => ({
+      text: t.text,
+      style: t.style || "备选",
+    }));
   }
 
-  // fallback titles with diverse styles
+  const fallbackStyles = ["提问悬念", "数字清单", "对比反差", "场景痛感", "经验判断"];
   return [
     `为什么你做不好${topic}？答案可能让你意外`,
     `${topic}的 5 个反常识建议（第 3 条我用了 3 年才想通）`,
     `会${topic}和不会${topic}的人，差距不在智商`,
     `如果你也在为${topic}感到焦虑，试试这个办法`,
     `我用 2 年踩完${topic}的所有坑，总结出这几点`,
-  ];
+  ].map((text, i) => ({ text, style: fallbackStyles[i] ?? "备选" }));
 }
 
-export function generateSummary(topic: string) {
+export async function generateSummary(input: {
+  topic: string;
+  title?: string | null;
+  content?: string | null;
+}) {
+  const plainContent = (input.content ?? "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (plainContent.length >= 80) {
+    const prompt: ChatMessage[] = [
+      {
+        role: "system",
+        content: `你是公众号摘要编辑。根据文章正文提炼一段摘要，用于公众号标题下方展示。
+要求：
+- 50-120 字，口语自然，信息密度高
+- 概括文章核心价值和读者收益，不堆砌关键词
+- 禁止标题党、绝对化表述和空洞鸡汤
+输出 JSON：{ "summary": string }`,
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          topic: input.topic,
+          title: input.title ?? undefined,
+          content: plainContent.slice(0, 6000),
+        }),
+      },
+    ];
+    const raw = await callChat(prompt, { jsonMode: true, maxTokens: 512 });
+    const parsed = safeParse<{ summary?: string }>(raw, {});
+    if (parsed.summary && parsed.summary.trim().length >= 20) {
+      return {
+        summary: parsed.summary.trim(),
+        coverText: input.title?.trim() || input.topic,
+        source: "content" as const,
+      };
+    }
+  }
+
   return {
-    summary: `这是一篇围绕"${topic}"的实用拆解，帮助读者更快理解并开始行动。`,
-    coverText: `${topic}实用指南`,
+    summary: `这是一篇围绕"${input.topic}"的实用拆解，帮助读者更快理解并开始行动。`,
+    coverText: `${input.topic}实用指南`,
+    source: "topic" as const,
   };
 }
 
@@ -795,27 +905,87 @@ CRITICAL: This model ONLY understands natural language. YOU MUST:
 - The image MUST contain Chinese text as part of the design — specify the exact text and its visual treatment
 - No faces or people in the image`;
 
+const IMAGE_STYLE_ANCHOR =
+  "Hand-drawn sticker-style educational illustration. Soft macaron color palette. Clean cream/off-white textured paper background. Friendly hand-drawn lines — slightly imperfect, warm, illustrative (children's textbook + modern infographic). Never corporate photorealism.";
+
+const SECTION_LAYOUT_VARIANTS = [
+  "HORIZONTAL FLOW: 3-4 rounded sticker cards in a left-to-right row, connected by curved dashed arrows",
+  "2x2 GRID: four cards in a balanced grid with subtle connecting dotted lines",
+  "CENTRAL HUB: one larger center card with 3 smaller satellite cards around it, linked by thin paths",
+  "VERTICAL TIMELINE: cards stacked top-to-bottom along a winding path with step numbers in circles",
+  "TWO-COLUMN CONTRAST: left vs right comparison — two tall cards facing each other with a vs/arrow divider",
+  "PROCESS FUNNEL: cards arranged in a gentle funnel or pyramid showing progression",
+  "RADIAL SPOKES: keyword cards placed around a central icon like a mind-map (no photoreal faces)",
+  "LAYERED STACK: 3 cards slightly offset like sticky notes layered on each other with paperclip doodle",
+  "JOURNEY MAP: cards placed along a simple winding road/path illustration across the canvas",
+  "TOOLBOX SCENE: cards emerging from an open sketch-style toolbox or folder illustration",
+] as const;
+
+const SECTION_METAPHOR_VARIANTS = [
+  "blueprint / technical sketch grid faintly in background",
+  "floating geometric shapes (circles, triangles) as secondary decoration",
+  "stationery doodles: paper clips, washi tape strips, pencil shavings",
+  "tiny plant sprout and leaf motifs for growth metaphor",
+  "cloud and lightning doodles for performance/speed metaphor",
+  "puzzle piece connectors between cards",
+  "magnifying glass and checklist icons near labels",
+  "bridge or link chain connecting two concepts",
+  "compass or map pin for navigation/direction metaphor",
+  "gear and circuit-line doodles for engineering topics",
+] as const;
+
+const SECTION_ACCENT_COLORS = [
+  "pastel mint green as dominant accent",
+  "soft sky blue as dominant accent",
+  "peach coral as dominant accent",
+  "lavender lilac as dominant accent",
+  "soft lemon yellow as dominant accent",
+  "dusty rose pink as dominant accent",
+] as const;
+
+function pickSectionVisualVariant(sectionIndex: number) {
+  return {
+    layout: SECTION_LAYOUT_VARIANTS[sectionIndex % SECTION_LAYOUT_VARIANTS.length],
+    metaphor: SECTION_METAPHOR_VARIANTS[sectionIndex % SECTION_METAPHOR_VARIANTS.length],
+    accentColor: SECTION_ACCENT_COLORS[sectionIndex % SECTION_ACCENT_COLORS.length],
+  };
+}
+
 /** 为文章章节生成配图提示词 - 调用 LLM 生成豆包 seedream 兼容 prompt */
 export async function generateSectionImagePrompt(
   topic: string,
   _style: string | null,
   sectionHeading: string,
   sectionContext: string,
+  options?: { sectionIndex?: number; totalSections?: number },
 ): Promise<string> {
+  const sectionIndex = options?.sectionIndex ?? 0;
+  const totalSections = options?.totalSections ?? 1;
+  const variant = pickSectionVisualVariant(sectionIndex);
+
   const prompt = await callChat([
     {
       role: "system",
-      content: IMAGE_PROMPT_SYSTEM + `\n\nCreate a visual illustration for a specific section of an article. The image must VISUALLY REPRESENT the concrete concepts and ideas discussed in this section. Do NOT mention aspect ratios, dimensions, or format specs in the prompt.
+      content: IMAGE_PROMPT_SYSTEM + `
 
-Style: Hand-drawn sticker-style educational illustration. Soft macaron color palette (pastel pink, mint green, soft yellow, sky blue, peach). Clean cream/off-white textured background. Each key point is presented as a separate rounded card with a soft drop shadow and a hand-drawn icon (simple sketch icon for the concept). Cards arranged in a flowing horizontal layout (left-to-right or grid). Decorative doodle elements scattered around: small stars, sparkles, tiny pencils, arrows, plus-sign badges, ribbons. Crisp Chinese text labels inside each card (one short keyword 2-6 Chinese characters per card). All hand-drawn elements have slightly imperfect, friendly lines — never corporate, never realistic. Atmosphere: friendly, educational, warm, illustrative (think children's textbook + modern infographic).
+Create a section illustration for a WeChat article. Keep the unified style anchor below, but make THIS image visually distinct from other sections in the same article.
 
-LAYOUT OPTIONS (pick one per image, vary across sections):
-- HORIZONTAL ROW: 3-4 cards laid out left-to-right with small connecting arrows between them
-- 2x2 GRID: four cards arranged in a 2-by-2 grid
-- TWO-COLUMN COMPARE: two cards side by side showing contrasting concepts
-- PROCESS FLOW: sequence of cards connected by curved arrows showing steps
+STYLE ANCHOR (fixed — do not change):
+${IMAGE_STYLE_ANCHOR}
 
-CRITICAL: Do NOT just display the section heading as text. Instead, extract the most important technical keywords, methods, tools, or concepts from the section content and use THOSE as the text labels inside each card. Each card label should be 2-6 Chinese characters.
+DIVERSITY (mandatory — vary composition and decorative elements):
+- Each section image must look different from a generic "row of cards" template
+- Use the assigned layoutVariant exactly — do not fall back to a default horizontal row unless that IS the assigned layout
+- Use the assigned visualMetaphor and accentColor to differentiate mood and decoration
+- Vary card shapes subtly when fitting: rounded rects, tags, bookmarks, speech bubbles, hexagons
+- Vary decorative doodles: stars, sparkles, arrows, ribbons, plus badges, dots — don't repeat the same set every time
+- Pick icons that match the section topic (code brackets, database cylinder, form checkbox, clock, shield, etc.) — not generic lightbulb every time
+
+CONTENT:
+- Do NOT just render the section heading as the main text
+- Extract 3-5 concrete keywords, methods, tools, or concepts from sectionContent (2-6 Chinese characters each)
+- Place each keyword inside its own card/sticker with a small hand-drawn icon
+- Do NOT mention aspect ratios or pixel dimensions
 
 Output JSON: { "prompt": string }`,
     },
@@ -825,16 +995,43 @@ Output JSON: { "prompt": string }`,
         articleTopic: topic,
         sectionHeading,
         sectionContent: sectionContext.slice(0, 800),
+        sectionIndex,
+        totalSections,
+        layoutVariant: variant.layout,
+        visualMetaphor: variant.metaphor,
+        accentColor: variant.accentColor,
+        diversityNote: `Section ${sectionIndex + 1} of ${totalSections} — must NOT look identical to other sections; honor layoutVariant strictly.`,
       }),
     },
-  ], { jsonMode: true, maxTokens: 256 });
+  ], { jsonMode: true, maxTokens: 420 });
 
   const parsed = safeParse<{ prompt?: string }>(prompt, {});
-  if (parsed.prompt) return parsed.prompt;
+  if (parsed.prompt) return reinforceSectionPrompt(parsed.prompt, variant);
 
-  // fallback
   const cleanHeading = sectionHeading.replace(/[——\-–—:：]/g, " ").replace(/[^\w\u4e00-\u9fa5 ]/g, "").trim().slice(0, 40);
-  return `clean infographic illustration about ${cleanHeading}, flat vector style, modern minimal, 1920x1920`;
+  return reinforceSectionPrompt(
+    `${IMAGE_STYLE_ANCHOR} Illustration about ${cleanHeading}. ${variant.layout}. ${variant.metaphor}. ${variant.accentColor}. Chinese keyword labels inside hand-drawn sticker cards.`,
+    variant,
+  );
+}
+
+function reinforceSectionPrompt(
+  prompt: string,
+  variant: ReturnType<typeof pickSectionVisualVariant>,
+): string {
+  const lower = prompt.toLowerCase();
+  const hints: string[] = [];
+  if (!/macaron|hand-drawn|sticker|cream/i.test(prompt)) {
+    hints.push(IMAGE_STYLE_ANCHOR);
+  }
+  if (!/chinese|中文|汉字/i.test(lower)) {
+    hints.push("Chinese keyword labels (2-6 characters) inside each card.");
+  }
+  if (!/layout|grid|timeline|hub|funnel|map|toolbox|radial|stack/i.test(lower)) {
+    hints.push(variant.layout);
+  }
+  if (hints.length === 0) return prompt.trim();
+  return `${prompt.trim()} ${hints.join(" ")}`;
 }
 
 /** 为封面图生成 prompt - 调用 LLM 生成豆包 seedream 兼容 prompt */
@@ -850,18 +1047,22 @@ export async function generateCoverPrompt(
       role: "system",
       content: IMAGE_PROMPT_SYSTEM + `\n\nCreate a cover illustration for a WeChat article. The image MUST visually reflect the specific topic — do NOT create a generic cover. Do NOT mention aspect ratios, dimensions, or format specs in the prompt — the image size is handled separately.
 
-Style: Hand-drawn sticker-style educational illustration. Soft macaron color palette (pastel pink, mint green, soft yellow, sky blue, peach). Clean cream/off-white textured background. Key concepts presented as rounded cards with soft drop shadows and hand-drawn icons. Decorative doodle elements: small stars, sparkles, tiny pencils, arrows, plus-sign badges, ribbons. All hand-drawn, friendly, slightly imperfect lines — never corporate, never realistic. No faces or people.
+STYLE ANCHOR (fixed):
+${IMAGE_STYLE_ANCHOR}
 
-LAYOUT (strict — must follow):
-- The top 40% of the image must contain ZERO text — no title, no keywords, no captions. Only plain cream background and tiny decorative doodles (stars/sparkles) are allowed. WeChat will overlay the article title here later.
-- Place 3-5 rounded sticker cards horizontally in the lower-center area (below the empty top zone).
-- ALL Chinese text must appear ONLY inside those cards — never floating outside cards, never in corners, never as a large header.
+LAYOUT (pick ONE that fits the topic — vary composition, keep style):
+- LOWER ARC: 3-5 sticker cards arranged in a gentle arc across the lower third
+- DIAGONAL CASCADE: cards staggered diagonally from lower-left to lower-right
+- CENTER CLUSTER: one hero card with 2-3 smaller cards grouped below it
+- SPLIT BAND: cards sitting on a hand-drawn colored band/strip across the lower area
 
-TEXT (strict):
-- Extract 3-5 distinct core Chinese keywords (2-6 characters each) from topic, summary, and keyPoints.
-- Do NOT render the full article title anywhere in the image.
-- articleTitle in user input is context only — never paint it on the cover.
-- Each keyword appears exactly once inside one card. Do not repeat the same word as both a corner title and a card label.
+RULES (strict):
+- The top 40% of the image must contain ZERO text — only plain cream background and tiny decorative doodles (stars/sparkles). WeChat overlays the title here.
+- ALL Chinese text ONLY inside sticker cards in the lower area — never floating headers or corner titles
+- Extract 3-5 distinct core Chinese keywords (2-6 characters each) from topic, summary, and keyPoints
+- Do NOT render the full article title anywhere in the image
+- articleTitle in user input is context only — never paint it on the cover
+- Use topic-relevant icons and decorative metaphors (not the same stars-and-cards template every time)
 
 Output JSON: { "prompt": string }`,
     },

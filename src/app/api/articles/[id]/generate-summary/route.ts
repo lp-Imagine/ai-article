@@ -19,12 +19,17 @@ export async function POST(
     );
   }
 
-  const { summary, coverText } = generateSummary(article.topic);
+  const { summary, coverText, source } = await generateSummary({
+    topic: article.topic,
+    title: article.title,
+    content: article.content,
+  });
 
   const updated = await db.article.update({
     where: { id },
     data: {
       summary,
+      status: article.status === "generated" ? "edited" : article.status,
     },
   });
 
@@ -34,6 +39,7 @@ export async function POST(
     data: {
       ...updated,
       coverText,
+      source,
     },
   });
 }

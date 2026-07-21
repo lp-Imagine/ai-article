@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import ArticleHtmlContent from "@/components/article-html-content";
-import { wrapSummarySection } from "@/lib/wechat-style";
+import { normalizeCalloutBlocks, wrapSummarySection } from "@/lib/wechat-style";
 
 type Props = {
   open: boolean;
@@ -42,7 +42,7 @@ export default function PreviewDialog({
     ? content
     : `<p>（尚无正文）请在左侧生成或粘贴内容，再回到这里预览。</p>`;
 
-  const displayContent = wrapSummarySection(safeContent);
+  const displayContent = normalizeCalloutBlocks(wrapSummarySection(safeContent));
 
   const safeTitle = title || topic || "未命名标题";
   const charCount = plainTextLength(safeContent);
@@ -50,15 +50,15 @@ export default function PreviewDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(21,19,17,0.35)] backdrop-blur-md p-4"
       onClick={onClose}
     >
       <div
-        className="glass-strong flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden"
+        className="glass-strong flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-[24px]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 顶部栏 */}
-        <div className="flex items-center justify-between border-b border-[var(--line)] px-5 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-6 py-4">
           <div className="flex items-center gap-3">
             <h3 className="editorial-title text-lg font-semibold text-[var(--foreground)]">
               预览
@@ -83,12 +83,12 @@ export default function PreviewDialog({
 
           <div className="flex items-center gap-2">
             {/* 模式切换 */}
-            <div className="flex overflow-hidden rounded-md border border-[var(--line)] text-xs">
+            <div className="flex overflow-hidden rounded-full border border-[var(--line)] text-xs p-0.5 bg-[rgba(255,255,255,0.6)]">
               <button
                 onClick={() => setMode("phone")}
-                className={`px-3 py-1.5 transition-colors ${
+                className={`rounded-full px-3.5 py-1.5 transition-colors ${
                   mode === "phone"
-                    ? "bg-[var(--accent)] text-white font-semibold"
+                    ? "bg-[var(--accent)] text-white font-semibold shadow-sm"
                     : "text-[var(--muted)] hover:text-[var(--foreground)]"
                 }`}
               >
@@ -96,9 +96,9 @@ export default function PreviewDialog({
               </button>
               <button
                 onClick={() => setMode("desktop")}
-                className={`px-3 py-1.5 transition-colors ${
+                className={`rounded-full px-3.5 py-1.5 transition-colors ${
                   mode === "desktop"
-                    ? "bg-[var(--accent)] text-white font-semibold"
+                    ? "bg-[var(--accent)] text-white font-semibold shadow-sm"
                     : "text-[var(--muted)] hover:text-[var(--foreground)]"
                 }`}
               >

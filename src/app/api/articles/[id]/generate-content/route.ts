@@ -33,10 +33,22 @@ export async function POST(
   }
 
   const outlines = Array.isArray(article.outline) ? (article.outline as OutlineRecord[]) : [];
-  const selectedOutline =
-    typeof article.selectedOutlineIndex === "number"
-      ? outlines[article.selectedOutlineIndex] ?? null
-      : outlines[0] ?? null;
+
+  if (typeof article.selectedOutlineIndex !== "number") {
+    return NextResponse.json(
+      { code: 1003, message: "请先选择一个大纲方案，再生成正文", data: null },
+      { status: 400 },
+    );
+  }
+
+  const selectedOutline = outlines[article.selectedOutlineIndex] ?? null;
+
+  if (!selectedOutline) {
+    return NextResponse.json(
+      { code: 1003, message: "所选大纲不存在，请重新选择", data: null },
+      { status: 400 },
+    );
+  }
 
   const generated = await generateContent({
     topic: article.topic,

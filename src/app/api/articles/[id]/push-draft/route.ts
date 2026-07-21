@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { downloadToBuffer, generateCoverImage } from "@/lib/image-gen";
-import { isReady as isWechatReady, getAccessToken, uploadMedia } from "@/lib/wechat";
-import { convertToWechatHtml } from "@/lib/wechat-style";
+import { isReady as isWechatReady, getAccessToken, uploadMedia, buildWechatDigest } from "@/lib/wechat";
+import { convertToWechatHtml, prependWechatDigest } from "@/lib/wechat-style";
 
 /** 上传图片到微信素材库，返回可用于草稿正文的 url */
 async function uploadInlineImage(
@@ -125,7 +125,8 @@ export async function POST(
       "image",
     );
 
-    const wechatContent = convertToWechatHtml(article.content);
+    const digest = buildWechatDigest(article.summary, article.content);
+    const wechatContent = prependWechatDigest(convertToWechatHtml(article.content), digest);
 
     // 上传正文中的图片到微信并替换 URL（章节配图等）
     const contentWithImages = await replaceInlineImages(wechatContent, token);
@@ -133,7 +134,7 @@ export async function POST(
     const draftId = await (await import("@/lib/wechat")).createDraft(token, {
       title: article.title ?? article.topic,
       content: contentWithImages,
-      digest: article.summary ?? "",
+      digest,
       thumbMediaId: mediaId,
     });
 

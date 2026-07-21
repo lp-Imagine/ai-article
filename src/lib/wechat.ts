@@ -80,6 +80,29 @@ export async function uploadMedia(
   return json.media_id;
 }
 
+export function buildWechatDigest(
+  summary: string | null | undefined,
+  htmlContent: string,
+): string {
+  const fromSummary = (summary ?? "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (fromSummary) {
+    return fromSummary.slice(0, 120);
+  }
+
+  const fromContent = htmlContent
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return fromContent.slice(0, 120);
+}
+
 export async function createDraft(
   accessToken: string,
   payload: {
