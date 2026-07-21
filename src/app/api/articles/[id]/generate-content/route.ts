@@ -43,6 +43,9 @@ export async function POST(
     outline: selectedOutline,
     style: article.style,
     wordCount: article.wordCount,
+    audience: article.audience,
+    goal: article.goal,
+    keywords: article.keywords,
   });
 
   // 顺手生成封面图（不影响正文，封面失败也不中断）

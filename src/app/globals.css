@@ -374,11 +374,13 @@ textarea::placeholder {
   hyphens: auto;
 }
 
-.mp-preview p strong {
-  color: #1a1a1a;
-  background: linear-gradient(transparent 60%, rgba(231, 169, 59, 0.25) 60%);
-  padding: 0 2px;
+.mp-preview article p strong,
+.mp-preview .mp-summary strong {
+  color: #111;
+  background: linear-gradient(transparent 55%, rgba(231, 169, 59, 0.4) 55%);
+  padding: 0 3px;
   font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 .mp-preview p em {
@@ -460,56 +462,46 @@ textarea::placeholder {
   font-size: 14px;
 }
 
-/* ====== 列表 ====== */
+/* ====== 列表（标题+说明卡片） ====== */
 
+.mp-preview ol,
 .mp-preview ul {
   padding-left: 0;
   margin: 14px 0 20px;
   list-style: none;
 }
 
+.mp-preview ol li,
 .mp-preview ul li {
-  padding: 7px 0 7px 30px;
-  margin-bottom: 8px;
   position: relative;
   color: #3a3a3a;
   line-height: 1.8;
+  margin-bottom: 12px;
+  padding: 14px 16px 14px 48px;
+  background: #f8fbff;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
 }
 
-.mp-preview ul li::before {
-  content: "";
-  position: absolute;
-  left: 6px;
-  top: 15px;
-  width: 8px;
-  height: 8px;
-  background: #0071e3;
-  border-radius: 2px;
-  opacity: 0.6;
-  transform: rotate(45deg);
-}
-
-.mp-preview ol {
-  padding-left: 0;
-  margin: 14px 0 20px;
-  list-style: none;
-  counter-reset: step-counter;
+.mp-preview ul li {
+  padding-left: 20px;
+  border-left: 4px solid #0071e3;
+  border-radius: 0 10px 10px 0;
 }
 
 .mp-preview ol li {
-  padding: 8px 0 8px 38px;
-  margin-bottom: 8px;
-  position: relative;
-  color: #3a3a3a;
-  line-height: 1.8;
   counter-increment: step-counter;
+}
+
+.mp-preview ol {
+  counter-reset: step-counter;
 }
 
 .mp-preview ol li::before {
   content: counter(step-counter);
   position: absolute;
-  left: 0;
-  top: 8px;
+  left: 14px;
+  top: 14px;
   width: 26px;
   height: 26px;
   background: linear-gradient(135deg, #0071e3, #60a5fa);
@@ -522,6 +514,37 @@ textarea::placeholder {
   justify-content: center;
   line-height: 1;
   box-shadow: 0 2px 6px rgba(0, 113, 227, 0.25);
+}
+
+.mp-preview ul li::before {
+  display: none;
+}
+
+/* 列表项标题（strong 开头） */
+.mp-preview li > strong:first-child {
+  display: block;
+  font-size: 15px;
+  font-weight: 700;
+  color: #1a1a1a;
+  background: none;
+  padding: 0;
+  margin: 0 0 6px;
+  letter-spacing: 0.02em;
+}
+
+/* 段落内加粗（与列表标题区分） */
+.mp-preview article p strong,
+.mp-preview .mp-summary strong,
+.mp-preview li strong:not(:first-child) {
+  color: #111;
+  background: linear-gradient(transparent 55%, rgba(231, 169, 59, 0.4) 55%);
+  padding: 0 3px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.mp-preview li > strong:first-child + br {
+  display: none;
 }
 
 /* ====== 图片 ====== */
@@ -558,13 +581,12 @@ textarea::placeholder {
 }
 
 .mp-preview pre {
-  background: #1e1e2e;
+  background: #0d1117;
   padding: 18px 22px;
-  border-radius: 10px;
+  border-radius: 8px;
   overflow-x: auto;
   margin: 20px 0;
-  border: 1px solid #313244;
-  border-left: 3px solid #0071e3;
+  border: 1px solid #30363d;
   font-size: 14px;
   line-height: 1.75;
   position: relative;
@@ -574,48 +596,121 @@ textarea::placeholder {
   background: none;
   padding: 0;
   border: none;
-  color: #cdd6f4;
+  color: #c9d1d9;
   white-space: pre;
 }
 
-/* ====== 高亮提示卡片 ====== */
+/* ====== 代码块复制按钮 ====== */
+
+.mp-preview [data-mp-cb-lang="1"].mp-code-lang-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mp-preview .mp-code-copy-btn {
+  margin-left: auto;
+  border: 1px solid #30363d;
+  background: #21262d;
+  color: #8b949e;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 500;
+  letter-spacing: 0;
+  flex-shrink: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.mp-preview .mp-code-copy-btn:hover {
+  background: #30363d;
+  color: #c9d1d9;
+}
+
+/* ====== 高亮提示卡片（与微信推送双行卡片结构一致） ====== */
 
 .mp-preview .mp-tip {
-  margin: 22px 0;
-  padding: 18px 22px 18px 48px;
-  background: linear-gradient(135deg, rgba(0, 113, 227, 0.05), rgba(0, 113, 227, 0.01));
+  margin: 20px 0;
+  padding: 0;
+  background: #f8fbff;
   border-radius: 10px;
-  border: 1px solid rgba(0, 113, 227, 0.12);
+  border: 1px solid #93c5fd;
   font-size: 15px;
   color: #1e3a5f;
-  position: relative;
+  overflow: hidden;
+  line-height: 1.85;
 }
 
 .mp-preview .mp-tip::before {
-  content: "💡";
-  position: absolute;
-  left: 16px;
-  top: 18px;
-  font-size: 18px;
+  content: "💡  实用技巧";
+  display: block;
+  padding: 10px 14px;
+  background: #eff6ff;
+  border-bottom: 1px solid #dbeafe;
+  font-size: 13px;
+  font-weight: 700;
+  color: #2563eb;
+  letter-spacing: 0.06em;
+}
+
+.mp-preview .mp-tip > * {
+  margin: 0;
+  padding: 12px 14px 14px;
 }
 
 .mp-preview .mp-warning {
-  margin: 22px 0;
-  padding: 18px 22px 18px 48px;
-  background: linear-gradient(135deg, rgba(231, 169, 59, 0.08), rgba(231, 169, 59, 0.02));
+  margin: 20px 0;
+  padding: 0;
+  background: #fffdf7;
   border-radius: 10px;
-  border: 1px solid rgba(231, 169, 59, 0.18);
+  border: 1px solid #fcd34d;
   font-size: 15px;
-  color: #6b4a0a;
-  position: relative;
+  color: #78350f;
+  overflow: hidden;
+  line-height: 1.85;
 }
 
 .mp-preview .mp-warning::before {
-  content: "⚠️";
-  position: absolute;
-  left: 16px;
-  top: 18px;
-  font-size: 18px;
+  content: "⚠️  注意";
+  display: block;
+  padding: 10px 14px;
+  background: #fffbeb;
+  border-bottom: 1px solid #fde68a;
+  font-size: 13px;
+  font-weight: 700;
+  color: #d97706;
+  letter-spacing: 0.06em;
+}
+
+.mp-preview .mp-warning > * {
+  margin: 0;
+  padding: 12px 14px 14px;
+}
+
+/* ====== 总结卡片 ====== */
+
+.mp-preview .mp-summary {
+  margin: 16px 0 24px;
+  padding: 18px 20px;
+  background: #f0f4ff;
+  border-left: 4px solid #2563eb;
+  border-radius: 0 10px 10px 0;
+  color: #3d3d3d;
+  line-height: 1.85;
+  font-size: 15px;
+  text-align: justify;
+}
+
+.mp-preview .mp-summary p {
+  margin: 0 0 12px;
+}
+
+.mp-preview .mp-summary p:last-child {
+  margin-bottom: 0;
 }
 
 /* ====== 签名 / 尾引导 ====== */

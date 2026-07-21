@@ -145,6 +145,15 @@ export default function SettingsPage() {
     { key: "wechatAppSecret", label: "微信公众号 App Secret", placeholder: "", type: "password" },
   ];
 
+  const writingFields = [
+    {
+      key: "accountPersona",
+      label: "公众号人设 / 简介（可选）",
+      placeholder: "例如：Penn前端智能实验室｜从前端到 AI Agent，记录全栈开发与智能体实践。作者：前端工程师。",
+      multiline: true,
+    },
+  ];
+
   if (loading) {
     return (
       <main className="mx-auto w-full max-w-[720px] px-8 py-10">
@@ -193,6 +202,38 @@ export default function SettingsPage() {
                 placeholder={f.placeholder}
                 className="mt-2 w-full px-4 py-2.5 text-sm"
               />
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* 写作默认 */}
+      <section className="glass p-6 mb-6">
+        <h2 className="editorial-title text-lg font-semibold mb-1">写作默认</h2>
+        <p className="text-xs text-[var(--muted)] mb-4">
+          账号背景只影响叙述口吻和举例偏好，不会把每篇文章都写成同一领域。文章写什么仍由每篇的「主题」决定。
+        </p>
+        <div className="space-y-4">
+          {writingFields.map((f) => (
+            <div key={f.key}>
+              <label className="text-xs uppercase tracking-widest text-[var(--muted)]">{f.label}</label>
+              {f.multiline ? (
+                <textarea
+                  value={getValue(f.key)}
+                  onChange={(e) => setValue(f.key, e.target.value)}
+                  placeholder={f.placeholder}
+                  rows={4}
+                  className="mt-2 w-full px-4 py-2.5 text-sm resize-y min-h-[96px]"
+                />
+              ) : (
+                <input
+                  type="text"
+                  value={getValue(f.key)}
+                  onChange={(e) => setValue(f.key, e.target.value)}
+                  placeholder={f.placeholder}
+                  className="mt-2 w-full px-4 py-2.5 text-sm"
+                />
+              )}
             </div>
           ))}
         </div>

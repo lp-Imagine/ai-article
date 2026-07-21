@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import ArticleHtmlContent from "@/components/article-html-content";
+import { wrapSummarySection } from "@/lib/wechat-style";
 
 type Props = {
   open: boolean;
@@ -39,6 +41,8 @@ export default function PreviewDialog({
   const safeContent = content && content.trim().length > 0
     ? content
     : `<p>（尚无正文）请在左侧生成或粘贴内容，再回到这里预览。</p>`;
+
+  const displayContent = wrapSummarySection(safeContent);
 
   const safeTitle = title || topic || "未命名标题";
   const charCount = plainTextLength(safeContent);
@@ -124,7 +128,7 @@ export default function PreviewDialog({
                 <div className="mp-meta">
                   {summary ? summary : "（未填写摘要）"}
                 </div>
-                <div dangerouslySetInnerHTML={{ __html: `<article>${safeContent}</article>` }} />
+                <ArticleHtmlContent html={`<article>${displayContent}</article>`} />
                 <div className="mt-8 border-t border-dashed border-[#e6dccb] pt-4 text-center text-xs text-[#999]">
                   — 全文完 —
                 </div>
@@ -143,7 +147,7 @@ export default function PreviewDialog({
                 <div className="mp-meta">
                   {summary ? summary : "（未填写摘要）"}
                 </div>
-                <div dangerouslySetInnerHTML={{ __html: `<article>${safeContent}</article>` }} />
+                <ArticleHtmlContent html={`<article>${displayContent}</article>`} />
                 <div className="mt-10 border-t border-dashed border-[#e6dccb] pt-4 text-center text-xs text-[#999]">
                   — 全文完 —
                 </div>

@@ -141,7 +141,7 @@ export default function HomePage() {
                 type="text"
                 value={form.topic}
                 onChange={(e) => update("topic", e.target.value)}
-                placeholder="例如：普通人如何用 AI 提升工作效率"
+                placeholder="例如：用 React 做流式 AI 对话界面 / 普通人如何用 AI 提升效率"
                 className="mt-2 w-full px-4 py-3 text-base"
               />
             </div>
@@ -190,18 +190,14 @@ export default function HomePage() {
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="text-xs uppercase tracking-widest text-[var(--muted)]">大纲方案数</label>
-                <select
-                  value={form.outlineCount}
-                  onChange={(e) => update("outlineCount", Number(e.target.value))}
+                <label className="text-xs uppercase tracking-widest text-[var(--muted)]">目标读者</label>
+                <input
+                  type="text"
+                  value={form.audience}
+                  onChange={(e) => update("audience", e.target.value)}
+                  placeholder="例如：前端开发者 / 职场新人 / 泛读者"
                   className="mt-2 w-full px-4 py-2 text-sm"
-                >
-                  <option value={2}>2 个</option>
-                  <option value={3}>3 个（默认）</option>
-                  <option value={4}>4 个</option>
-                  <option value={5}>5 个</option>
-                  <option value={6}>6 个</option>
-                </select>
+                />
               </div>
               <div>
                 <label className="text-xs uppercase tracking-widest text-[var(--muted)]">文章目标</label>
@@ -216,6 +212,24 @@ export default function HomePage() {
                   <option>品牌表达</option>
                 </select>
               </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs uppercase tracking-widest text-[var(--muted)]">大纲方案数</label>
+                <select
+                  value={form.outlineCount}
+                  onChange={(e) => update("outlineCount", Number(e.target.value))}
+                  className="mt-2 w-full px-4 py-2 text-sm"
+                >
+                  <option value={2}>2 个</option>
+                  <option value={3}>3 个（默认）</option>
+                  <option value={4}>4 个</option>
+                  <option value={5}>5 个</option>
+                  <option value={6}>6 个</option>
+                </select>
+              </div>
+              <div aria-hidden className="hidden sm:block" />
             </div>
 
             <button

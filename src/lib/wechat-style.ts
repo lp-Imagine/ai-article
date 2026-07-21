@@ -12,41 +12,303 @@
  *   - counter-reset / counter-increment
  */
 
+import {
+  findSectionBlockEnd,
+  highlightedCodeToPlainText,
+  parseCodeBlockSections,
+  renderCodeBlockForWechat,
+} from "@/lib/code-highlight";
+
 const ACCENT = "#3e7bfa";
 const WARNING = "#e7a93b";
-const ACCENT_BG = "rgba(62,123,250,0.06)";
-const WARNING_BG = "rgba(231,169,59,0.08)";
+const WARNING_BG = "#fff8eb";
+
+const TIP = {
+  border: "#93c5fd",
+  bg: "#f8fbff",
+  headerBg: "#eff6ff",
+  headerBorder: "#dbeafe",
+  label: "#2563eb",
+  text: "#1e3a5f",
+};
+
+const WARN = {
+  border: "#fcd34d",
+  bg: "#fffdf7",
+  headerBg: "#fffbeb",
+  headerBorder: "#fde68a",
+  label: "#d97706",
+  text: "#78350f",
+};
+
+const SUMMARY = {
+  bg: "#f0f4ff",
+  border: "#2563eb",
+  text: "#3d3d3d",
+};
+
+const DROP_CAP_STYLE =
+  "float:left;font-size:52px;font-weight:900;color:#0071e3;line-height:0.82;margin:2px 10px 0 0;font-family:Georgia,serif;";
+
+const LIST_CARD = {
+  bg: "#f8fbff",
+  border: "#dbeafe",
+  title: "#1a1a1a",
+  body: "#555555",
+};
+
+const STRONG_STYLE =
+  "color:#111111;font-weight:bold;background-color:#fff8e6;padding:0 3px;";
+
+function stripTags(html: string): string {
+  return html.replace(/<[^>]+>/g, "").trim();
+}
+
+function normalizeListItemInner(inner: string): string {
+  return inner
+    .trim()
+    .replace(/^<p(?:\s[^>]*)?>/i, "")
+    .replace(/<\/p>$/i, "")
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/\s+[：:]\s+/g, " ")
+    .replace(/^[：:]\s*/, "");
+}
+
+function parseListItemTitleBody(inner: string): { title: string; body: string } | null {
+  const normalized = normalizeListItemInner(inner);
+  const match = normalized.match(/^<strong(?:\s[^>]*)?>([\s\S]*?)<\/strong>\s*([\s\S]+)$/i);
+  if (!match) return null;
+
+  const title = stripTags(match[1]);
+  let body = match[2].trim().replace(/^[：:]\s*/, "");
+  body = body.replace(/^<p(?:\s[^>]*)?>/i, "").replace(/<\/p>$/i, "").trim();
+  if (!title || !body || stripTags(body).length < 4) return null;
+
+  return { title, body };
+}
+
+function buildOrderedListCard(counter: number, title: string, body: string): string {
+  return (
+    `<table style="width:100%;border-collapse:collapse;margin:0 0 12px;border:1px solid ${LIST_CARD.border};background-color:${LIST_CARD.bg};border-radius:10px;">` +
+    `<tr>` +
+    `<td style="width:44px;padding:14px 0 14px 12px;vertical-align:top;border:none;">` +
+    `<span style="display:inline-block;width:26px;height:26px;line-height:26px;text-align:center;background-color:${ACCENT};color:#ffffff;border-radius:50%;font-size:13px;font-weight:bold;">${counter}</span>` +
+    `</td>` +
+    `<td style="padding:14px 14px 14px 0;vertical-align:top;border:none;">` +
+    `<section style="font-size:15px;font-weight:bold;color:${LIST_CARD.title};margin:0 0 6px;line-height:1.5;">${title}</section>` +
+    `<section style="font-size:14px;color:${LIST_CARD.body};line-height:1.75;margin:0;text-align:justify;">${body}</section>` +
+    `</td></tr></table>`
+  );
+}
+
+function buildUnorderedListCard(title: string, body: string): string {
+  return (
+    `<table style="width:100%;border-collapse:collapse;margin:0 0 12px;border:1px solid ${LIST_CARD.border};border-left:4px solid ${ACCENT};background-color:${LIST_CARD.bg};border-radius:0 10px 10px 0;">` +
+    `<tr><td style="padding:14px 16px;border:none;">` +
+    `<section style="font-size:15px;font-weight:bold;color:${LIST_CARD.title};margin:0 0 6px;line-height:1.5;">${title}</section>` +
+    `<section style="font-size:14px;color:${LIST_CARD.body};line-height:1.75;margin:0;text-align:justify;">${body}</section>` +
+    `</td></tr></table>`
+  );
+}
+
+function buildPlainListItem(counter: number | null, inner: string, ordered: boolean): string {
+  const clean = normalizeListItemInner(inner);
+  if (ordered && counter !== null) {
+    return (
+      `<table style="width:100%;border-collapse:collapse;margin:0 0 10px;">` +
+      `<tr><td style="width:44px;padding:8px 0 8px 12px;vertical-align:top;border:none;">` +
+      `<span style="display:inline-block;width:26px;height:26px;line-height:26px;text-align:center;background-color:${ACCENT};color:#ffffff;border-radius:50%;font-size:13px;font-weight:bold;">${counter}</span>` +
+      `</td><td style="padding:8px 14px 8px 0;vertical-align:top;font-size:15px;color:#3a3a3a;line-height:1.8;border:none;">${clean}</td></tr></table>`
+    );
+  }
+  return (
+    `<table style="width:100%;border-collapse:collapse;margin:0 0 10px;">` +
+    `<tr><td style="width:20px;padding:10px 0 10px 8px;vertical-align:top;border:none;">` +
+    `<span style="display:inline-block;width:8px;height:8px;background-color:${ACCENT};border-radius:2px;opacity:0.75;"></span>` +
+    `</td><td style="padding:10px 14px 10px 0;vertical-align:top;font-size:15px;color:#3a3a3a;line-height:1.8;border:none;">${clean}</td></tr></table>`
+  );
+}
+
+function transformListBlock(html: string, ordered: boolean): string {
+  const tag = ordered ? "ol" : "ul";
+  const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "gi");
+  return html.replace(re, (_full, inner: string) => {
+    const items: string[] = [];
+    let counter = 0;
+    const liRe = /<li(?:\s[^>]*)?>([\s\S]*?)<\/li>/gi;
+    let liMatch: RegExpExecArray | null;
+    while ((liMatch = liRe.exec(inner)) !== null) {
+      const liInner = liMatch[1];
+      const parsed = parseListItemTitleBody(liInner);
+      if (parsed) {
+        if (ordered) {
+          counter++;
+          items.push(buildOrderedListCard(counter, parsed.title, parsed.body));
+        } else {
+          items.push(buildUnorderedListCard(parsed.title, parsed.body));
+        }
+      } else {
+        counter++;
+        items.push(buildPlainListItem(ordered ? counter : null, liInner, ordered));
+      }
+    }
+    return `<section style="margin:14px 0 20px;">${items.join("")}</section>`;
+  });
+}
+
+function applyStrongStyles(html: string): string {
+  let result = html.replace(/<b(\s[^>]*)?>/gi, "<strong>");
+  result = result.replace(/<\/b>/gi, "</strong>");
+  result = result.replace(/<strong(\s[^>]*)?>/gi, (_full, attrs?: string) => {
+    if (attrs && /style\s*=/i.test(attrs)) {
+      return _full.replace(
+        /style\s*=\s*"([^"]*)"/i,
+        (_s, existing: string) =>
+          `style="${existing}color:#111111;font-weight:bold;background-color:#fff8e6;padding:0 3px;"`,
+      );
+    }
+    return `<strong style="${STRONG_STYLE}">`;
+  });
+  return result;
+}
+
+function buildCalloutTable(
+  icon: string,
+  inner: string,
+  options: {
+    border: string;
+    bg: string;
+    headerBg: string;
+    headerBorder: string;
+    label: string;
+    labelColor: string;
+    textColor: string;
+  },
+): string {
+  const cleanInner = inner.trim().replace(/^<p>/i, "").replace(/<\/p>$/i, "");
+  return (
+    `<table style="width:100%;border-collapse:collapse;margin:20px 0;border-radius:10px;border:1px solid ${options.border};background-color:${options.bg};overflow:hidden;">` +
+    `<tr><td style="padding:10px 14px;background-color:${options.headerBg};border-bottom:1px solid ${options.headerBorder};border-left:none;border-right:none;border-top:none;">` +
+    `<span style="font-size:17px;margin-right:6px;vertical-align:middle;">${icon}</span>` +
+    `<span style="font-size:13px;font-weight:700;color:${options.labelColor};letter-spacing:0.06em;vertical-align:middle;">${options.label}</span>` +
+    `</td></tr>` +
+    `<tr><td style="padding:12px 14px 14px;font-size:15px;line-height:1.85;color:${options.textColor};text-align:justify;border:none;">${cleanInner}</td></tr>` +
+    `</table>`
+  );
+}
+
+/** 将「总结」章节正文包裹为 mp-summary（预览与推送共用） */
+export function wrapSummarySection(html: string): string {
+  if (/class="mp-summary"/i.test(html)) return html;
+
+  return html.replace(
+    /(<h2[^>]*>\s*总结\s*<\/h2>)([\s\S]*?)(?=\s*(?:<hr[\s/>]|<h2\b|$))/i,
+    (_full, h2: string, body: string) => {
+      const trimmed = body.trim();
+      if (!trimmed) return h2 + body;
+      return `${h2}<div class="mp-summary">${trimmed}</div>`;
+    },
+  );
+}
+
+function findFirstVisibleCharIndex(html: string): number {
+  let i = 0;
+  while (i < html.length) {
+    if (html[i] === "<") {
+      const close = html.indexOf(">", i);
+      if (close === -1) return -1;
+      i = close + 1;
+      continue;
+    }
+    if (/\s/.test(html[i])) {
+      i++;
+      continue;
+    }
+    return i;
+  }
+  return -1;
+}
+
+/** 首段首字下沉：微信不支持 ::first-letter，用 float span 模拟 */
+function applyDropCapToOpeningParagraph(html: string): string {
+  const match = html.match(/<p(?:\s[^>]*)?>([\s\S]*?)<\/p>/i);
+  if (!match || match.index === undefined) return html;
+
+  const full = match[0];
+  const innerStart = html.indexOf(">", match.index) + 1;
+  const innerEnd = match.index + full.length - "</p>".length;
+  const inner = html.slice(innerStart, innerEnd);
+
+  if (/float:left;font-size:52px|data-mp-dropcap/i.test(inner)) return html;
+
+  const charIdx = findFirstVisibleCharIndex(inner);
+  if (charIdx === -1) return html;
+
+  const char = inner[charIdx];
+  if (!/[\u4e00-\u9fffA-Za-z0-9]/.test(char)) return html;
+
+  const newInner =
+    inner.slice(0, charIdx) +
+    `<span style="${DROP_CAP_STYLE}">${char}</span>` +
+    inner.slice(charIdx + 1);
+
+  const openTag = html.slice(match.index, innerStart);
+  const replacement = openTag + newInner + "</p>";
+  return html.slice(0, match.index) + replacement + html.slice(match.index + full.length);
+}
+
+function buildSummaryBox(inner: string): string {
+  const cleanInner = inner.trim();
+  return (
+    `<section style="margin:16px 0 24px;padding:18px 20px;background-color:${SUMMARY.bg};` +
+    `border-left:4px solid ${SUMMARY.border};border-radius:0 10px 10px 0;` +
+    `color:${SUMMARY.text};line-height:1.85;font-size:15px;text-align:justify;">${cleanInner}</section>`
+  );
+}
 
 /**
  * 将文章 HTML 转换为微信公众号兼容的内联样式版本
  */
 export function convertToWechatHtml(html: string): string {
-  let result = html;
+  let result = wrapSummarySection(html);
+
+  // ====== 0. 首段首字下沉（微信不支持 ::first-letter）======
+  result = applyDropCapToOpeningParagraph(result);
 
   // ====== 1. mp-tip 提示卡片 → 蓝色背景卡片 + 💡 图标 ======
   result = result.replace(
     /<div class="mp-tip">([\s\S]*?)<\/div>/gi,
-    (_full, inner: string) => {
-      return (
-        `<section style="margin:22px 0;padding:18px 22px 18px 48px;background-color:${ACCENT_BG};border-radius:10px;border:1px solid rgba(62,123,250,0.15);font-size:15px;color:#2a4a8a;position:relative;">` +
-        `<span style="position:absolute;left:16px;top:18px;font-size:18px;">💡</span>` +
-        inner.trim() +
-        `</section>`
-      );
-    },
+    (_full, inner: string) =>
+      buildCalloutTable("💡", inner, {
+        border: TIP.border,
+        bg: TIP.bg,
+        headerBg: TIP.headerBg,
+        headerBorder: TIP.headerBorder,
+        label: "实用技巧",
+        labelColor: TIP.label,
+        textColor: TIP.text,
+      }),
   );
 
   // ====== 2. mp-warning 警告卡片 → 黄色背景卡片 + ⚠️ 图标 ======
   result = result.replace(
     /<div class="mp-warning">([\s\S]*?)<\/div>/gi,
-    (_full, inner: string) => {
-      return (
-        `<section style="margin:22px 0;padding:18px 22px 18px 48px;background-color:${WARNING_BG};border-radius:10px;border:1px solid rgba(231,169,59,0.2);font-size:15px;color:#6b4a0a;position:relative;">` +
-        `<span style="position:absolute;left:16px;top:18px;font-size:18px;">⚠️</span>` +
-        inner.trim() +
-        `</section>`
-      );
-    },
+    (_full, inner: string) =>
+      buildCalloutTable("⚠️", inner, {
+        border: WARN.border,
+        bg: WARN.bg,
+        headerBg: WARN.headerBg,
+        headerBorder: WARN.headerBorder,
+        label: "注意",
+        labelColor: WARN.label,
+        textColor: WARN.text,
+      }),
+  );
+
+  // ====== 2b. mp-summary 总结卡片 → 浅蓝底 + 左侧蓝条 ======
+  result = result.replace(
+    /<div class="mp-summary">([\s\S]*?)<\/div>/gi,
+    (_full, inner: string) => buildSummaryBox(inner),
   );
 
   // ====== 3. blockquote 引用块 ======
@@ -75,10 +337,7 @@ export function convertToWechatHtml(html: string): string {
     return `<h3${attrs} style="font-size:17px;font-weight:600;line-height:1.55;margin:26px 0 10px;color:#2a2a2a;padding-left:12px;border-left:3px solid #e6dccb;">`;
   });
 
-  // ====== 6. strong 加粗 ======
-  result = result.replace(/<strong>/gi, () => {
-    return `<strong style="color:#1a1a1a;font-weight:700;">`;
-  });
+  // ====== 6. strong 加粗（移至末尾再次统一处理，此处跳过）======
 
   // ====== 7. hr 分隔线 → 带装饰文本的分隔线 ======
   result = result.replace(/<hr\s*\/?>/gi, () => {
@@ -90,43 +349,11 @@ export function convertToWechatHtml(html: string): string {
     );
   });
 
-  // ====== 8. ul 无序列表 → 菱形标记替换 ======
-  // 将每个 <li> 内容前加上 ▸ 符号，并用内联样式模拟菱形
-  result = result.replace(/<ul>/gi, () => {
-    return `<ul style="padding-left:0;margin:14px 0 20px;list-style:none;">`;
-  });
-  result = result.replace(
-    /<ul[^>]*>([\s\S]*?)<\/ul>/gi,
-    (_full, inner: string) => {
-      const fixed = inner.replace(
-        /<li>([\s\S]*?)<\/li>/gi,
-        (_li, liInner: string) => {
-          return `<li style="padding:7px 0 7px 30px;margin-bottom:8px;position:relative;color:#3a3a3a;line-height:1.8;"><span style="position:absolute;left:6px;top:15px;display:inline-block;width:8px;height:8px;background-color:${ACCENT};border-radius:2px;opacity:0.6;"></span>${liInner.trim()}</li>`;
-        },
-      );
-      return `<ul style="padding-left:0;margin:14px 0 20px;list-style:none;">${fixed}</ul>`;
-    },
-  );
+  // ====== 8. ul 无序列表 → 标题+说明卡片 / 普通列表 ======
+  result = transformListBlock(result, false);
 
-  // ====== 9. ol 有序列表 → 蓝底圆形数字标记 ======
-  // 微信不支持 counter-reset，将数字硬编码
-  result = result.replace(/<ol>/gi, () => {
-    return `<ol style="padding-left:0;margin:14px 0 20px;list-style:none;">`;
-  });
-  result = result.replace(
-    /<ol[^>]*>([\s\S]*?)<\/ol>/gi,
-    (_full, inner: string) => {
-      let counter = 0;
-      const fixed = inner.replace(
-        /<li>([\s\S]*?)<\/li>/gi,
-        (_li, liInner: string) => {
-          counter++;
-          return `<li style="padding:8px 0 8px 38px;margin-bottom:8px;position:relative;color:#3a3a3a;line-height:1.8;"><span style="position:absolute;left:0;top:8px;display:inline-block;width:26px;height:26px;line-height:26px;text-align:center;background-color:${ACCENT};color:#fff;border-radius:50%;font-size:13px;font-weight:700;">${counter}</span>${liInner.trim()}</li>`;
-        },
-      );
-      return `<ol style="padding-left:0;margin:14px 0 20px;list-style:none;">${fixed}</ol>`;
-    },
-  );
+  // ====== 9. ol 有序列表 → 标题+说明卡片 / 普通列表 ======
+  result = transformListBlock(result, true);
 
   // ====== 10. img 图片 → 圆角 + 间距 ======
   result = result.replace(
@@ -154,51 +381,24 @@ export function convertToWechatHtml(html: string): string {
     return `<figcaption${attrs} style="font-size:13px;color:#aaaaaa;margin-top:10px;letter-spacing:0.04em;font-style:italic;">`;
   });
 
-  // ====== 12. GitHub 风格代码块 → 转换为微信 table 结构 =====
-  // 用 data-mp-cb 标记精确匹配完整嵌套结构（非贪婪正则无法处理嵌套 section）
-  const cbOpen = /<section data-mp-cb="1" style="[^"]*">/gi;
+  // ====== 12. 代码块 → 从源码重建，保持与预览相同的 section 结构（不转 table）======
+  const cbOpen = /<section\s+data-mp-cb="1"/gi;
   let match: RegExpExecArray | null;
   const replacements: Array<{ original: string; replacement: string }> = [];
 
-  // 手动计数嵌套 depth 来找到完整代码块
-  const openPattern = /<section\b/gi;
-  const closePattern = /<\/section>/gi;
   while ((match = cbOpen.exec(result)) !== null) {
     const startIdx = match.index;
-    // 从外层 section 的 > 之后开始计数
+    const endIdx = findSectionBlockEnd(result, startIdx);
+    if (endIdx === -1) continue;
+
+    const fullBlock = result.slice(startIdx, endIdx);
     const tagEnd = result.indexOf(">", startIdx) + 1;
-    let depth = 1;
-    let pos = tagEnd;
-    while (depth > 0 && pos < result.length) {
-      openPattern.lastIndex = pos;
-      closePattern.lastIndex = pos;
-      const nextOpen = openPattern.exec(result);
-      const nextClose = closePattern.exec(result);
-      if (!nextClose) break;
-      if (nextOpen && nextOpen.index < nextClose.index) {
-        depth++;
-        pos = nextOpen.index + 1;
-      } else {
-        depth--;
-        pos = nextClose.index + 1;
-        if (depth === 0) {
-          const fullBlock = result.slice(startIdx, pos);
-          const inner = result.slice(tagEnd, nextClose.index);
-          // 提取语言栏
-          const langMatch2 = inner.match(/<section[^>]*>([\s\S]*?)<\/section>/i);
-          const lang = (langMatch2 ? langMatch2[1].trim() : "Code").replace(/<[^>]+>/g, "").trim() || "Code";
-          // 提取代码区（第二个 section）
-          const codeMatch2 = inner.match(/<section[^>]*>([\s\S]*?)<\/section>(?![\s\S]*?<\/section>)/i);
-          const codeContent = codeMatch2 ? codeMatch2[1] : inner;
-          const replacement =
-            `<table style="border-collapse:collapse;width:auto;max-width:100%;border-radius:6px;overflow:hidden;margin:16px 0;font-family:SF Mono,Menlo,Consolas,monospace;table-layout:fixed;">` +
-              `<tr><td style="padding:6px 14px;background-color:#eaeef2;color:#57606a;font-size:12px;letter-spacing:0.05em;border-top:1px solid #d0d7de;border-left:1px solid #d0d7de;border-right:1px solid #d0d7de;font-weight:600;">${lang}</td></tr>` +
-              `<tr><td style="padding:0;background-color:#f6f8fa;border:1px solid #d0d7de;border-top:none;vertical-align:top;"><section style="padding:12px 14px;font-size:13px;line-height:1.6;color:#24292f;max-height:420px;overflow:auto;white-space:nowrap;">${codeContent}</section></td></tr>` +
-            `</table>`;
-          replacements.push({ original: fullBlock, replacement });
-        }
-      }
-    }
+    const inner = result.slice(tagEnd, endIdx - "</section>".length);
+    const { code } = parseCodeBlockSections(inner);
+    const plainCode = highlightedCodeToPlainText(code);
+    if (!plainCode.trim()) continue;
+
+    replacements.push({ original: fullBlock, replacement: renderCodeBlockForWechat(plainCode) });
   }
 
   // 按位置倒序替换（避免偏移）
@@ -221,12 +421,11 @@ export function convertToWechatHtml(html: string): string {
     },
   );
 
-  // ====== 14. code 行内代码 → 紫色背景（跳过代码块 table 内的 <code>）======
-  // 使用 placeholder 标记已转成 table 的代码块内的 <code>，不修改它们
+  // ====== 14. code 行内代码 → 紫色背景（跳过代码块 section 内的 <code>）======
   const PROTECTED = "__MP_WECHAT_CODE__";
   result = result.replace(
-    /<table[^>]*overflow:hidden;margin:16px 0;[^>]*>[\s\S]*?<\/table>/gi,
-    (match) => match.replace(/<code/g, `<code data-mp-w="${PROTECTED}"`),
+    /<section data-mp-cb-body="1"[^>]*>[\s\S]*?<\/section>/gi,
+    (block) => block.replace(/<code/g, `<code data-mp-w="${PROTECTED}"`),
   );
   result = result.replace(/<code>/gi, () => {
     return `<code style="padding:2px 4px;font-size:0.88em;color:#7c3aed;font-weight:500;font-family:SF Mono,Menlo,monospace;">`;
@@ -261,6 +460,9 @@ export function convertToWechatHtml(html: string): string {
 
   // ====== 16. 移除空的 class 属性残留 ======
   result = result.replace(/\s+class="[^"]*"/gi, "");
+
+  // ====== 17. strong / b 加粗（最后统一处理，确保微信可见）======
+  result = applyStrongStyles(result);
 
   return result;
 }

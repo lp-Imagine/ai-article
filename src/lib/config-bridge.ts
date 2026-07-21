@@ -13,6 +13,8 @@ const ENV_KEY_MAP: Record<string, string> = {
   wechatAppId: "WECHAT_APP_ID",
   imageApiKey: "IMAGE_API_KEY",
   imageBaseUrl: "IMAGE_BASE_URL",
+  accountPersona: "ACCOUNT_PERSONA",
+  defaultStyle: "DEFAULT_STYLE",
 };
 
 const inMemoryEnv: Record<string, string> = {};

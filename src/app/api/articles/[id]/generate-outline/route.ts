@@ -43,6 +43,7 @@ export async function POST(
     wordCount: article.wordCount,
     audience: article.audience,
     goal: article.goal,
+    keywords: article.keywords,
     outlineCount,
   });
 
