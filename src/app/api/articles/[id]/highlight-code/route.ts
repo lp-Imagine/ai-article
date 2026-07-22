@@ -2,14 +2,17 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { highlightCodeBlocks } from "@/lib/code-highlight";
 import { normalizeCalloutBlocks } from "@/lib/wechat-style";
+import { findOwnedArticle, requireUser } from "@/lib/api-auth";
 
 export async function POST(
   _req: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const { id } = await context.params;
+  const user = await requireUser();
+  if (user instanceof NextResponse) return user;
 
-  const article = await db.article.findUnique({ where: { id } });
+  const { id } = await context.params;
+  const article = await findOwnedArticle(id, user.id);
   if (!article) {
     return NextResponse.json(
       { code: 404, message: "article not found", data: null },

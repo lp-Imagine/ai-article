@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { syncConfigsToEnv } from "@/lib/config-bridge";
+import { requireUser } from "@/lib/api-auth";
+import { withUserConfig } from "@/lib/config-bridge";
 
 export async function GET() {
+  const user = await requireUser();
+  if (user instanceof NextResponse) return user;
+
   const configs = await db.appConfig.findMany({
+    where: { userId: user.id },
     orderBy: { configKey: "asc" },
   });
 
@@ -20,22 +25,27 @@ export async function GET() {
 }
 
 export async function PUT(req: Request) {
+  const user = await requireUser();
+  if (user instanceof NextResponse) return user;
+
   const body = (await req.json()) as Record<string, string>;
 
   for (const [key, value] of Object.entries(body)) {
     if (typeof value !== "string") continue;
     await db.appConfig.upsert({
-      where: { configKey: key },
-      create: { configKey: key, configValue: value },
+      where: {
+        userId_configKey: { userId: user.id, configKey: key },
+      },
+      create: { userId: user.id, configKey: key, configValue: value },
       update: { configValue: value },
     });
   }
 
-  await syncConfigsToEnv();
-
-  return NextResponse.json({
-    code: 0,
-    message: "ok",
-    data: null,
-  });
+  return withUserConfig(user.id, async () =>
+    NextResponse.json({
+      code: 0,
+      message: "ok",
+      data: null,
+    }),
+  );
 }

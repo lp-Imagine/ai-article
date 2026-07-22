@@ -1328,7 +1328,6 @@ export default function ArticlePage({
             {pushResult && pushResult.draftId ? (
               <div className="push-inline border-[rgba(5,150,105,0.25)] bg-[var(--success-soft)]">
                 <span className="text-sm font-semibold text-[var(--success)]">✓ 推送成功</span>
-                <span className="text-xs text-[var(--muted)]">草稿 ID：{pushResult.draftId}</span>
                 <a
                   href="https://mp.weixin.qq.com/cgi-bin/appmsg?t=media/appmsg_edit_v2&action=edit&isNew=1&type=10&lang=zh_CN"
                   target="_blank"
@@ -1394,10 +1393,6 @@ export default function ArticlePage({
             />
           </div>
         </div>
-
-        {article.wechatDraftId ? (
-          <p className="text-xs text-[var(--muted)]">微信草稿 ID：{article.wechatDraftId}</p>
-        ) : null}
         </div>
       </div>
 

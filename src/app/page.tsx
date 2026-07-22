@@ -70,10 +70,10 @@ export default function HomePage() {
 
   async function fetchRecent() {
     try {
-      const res = await fetch("/api/articles", { cache: "no-store" });
-      const json = (await res.json()) as ApiResponse<RecentArticle[]>;
-      if (json.code === 0 && json.data && json.data.length > 0) {
-        setRecent(json.data);
+      const res = await fetch("/api/articles?page=1&limit=5", { cache: "no-store" });
+      const json = (await res.json()) as ApiResponse<{ items: RecentArticle[] }>;
+      if (json.code === 0 && json.data?.items?.length > 0) {
+        setRecent(json.data.items);
       }
     } catch {
       // ignore
@@ -170,7 +170,7 @@ export default function HomePage() {
     <>
       <PageHeader
         eyebrow="Editorial Workspace"
-        title="公众号 AI 发文助手"
+        title="Draftly · 内容工作台"
         description="从一个主题出发，到推送到公众号草稿箱。把选题、大纲、正文、配图、检测、发布收进同一条工作流。"
         className="home-page-header"
       />
@@ -185,6 +185,7 @@ export default function HomePage() {
       </div>
 
       <section className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.65fr)_minmax(280px,1fr)] home-workspace">
+        <div data-tour="home-create">
         <SectionCard
           title="快速开始"
           description="填一个主题，先让 AI 给出 2 到 3 个大纲方案，确定方向后再生成正文。"
@@ -312,6 +313,7 @@ export default function HomePage() {
             </button>
           </form>
         </SectionCard>
+        </div>
 
         <SectionCard
           title="最近文章"

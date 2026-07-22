@@ -5,7 +5,7 @@ import { PointerCaptureGuard } from "@/components/pointer-capture-guard";
 import { ToastProvider } from "@/components/toast";
 
 export const metadata: Metadata = {
-  title: "公众号 AI 发文助手",
+  title: "Draftly · 内容工作台",
   description: "AI 驱动的公众号内容创作工作台",
 };
 

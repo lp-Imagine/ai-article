@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { findOwnedArticle, requireUser } from "@/lib/api-auth";
 
 const SENSITIVE_WORDS = ["最", "第一", "绝对", "100%", "包过", "稳赚", "唯一"];
 
@@ -40,12 +41,11 @@ export async function POST(
   _req: Request,
   context: { params: Promise<{ id: string }> }
 ) {
+  const user = await requireUser();
+  if (user instanceof NextResponse) return user;
+
   const { id } = await context.params;
-
-  const article = await db.article.findUnique({
-    where: { id },
-  });
-
+  const article = await findOwnedArticle(id, user.id);
   if (!article) {
     return NextResponse.json(
       { code: 404, message: "article not found", data: null },

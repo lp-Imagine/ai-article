@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { downloadToBuffer, generateCoverImage } from "@/lib/image-gen";
 import { isReady as isWechatReady, getAccessToken, uploadMedia, buildWechatDigest } from "@/lib/wechat";
 import { convertToWechatHtml, prependWechatDigest } from "@/lib/wechat-style";
+import { findOwnedArticle, requireUser, withAuthUserConfig } from "@/lib/api-auth";
 
 /** 上传图片到微信素材库，返回可用于草稿正文的 url */
 async function uploadInlineImage(
@@ -72,118 +73,118 @@ export async function POST(
   _req: Request,
   context: { params: Promise<{ id: string }> }
 ) {
+  const user = await requireUser();
+  if (user instanceof NextResponse) return user;
   const { id } = await context.params;
 
-  const article = await db.article.findUnique({
-    where: { id },
-    include: { images: true },
-  });
+  return withAuthUserConfig(user, async () => {
+    const article = await findOwnedArticle(id, user.id, { images: true });
+    if (!article) {
+      return NextResponse.json(
+        { code: 404, message: "article not found", data: null },
+        { status: 404 }
+      );
+    }
 
-  if (!article) {
-    return NextResponse.json(
-      { code: 404, message: "article not found", data: null },
-      { status: 404 }
-    );
-  }
+    if (!article.content) {
+      return NextResponse.json(
+        {
+          code: 1002,
+          message: "正文为空，无法推送草稿",
+          data: null,
+        },
+        { status: 400 }
+      );
+    }
 
-  if (!article.content) {
-    return NextResponse.json(
-      {
-        code: 1002,
-        message: "正文为空，无法推送草稿",
-        data: null,
-      },
-      { status: 400 }
-    );
-  }
+    if (!isWechatReady()) {
+      return pushMock(article, id, article.content);
+    }
 
-  if (!isWechatReady()) {
-    return pushMock(article, id, article.content);
-  }
+    try {
+      let coverUrl = article.coverImageUrl ?? "";
+      if (!coverUrl) {
+        const { url } = await generateCoverImage(`editorial cover for ${article.topic}`);
+        coverUrl = url;
+        await db.article.update({
+          where: { id },
+          data: { coverImageUrl: coverUrl },
+        });
+      }
 
-  try {
-    let coverUrl = article.coverImageUrl ?? "";
-    if (!coverUrl) {
-      const { url } = await generateCoverImage(`editorial cover for ${article.topic}`);
-      coverUrl = url;
+      const coverBuffer = await downloadToBuffer(coverUrl);
+      if (!coverBuffer) {
+        throw new Error("封面图下载失败，请检查图片 URL");
+      }
+
+      const token = await getAccessToken();
+      const mediaId = await uploadMedia(
+        token,
+        coverBuffer,
+        `cover-${id}.jpg`,
+        "image",
+      );
+
+      const digest = buildWechatDigest(article.summary, article.content);
+      const wechatContent = prependWechatDigest(convertToWechatHtml(article.content), digest);
+
+      // 上传正文中的图片到微信并替换 URL（章节配图等）
+      const contentWithImages = await replaceInlineImages(wechatContent, token);
+
+      const draftId = await (await import("@/lib/wechat")).createDraft(token, {
+        title: article.title ?? article.topic,
+        content: contentWithImages,
+        digest,
+        thumbMediaId: mediaId,
+      });
+
+      await db.publishRecord.create({
+        data: {
+          articleId: id,
+          channel: "wechat",
+          status: "success",
+          requestPayload: JSON.stringify({ articleId: id }),
+          responsePayload: JSON.stringify({ mediaId, draftId }),
+        },
+      });
+
+      const updated = await db.article.update({
+        where: { id },
+        data: {
+          status: "pushed",
+          wechatDraftId: draftId,
+        },
+      });
+
+      return NextResponse.json({
+        code: 0,
+        message: "ok",
+        data: {
+          wechatDraftId: updated.wechatDraftId,
+          status: updated.status,
+          mediaId,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "推送失败";
+      await db.publishRecord.create({
+        data: {
+          articleId: id,
+          channel: "wechat",
+          status: "failed",
+          errorMessage: message,
+        },
+      });
       await db.article.update({
         where: { id },
-        data: { coverImageUrl: coverUrl },
+        data: { status: "failed" },
       });
+      return NextResponse.json(
+        { code: 1501, message, data: null },
+        { status: 500 }
+      );
     }
-
-    const coverBuffer = await downloadToBuffer(coverUrl);
-    if (!coverBuffer) {
-      throw new Error("封面图下载失败，请检查图片 URL");
-    }
-
-    const token = await getAccessToken();
-    const mediaId = await uploadMedia(
-      token,
-      coverBuffer,
-      `cover-${id}.jpg`,
-      "image",
-    );
-
-    const digest = buildWechatDigest(article.summary, article.content);
-    const wechatContent = prependWechatDigest(convertToWechatHtml(article.content), digest);
-
-    // 上传正文中的图片到微信并替换 URL（章节配图等）
-    const contentWithImages = await replaceInlineImages(wechatContent, token);
-
-    const draftId = await (await import("@/lib/wechat")).createDraft(token, {
-      title: article.title ?? article.topic,
-      content: contentWithImages,
-      digest,
-      thumbMediaId: mediaId,
-    });
-
-    await db.publishRecord.create({
-      data: {
-        articleId: id,
-        channel: "wechat",
-        status: "success",
-        requestPayload: JSON.stringify({ articleId: id }),
-        responsePayload: JSON.stringify({ mediaId, draftId }),
-      },
-    });
-
-    const updated = await db.article.update({
-      where: { id },
-      data: {
-        status: "pushed",
-        wechatDraftId: draftId,
-      },
-    });
-
-    return NextResponse.json({
-      code: 0,
-      message: "ok",
-      data: {
-        wechatDraftId: updated.wechatDraftId,
-        status: updated.status,
-        mediaId,
-      },
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "推送失败";
-    await db.publishRecord.create({
-      data: {
-        articleId: id,
-        channel: "wechat",
-        status: "failed",
-        errorMessage: message,
-      },
-    });
-    await db.article.update({
-      where: { id },
-      data: { status: "failed" },
-    });
-    return NextResponse.json(
-      { code: 1501, message, data: null },
-      { status: 500 }
-    );
-  }
+  });
 }
 
 async function pushMock(

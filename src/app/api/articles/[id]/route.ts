@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
+import { findOwnedArticle, notFound, requireUser } from "@/lib/api-auth";
 
 const updateArticleSchema = z.object({
   title: z.string().optional().nullable(),
@@ -16,31 +17,21 @@ export async function GET(
   _request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const { id } = await context.params;
+  const user = await requireUser();
+  if (user instanceof NextResponse) return user;
 
-  const article = await db.article.findUnique({
-    where: { id },
-    include: {
-      images: true,
-      publishRecords: {
-        orderBy: {
-          createdAt: "desc",
-        },
-      },
-      riskChecks: {
-        orderBy: {
-          createdAt: "desc",
-        },
-      },
+  const { id } = await context.params;
+  const article = await findOwnedArticle(id, user.id, {
+    images: true,
+    publishRecords: {
+      orderBy: { createdAt: "desc" },
+    },
+    riskChecks: {
+      orderBy: { createdAt: "desc" },
     },
   });
 
-  if (!article) {
-    return NextResponse.json(
-      { code: 404, message: "文章不存在", data: null },
-      { status: 404 },
-    );
-  }
+  if (!article) return notFound("文章不存在");
 
   return NextResponse.json({
     code: 0,
@@ -53,8 +44,14 @@ export async function PUT(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
+  const user = await requireUser();
+  if (user instanceof NextResponse) return user;
+
   try {
     const { id } = await context.params;
+    const existing = await findOwnedArticle(id, user.id);
+    if (!existing) return notFound("文章不存在");
+
     const json = await request.json();
     const input = updateArticleSchema.parse(json);
 
@@ -90,15 +87,12 @@ export async function DELETE(
   _request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const { id } = await context.params;
+  const user = await requireUser();
+  if (user instanceof NextResponse) return user;
 
-  const existing = await db.article.findUnique({ where: { id } });
-  if (!existing) {
-    return NextResponse.json(
-      { code: 404, message: "文章不存在", data: null },
-      { status: 404 },
-    );
-  }
+  const { id } = await context.params;
+  const existing = await findOwnedArticle(id, user.id);
+  if (!existing) return notFound("文章不存在");
 
   await db.article.delete({ where: { id } });
 
