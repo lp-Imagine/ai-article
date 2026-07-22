@@ -177,22 +177,32 @@ docker run --rm -p 3000:3000 \
 
 ### 服务器一键更新（宝塔）
 
-代码 push 到 GitHub 后，在服务器执行：
+#### 拉取顺序
+
+1. `git pull`（当前 `origin`，一般仍指向 GitHub）
+2. GitHub zip → GitHub 代理镜像
+3. **Gitee zip 兜底**（需事先把仓库同步到 Gitee）
+
+#### Gitee 兜底（可选，推荐国内机）
+
+仓库已同步：https://gitee.com/lp-imagine/ai-article.git  
+（注意：GitHub 用户名是 `lp-Imagine`，Gitee 是 `lp-imagine`，大小写不同。）
+
+每次本机 push GitHub 后，在 Gitee 点 **「从 GitHub 刷新」**，再跑服务器部署。服务器 **不必** 改 `origin`；GitHub 通就走 GitHub，不通再自动试 Gitee。
+
+#### 日常更新
 
 ```bash
 cd /www/ai-article && bash docker/deploy.sh
 ```
 
-脚本会：拉代码（`git pull` 失败则自动改用 zip）→ 重建镜像 → 重启容器。数据目录默认 `/www/data/ai-article`，不会丢。
+数据目录默认 `/www/data/ai-article`，不会丢。
 
-首次若还没有脚本，可先：
+**临时救急**（跳过拉代码，只用本地目录重建）：
 
 ```bash
-curl -fsSL -o /www/ai-article/docker/deploy.sh \
-  https://raw.githubusercontent.com/lp-Imagine/ai-article/master/docker/deploy.sh
-chmod +x /www/ai-article/docker/deploy.sh
+cd /www/ai-article && SKIP_PULL=1 bash docker/deploy.sh
 ```
-
 ### 安全提示
 
 - 已内置账号登录 / 注册；文章与设置按用户隔离。默认超管：`admin` / `admin123`（可用环境变量 `SUPER_ADMIN_USERNAME` / `SUPER_ADMIN_PASSWORD` 覆盖）。
