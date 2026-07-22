@@ -1,10 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { ArrowRight, FileText } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { FileText, Trash2 } from "lucide-react";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { PageHeader, SectionCard } from "@/components/app-shell";
-import { getArticleBackgroundTask } from "@/lib/article-task-tracker";
+import { useToast } from "@/components/toast";
+import {
+  cancelArticleBackgroundTask,
+  getArticleBackgroundTask,
+} from "@/lib/article-task-tracker";
 import { useArticleBackgroundTasks } from "@/hooks/use-article-background-tasks";
 
 type Article = {
@@ -38,28 +43,71 @@ const statusLabel: Record<string, string> = {
 };
 
 export default function HistoryPage() {
+  const toast = useToast();
   const [articles, setArticles] = useState<Article[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Article | null>(null);
   const { runningTaskIds } = useArticleBackgroundTasks();
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch("/api/articles", { cache: "no-store" });
-        const json = await res.json();
-        if (json.code === 0 && Array.isArray(json.data)) {
-          setArticles(json.data);
-        }
-      } catch {
-        // ignore
-      } finally {
-        setLoading(false);
+  const loadArticles = useCallback(async () => {
+    try {
+      const res = await fetch("/api/articles", { cache: "no-store" });
+      const json = await res.json();
+      if (json.code === 0 && Array.isArray(json.data)) {
+        setArticles(json.data);
       }
-    })();
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadArticles();
+  }, [loadArticles]);
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+
+    const { id } = pendingDelete;
+    setDeletingId(id);
+    setPendingDelete(null);
+
+    cancelArticleBackgroundTask(id);
+
+    try {
+      const res = await fetch(`/api/articles/${id}`, { method: "DELETE" });
+      const json = await res.json();
+      if (json.code !== 0) {
+        throw new Error(json.message || "删除失败");
+      }
+      setArticles((prev) => prev.filter((item) => item.id !== id));
+      toast.show({ message: "文章已删除", variant: "success" });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "删除失败";
+      toast.show({ message, variant: "error" });
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   return (
     <>
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="删除这篇文章？"
+        description={
+          pendingDelete
+            ? `「${pendingDelete.title ?? pendingDelete.topic}」删除后无法恢复。`
+            : undefined
+        }
+        confirmLabel="删除"
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => setPendingDelete(null)}
+      />
+
       <PageHeader
         eyebrow="Archive"
         title="历史记录"
@@ -93,38 +141,46 @@ export default function HistoryPage() {
               });
               const backgroundTask = getArticleBackgroundTask(article.id);
               const isRunning = runningTaskIds.has(article.id);
+              const isDeleting = deletingId === article.id;
+              const metaParts = [
+                article.style,
+                article.wordCount ? `${article.wordCount} 字` : null,
+              ].filter(Boolean);
 
               return (
-                <Link key={article.id} href={`/articles/${article.id}`} className="history-row">
-                  <div className="history-row-body">
-                    <h2 className="history-row-title">{displayTitle}</h2>
-                    {(showTopic || article.style || article.wordCount) ? (
-                      <div className="history-row-tags">
-                        {showTopic ? <span className="history-row-tag">{article.topic}</span> : null}
-                        {article.style ? <span className="history-row-tag">{article.style}</span> : null}
-                        {article.wordCount ? <span className="history-row-tag">{article.wordCount} 字</span> : null}
-                      </div>
-                    ) : null}
-                    <div className="history-row-footer">
-                      <div className="history-row-footer-badges">
-                        {isRunning ? (
-                          <span className="badge badge-accent">{backgroundTask?.label ?? "生成中"}…</span>
-                        ) : null}
-                        <span className={`badge ${statusBadge[article.status] ?? "badge-muted"}`}>
-                          {statusLabel[article.status] ?? article.status}
-                        </span>
-                      </div>
-                      <div className="history-row-footer-end">
-                        <time className="history-row-time" dateTime={article.updatedAt}>
-                          {updatedLabel}
-                        </time>
-                        <span className="history-row-chevron" aria-hidden>
-                          <ArrowRight size={15} />
-                        </span>
-                      </div>
+                <div key={article.id} className="history-row">
+                  <Link href={`/articles/${article.id}`} className="history-row-main">
+                    <div className="history-row-top">
+                      <h2 className="history-row-title">{displayTitle}</h2>
+                      <span className={`badge ${statusBadge[article.status] ?? "badge-muted"}`}>
+                        {statusLabel[article.status] ?? article.status}
+                      </span>
                     </div>
-                  </div>
-                </Link>
+                    {showTopic ? <p className="history-row-topic">{article.topic}</p> : null}
+                    <div className="history-row-meta">
+                      {isRunning ? (
+                        <span className="history-row-running">
+                          {backgroundTask?.label ?? "生成中"}…
+                        </span>
+                      ) : null}
+                      {metaParts.length > 0 ? (
+                        <span className="history-row-meta-text">{metaParts.join(" · ")}</span>
+                      ) : null}
+                      <time className="history-row-time" dateTime={article.updatedAt}>
+                        {updatedLabel}
+                      </time>
+                    </div>
+                  </Link>
+                  <button
+                    type="button"
+                    className="history-row-delete"
+                    aria-label={`删除「${displayTitle}」`}
+                    disabled={isDeleting}
+                    onClick={() => setPendingDelete(article)}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
               );
             })}
           </div>

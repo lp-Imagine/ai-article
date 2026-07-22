@@ -9,10 +9,12 @@ import { useToast } from "@/components/toast";
 import {
   clearArticleBackgroundTask,
   getArticleBackgroundTask,
+  reconcileBackgroundTaskAfterRequestFailure,
   registerArticleTaskAbortController,
   startArticleBackgroundTask,
   unregisterArticleTaskAbortController,
 } from "@/lib/article-task-tracker";
+import { readApiResponse } from "@/lib/api-client";
 import { useArticleBackgroundTasks } from "@/hooks/use-article-background-tasks";
 
 type RecentArticle = {
@@ -123,7 +125,7 @@ export default function HomePage() {
         signal: ctrl.signal,
       })
         .then(async (res) => {
-          const outlineJson = await res.json();
+          const outlineJson = await readApiResponse<unknown>(res);
           if (outlineJson.code !== 0) {
             throw new Error(outlineJson.message || "生成大纲失败");
           }
@@ -132,10 +134,26 @@ export default function HomePage() {
           clearArticleBackgroundTask(articleId);
           unregisterArticleTaskAbortController(articleId, ctrl);
         })
-        .catch((err) => {
+        .catch(async (err) => {
           unregisterArticleTaskAbortController(articleId, ctrl);
+          if (err instanceof Error && err.name === "AbortError") {
+            clearArticleBackgroundTask(articleId);
+            return;
+          }
+
+          const task = getArticleBackgroundTask(articleId);
+          if (task) {
+            const outcome = await reconcileBackgroundTaskAfterRequestFailure(task);
+            if (outcome === "completed") {
+              clearArticleBackgroundTask(articleId);
+              return;
+            }
+            if (outcome === "pending") {
+              return;
+            }
+          }
+
           clearArticleBackgroundTask(articleId);
-          if (err instanceof Error && err.name === "AbortError") return;
           const message = err instanceof Error ? err.message : "生成大纲失败";
           toast.show({ title: "生成大纲失败", message, variant: "error", duration: 6000 });
         });
@@ -154,9 +172,10 @@ export default function HomePage() {
         eyebrow="Editorial Workspace"
         title="公众号 AI 发文助手"
         description="从一个主题出发，到推送到公众号草稿箱。把选题、大纲、正文、配图、检测、发布收进同一条工作流。"
+        className="home-page-header"
       />
 
-      <div className="workflow-steps mb-8">
+      <div className="workflow-steps home-workflow-steps mb-8">
         {workflowSteps.map((item) => (
           <div key={item.step} className="workflow-step">
             <p className="workflow-step-num">{item.step}</p>
@@ -165,12 +184,13 @@ export default function HomePage() {
         ))}
       </div>
 
-      <section className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.65fr)_minmax(280px,1fr)]">
+      <section className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.65fr)_minmax(280px,1fr)] home-workspace">
         <SectionCard
           title="快速开始"
           description="填一个主题，先让 AI 给出 2 到 3 个大纲方案，确定方向后再生成正文。"
+          className="home-create-card"
         >
-          <form className="space-y-6" onSubmit={handleSubmit}>
+          <form className="home-create-form space-y-6" onSubmit={handleSubmit}>
             <div>
               <FieldLabel>主题 / 标题</FieldLabel>
               <input
@@ -193,7 +213,7 @@ export default function HomePage() {
               />
             </div>
 
-            <div className="field-grid field-grid-2">
+            <div className="field-grid field-grid-2 home-create-primary-grid">
               <div>
                 <FieldLabel>文章风格</FieldLabel>
                 <select
@@ -222,6 +242,18 @@ export default function HomePage() {
                   <option value={5000}>5,000</option>
                 </select>
               </div>
+            </div>
+
+            <input
+              type="checkbox"
+              id="home-create-more-toggle"
+              className="home-create-more-toggle"
+            />
+            <label htmlFor="home-create-more-toggle" className="home-create-more-summary">
+              更多选项
+              <span className="home-create-more-hint">读者 / 目标 / 大纲数</span>
+            </label>
+            <div className="field-grid field-grid-2 home-create-more-grid">
               <div>
                 <FieldLabel>目标读者</FieldLabel>
                 <input
@@ -264,7 +296,7 @@ export default function HomePage() {
             <button
               type="submit"
               disabled={loading || !form.topic.trim()}
-              className="w-full btn-primary py-3.5 text-sm"
+              className="home-create-submit w-full btn-primary py-3.5 text-sm"
             >
               {loading ? (
                 <span className="inline-flex items-center justify-center gap-2">

@@ -71,6 +71,7 @@ export async function POST(
       title: generated.title,
       summary: generated.summary,
       keyPoints: keyPoints.length > 0 ? keyPoints : undefined,
+      contentExcerpt: generated.content,
     });
     const cover = await generateCoverImage(coverPrompt);
     coverImageUrl = cover.url;

@@ -37,37 +37,49 @@ export async function POST(
     // 用数据库中的值
   }
 
-  const outlines = await generateOutline({
-    topic: article.topic,
-    style: article.style,
-    wordCount: article.wordCount,
-    audience: article.audience,
-    goal: article.goal,
-    keywords: article.keywords,
-    outlineCount,
-  });
-
-  await db.article.update({
-    where: { id },
-    data: {
-      outline: outlines,
+  try {
+    const outlines = await generateOutline({
+      topic: article.topic,
+      style: article.style,
+      wordCount: article.wordCount,
+      audience: article.audience,
+      goal: article.goal,
+      keywords: article.keywords,
       outlineCount,
-      status: "outlined",
-    },
-  });
+    });
 
-  await db.articleVersion.create({
-    data: {
-      articleId: id,
-      versionType: "outline",
-      source: "ai",
-      outline: outlines,
-    },
-  });
+    await db.article.update({
+      where: { id },
+      data: {
+        outline: outlines,
+        outlineCount,
+        status: "outlined",
+      },
+    });
 
-  return NextResponse.json({
-    code: 0,
-    message: "ok",
-    data: { outlines, count: outlines.length },
-  });
+    await db.articleVersion.create({
+      data: {
+        articleId: id,
+        versionType: "outline",
+        source: "ai",
+        outline: outlines,
+      },
+    });
+
+    return NextResponse.json({
+      code: 0,
+      message: "ok",
+      data: { outlines, count: outlines.length },
+    });
+  } catch (error) {
+    console.error("[generate-outline] failed:", error);
+    return NextResponse.json(
+      {
+        code: 1501,
+        message: error instanceof Error ? error.message : "生成大纲失败",
+        data: null,
+      },
+      { status: 500 },
+    );
+  }
 }

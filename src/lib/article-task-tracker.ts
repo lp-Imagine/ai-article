@@ -23,7 +23,8 @@ export function isOutlineBackgroundTaskLabel(label: string) {
 export const ARTICLE_BACKGROUND_TASKS_CHANGED = "mp-article-background-tasks-change";
 
 const STORAGE_KEY = "mp-article-background-tasks";
-const TASK_TTL_MS = 15 * 60 * 1000;
+/** 后台任务最长跟踪时间（配图/长文可能持续数分钟） */
+const TASK_TTL_MS = 30 * 60 * 1000;
 
 const taskAbortControllers = new Map<string, AbortController>();
 
@@ -119,11 +120,22 @@ function plainTextLengthFromHtml(html: string) {
 }
 
 function getInlineImageProgressFromContent(html: string) {
-  let maxProgress = 0;
-  for (const match of html.matchAll(/<figure\b[^>]*\sdata-progress="(\d+)\/\d+"/gi)) {
-    maxProgress = Math.max(maxProgress, Number(match[1]) || 0);
+  let maxCurrent = 0;
+  let maxTotal = 0;
+  for (const match of html.matchAll(/<figure\b[^>]*\sdata-progress="(\d+)\/(\d+)"/gi)) {
+    const current = Number(match[1]) || 0;
+    const total = Number(match[2]) || 0;
+    if (total >= maxTotal) {
+      maxTotal = total;
+      maxCurrent = current;
+    }
   }
-  return maxProgress;
+  return { current: maxCurrent, total: maxTotal };
+}
+
+function isInlineImageGenerationComplete(html: string) {
+  const { current, total } = getInlineImageProgressFromContent(html);
+  return total > 0 && current >= total;
 }
 
 export function isArticleBackgroundTaskComplete(
@@ -140,16 +152,108 @@ export function isArticleBackgroundTaskComplete(
     return false;
   }
 
+  if (task.label === "生成章节配图") {
+    return isInlineImageGenerationComplete(article.content ?? "");
+  }
+
   const contentLen = plainTextLengthFromHtml(article.content ?? "");
   if (article.status !== task.statusAtStart) return true;
   if (contentLen > task.contentLengthAtStart + 40) return true;
-  if (task.label === "生成章节配图") {
-    return getInlineImageProgressFromContent(article.content ?? "") > 0;
-  }
   return false;
 }
 
 type ApiResponse<T> = { code: number; data?: T };
+
+const BACKGROUND_TASK_RECOVERY_POLL_MS = 2000;
+/** 请求中断后先做一轮快速确认，避免在 catch 里阻塞数分钟 */
+const BACKGROUND_TASK_RECOVERY_BURST_MS = 60_000;
+
+export function getBackgroundTaskRecoveryMaxMs(task: ArticleBackgroundTask, now = Date.now()) {
+  return Math.max(0, TASK_TTL_MS - (now - task.startedAt));
+}
+
+function sleep(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** 请求因网关超时等中断后，轮询确认后台任务是否已在服务端完成 */
+export async function waitForArticleBackgroundTaskCompletion(
+  task: ArticleBackgroundTask,
+  options?: {
+    signal?: AbortSignal;
+    maxWaitMs?: number;
+    pollIntervalMs?: number;
+  },
+): Promise<ArticleTaskSnapshot | null> {
+  const maxWaitMs = options?.maxWaitMs ?? getBackgroundTaskRecoveryMaxMs(task);
+  const pollIntervalMs = options?.pollIntervalMs ?? BACKGROUND_TASK_RECOVERY_POLL_MS;
+  if (maxWaitMs <= 0) return null;
+
+  const deadline = Date.now() + maxWaitMs;
+
+  while (Date.now() < deadline) {
+    if (options?.signal?.aborted) return null;
+
+    try {
+      const res = await fetch(`/api/articles/${task.articleId}?t=${Date.now()}`, {
+        cache: "no-store",
+        signal: options?.signal,
+      });
+      const json = (await res.json()) as ApiResponse<ArticleTaskSnapshot>;
+      if (json.code === 0 && json.data && isArticleBackgroundTaskComplete(task, json.data)) {
+        return json.data;
+      }
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") return null;
+    }
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await sleep(Math.min(pollIntervalMs, remaining), options?.signal);
+  }
+
+  return null;
+}
+
+export type BackgroundTaskReconcileOutcome = "completed" | "pending" | "failed";
+
+/**
+ * 请求因网关超时等中断后，轮询确认任务是否已在服务端完成。
+ * 若轮询窗口内未完成但任务尚未过期，返回 pending，交由浮标/文章页继续跟踪。
+ */
+export async function reconcileBackgroundTaskAfterRequestFailure(
+  task: ArticleBackgroundTask,
+  options?: { signal?: AbortSignal; maxWaitMs?: number },
+): Promise<BackgroundTaskReconcileOutcome> {
+  const remainingTtl = getBackgroundTaskRecoveryMaxMs(task);
+  if (remainingTtl <= 0) return "failed";
+
+  const burstWaitMs = Math.min(
+    options?.maxWaitMs ?? BACKGROUND_TASK_RECOVERY_BURST_MS,
+    remainingTtl,
+  );
+  const completed = await waitForArticleBackgroundTaskCompletion(task, {
+    signal: options?.signal,
+    maxWaitMs: burstWaitMs,
+  });
+  if (completed) return "completed";
+
+  return isArticleBackgroundTaskExpired(task) ? "failed" : "pending";
+}
 
 export async function pollArticleBackgroundTasks(options?: {
   onComplete?: (task: ArticleBackgroundTask) => void;

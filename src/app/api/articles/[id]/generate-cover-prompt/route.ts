@@ -31,6 +31,7 @@ export async function POST(
     title: article.title,
     summary: article.summary,
     keyPoints: keyPoints.length > 0 ? keyPoints : undefined,
+    contentExcerpt: article.content,
   });
 
   return NextResponse.json({

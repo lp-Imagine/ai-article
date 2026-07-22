@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, Loader2, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 export type ProgressStep = {
   label: string;
@@ -15,6 +15,11 @@ function formatElapsed(seconds: number) {
   return secs > 0 ? `${mins} 分 ${secs} 秒` : `${mins} 分钟`;
 }
 
+function elapsedSecondsFrom(startedAt?: number | null) {
+  if (!startedAt) return 0;
+  return Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+}
+
 export function ProgressDialog({
   open,
   title,
@@ -22,6 +27,7 @@ export function ProgressDialog({
   generatedCount = 0,
   totalCount = 1,
   error,
+  startedAt,
   onCancel,
 }: {
   open: boolean;
@@ -30,22 +36,23 @@ export function ProgressDialog({
   generatedCount?: number;
   totalCount?: number;
   error?: string | null;
+  /** 任务真实开始时间（ms），离开页面再返回时用于续计时 */
+  startedAt?: number | null;
   onCancel?: () => void;
 }) {
-  const [elapsed, setElapsed] = useState(0);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const [elapsed, setElapsed] = useState(() => elapsedSecondsFrom(startedAt));
 
   useEffect(() => {
-    if (open) {
-      setElapsed(0);
-      intervalRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
-    } else if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-    }
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [open]);
+    if (!open) return;
+
+    const anchor = startedAt ?? Date.now();
+    setElapsed(elapsedSecondsFrom(anchor));
+    const timer = setInterval(() => {
+      setElapsed(elapsedSecondsFrom(anchor));
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [open, startedAt]);
 
   if (!open) return null;
 

@@ -110,14 +110,16 @@ export function PageHeader({
   title,
   description,
   actions,
+  className,
 }: {
   eyebrow?: string;
   title: string;
   description?: string;
   actions?: ReactNode;
+  className?: string;
 }) {
   return (
-    <header className="page-header">
+    <header className={clsx("page-header", className)}>
       <div className="page-header-main">
         {eyebrow ? <p className="page-eyebrow">{eyebrow}</p> : null}
         <h1 className="page-title">{title}</h1>

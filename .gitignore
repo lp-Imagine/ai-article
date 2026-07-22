@@ -43,3 +43,8 @@ next-env.d.ts
 
 # prisma
 prisma/dev.db
+
+# local IDE / agent docs
+.trae/
+AGENTS.md
+CLAUDE.md

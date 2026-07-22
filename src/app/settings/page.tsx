@@ -41,6 +41,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testingImage, setTestingImage] = useState(false);
+  const [testingAuxiliary, setTestingAuxiliary] = useState(false);
   const [testingWechat, setTestingWechat] = useState(false);
   const [activeSection, setActiveSection] = useState<SettingsSection>("ai");
 
@@ -144,6 +145,37 @@ export default function SettingsPage() {
     }
   }
 
+  const auxiliaryConfigured = useMemo(
+    () => Boolean(getValue("auxiliaryTextModelName")),
+    [configs],
+  );
+
+  async function handleTestAuxiliaryModel() {
+    setTestingAuxiliary(true);
+    try {
+      const res = await fetch("/api/configs/ping-auxiliary");
+      const json = await res.json() as ApiResponse<{
+        configured: boolean;
+        baseUrl?: string;
+        model?: string;
+        error?: string;
+        note?: string;
+      }>;
+      if (json.code === 0 && json.data?.configured && !json.data?.error) {
+        toast.show({
+          message: `辅助模型验证通过 ✓ (${json.data.model ?? "ok"})`,
+          variant: "success",
+        });
+      } else {
+        toast.show({ message: json.data?.error || json.message || "辅助模型验证失败", variant: "error" });
+      }
+    } catch {
+      toast.show({ message: "验证请求失败", variant: "error" });
+    } finally {
+      setTestingAuxiliary(false);
+    }
+  }
+
   async function handleTestWechat() {
     setTestingWechat(true);
     try {
@@ -161,11 +193,30 @@ export default function SettingsPage() {
     }
   }
 
-  const textFields = [
+  const primaryTextFields = [
     { key: "aiApiKey", label: "AI API Key", placeholder: "sk-...", type: "password" },
-    { key: "aiBaseUrl", label: "AI Base URL", placeholder: "https://api.openai.com/v1" },
-    { key: "textModelName", label: "文本模型名称", placeholder: "gpt-4o-mini" },
+    { key: "aiBaseUrl", label: "AI Base URL", placeholder: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
+    { key: "textModelName", label: "文本模型（主）", placeholder: "qwen-plus / deepseek-v4-pro / gpt-4o" },
     { key: "textMaxContentTokens", label: "文本最大 Token 数", placeholder: "4096" },
+  ];
+
+  const auxiliaryTextFields = [
+    {
+      key: "auxiliaryAiApiKey",
+      label: "辅助 API Key（可选）",
+      placeholder: "留空则使用主 AI API Key",
+      type: "password",
+    },
+    {
+      key: "auxiliaryAiBaseUrl",
+      label: "辅助 Base URL（可选）",
+      placeholder: "https://api.deepseek.com/v1",
+    },
+    {
+      key: "auxiliaryTextModelName",
+      label: "文本模型（辅助）",
+      placeholder: "deepseek-v4-flash / qwen-turbo / gpt-4o-mini",
+    },
   ];
 
   const imageFields = [
@@ -215,21 +266,67 @@ export default function SettingsPage() {
           {activeSection === "ai" && (
             <SectionCard
               title="AI 模型配置"
-              description="文本生成与图片生成所需的 API 连接信息。"
+              description="主模型负责大纲与正文；辅助模型用于配图 prompt、标题、摘要。辅助 API 可独立配置不同厂商，留空则回退到主模型配置。"
             >
               <div className="space-y-5">
                 <div className="config-group">
                   <div className="config-group-title">
                     <h3 className="inline-flex items-center gap-2">
                       <Sparkles size={15} />
-                      文本模型
+                      文本模型（主）
                     </h3>
-                    <span className={clsx("config-status", textConfigured ? "config-status-ok" : "config-status-empty")}>
-                      {textConfigured ? "已填写" : "待配置"}
-                    </span>
+                    <div className="config-group-actions">
+                      <span className={clsx("config-status", textConfigured ? "config-status-ok" : "config-status-empty")}>
+                        {textConfigured ? "已填写" : "待配置"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleTestModel}
+                        disabled={testing}
+                        className="config-verify-btn"
+                      >
+                        {testing ? "验证中" : "验证"}
+                      </button>
+                    </div>
                   </div>
                   <div className="config-fields config-fields-2">
-                    {textFields.map((f) => (
+                    {primaryTextFields.map((f) => (
+                      <div key={f.key}>
+                        <FieldLabel>{f.label}</FieldLabel>
+                        <input
+                          type={f.type ?? "text"}
+                          value={getValue(f.key)}
+                          onChange={(e) => setValue(f.key, e.target.value)}
+                          placeholder={f.placeholder}
+                          className="mt-2 w-full px-4 py-2.5 text-sm"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="config-group">
+                  <div className="config-group-title">
+                    <h3 className="inline-flex items-center gap-2">
+                      <Sparkles size={15} />
+                      文本模型（辅助）
+                    </h3>
+                    <div className="config-group-actions">
+                      <span className={clsx("config-status", auxiliaryConfigured ? "config-status-ok" : "config-status-empty")}>
+                        {auxiliaryConfigured ? "已填写" : "可选"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleTestAuxiliaryModel}
+                        disabled={testingAuxiliary}
+                        className="config-verify-btn"
+                      >
+                        {testingAuxiliary ? "验证中" : "验证"}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="config-fields config-fields-2">
+                    {auxiliaryTextFields.map((f) => (
                       <div key={f.key}>
                         <FieldLabel>{f.label}</FieldLabel>
                         <input
@@ -250,9 +347,19 @@ export default function SettingsPage() {
                       <ImageIcon size={15} />
                       图片模型
                     </h3>
-                    <span className={clsx("config-status", imageConfigured ? "config-status-ok" : "config-status-empty")}>
-                      {imageConfigured ? "已填写" : "待配置"}
-                    </span>
+                    <div className="config-group-actions">
+                      <span className={clsx("config-status", imageConfigured ? "config-status-ok" : "config-status-empty")}>
+                        {imageConfigured ? "已填写" : "待配置"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleTestImageModel}
+                        disabled={testingImage}
+                        className="config-verify-btn"
+                      >
+                        {testingImage ? "验证中" : "验证"}
+                      </button>
+                    </div>
                   </div>
                   <div className="config-fields">
                     {imageFields.map((f) => (
@@ -334,7 +441,7 @@ export default function SettingsPage() {
                 </p>
               </div>
 
-              <div className="mt-5 flex justify-end">
+              <div className="mt-5 flex justify-end border-t border-[var(--line)] pt-5">
                 <button onClick={handleTestWechat} disabled={testingWechat} className="btn-secondary text-sm">
                   {testingWechat ? "验证中..." : "验证微信连通"}
                 </button>
@@ -344,30 +451,22 @@ export default function SettingsPage() {
 
           <div className="settings-footer">
             <p className="settings-footer-hint">
-              修改配置后记得保存。可先验证模型连通性，再开始创作。
+              {activeSection === "ai"
+                ? "修改后记得保存；各模型可在上方区块内单独验证连通性。"
+                : activeSection === "wechat"
+                  ? "修改配置后记得保存。微信凭证可在上方卡片内验证连通性。"
+                  : "修改配置后记得保存。"}
             </p>
-            <div className="settings-footer-actions">
-              {activeSection === "ai" && (
-                <>
-                  <button onClick={handleTestModel} disabled={testing} className="btn-secondary text-sm">
-                    {testing ? "验证中..." : "验证文本模型"}
-                  </button>
-                  <button onClick={handleTestImageModel} disabled={testingImage} className="btn-secondary text-sm">
-                    {testingImage ? "验证中..." : "验证图片模型"}
-                  </button>
-                </>
+            <button onClick={handleSave} disabled={saving} className="btn-primary text-sm settings-footer-save">
+              {saving ? (
+                "保存中..."
+              ) : (
+                <span className="inline-flex items-center gap-1.5">
+                  <Save size={14} />
+                  保存配置
+                </span>
               )}
-              <button onClick={handleSave} disabled={saving} className="btn-primary text-sm">
-                {saving ? (
-                  "保存中..."
-                ) : (
-                  <span className="inline-flex items-center gap-1.5">
-                    <Save size={14} />
-                    保存配置
-                  </span>
-                )}
-              </button>
-            </div>
+            </button>
           </div>
         </div>
       </div>

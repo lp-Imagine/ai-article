@@ -5,6 +5,8 @@ import { normalizeCalloutBlocks } from "@/lib/wechat-style";
 
 type TextRole = "outline" | "content" | "summary" | "titles" | "cover-prompt" | "polish" | "expand" | "section-image";
 
+const PRIMARY_TEXT_ROLES = new Set<TextRole>(["outline", "content", "polish", "expand"]);
+
 type ChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
@@ -19,24 +21,57 @@ function isAiConfigured() {
   return Boolean(getEnvValue("AI_API_KEY") || process.env.AI_API_KEY);
 }
 
-/** 运行时读取 LLM 配置（非模块常量，确保每次都读最新值） */
-function getLLMConfig() {
+function resolveModelForRole(role: TextRole): string {
+  const primaryModel = readConfig("TEXT_MODEL_NAME", "gpt-4o-mini");
+  if (PRIMARY_TEXT_ROLES.has(role)) return primaryModel;
+
+  const auxiliaryModel = readConfig("AUXILIARY_TEXT_MODEL_NAME", "");
+  return auxiliaryModel || primaryModel;
+}
+
+/** 按任务类型解析模型名、Base URL、API Key（辅助任务可独立配置厂商） */
+export function getLLMCredentialsForRole(role: TextRole = "content") {
+  const primaryBaseUrl = readConfig("AI_BASE_URL", "https://api.openai.com/v1");
+  const primaryApiKey = readConfig("AI_API_KEY", "");
+  const primaryModel = readConfig("TEXT_MODEL_NAME", "gpt-4o-mini");
+
+  if (PRIMARY_TEXT_ROLES.has(role)) {
+    return {
+      model: primaryModel,
+      baseUrl: primaryBaseUrl,
+      apiKey: primaryApiKey,
+    };
+  }
+
+  const auxiliaryModel = readConfig("AUXILIARY_TEXT_MODEL_NAME", "");
+  const auxiliaryBaseUrl = readConfig("AUXILIARY_AI_BASE_URL", "");
+  const auxiliaryApiKey = readConfig("AUXILIARY_AI_API_KEY", "");
+
   return {
-    model: readConfig("TEXT_MODEL_NAME", "gpt-4o-mini"),
-    baseUrl: readConfig("AI_BASE_URL", "https://api.openai.com/v1"),
+    model: auxiliaryModel || primaryModel,
+    baseUrl: auxiliaryBaseUrl || primaryBaseUrl,
+    apiKey: auxiliaryApiKey || primaryApiKey,
   };
 }
 
-async function callChat(messages: ChatMessage[], opts?: { jsonMode?: boolean; maxTokens?: number }) {
+/** 运行时读取 LLM 配置（非模块常量，确保每次都读最新值） */
+function getLLMConfig(role: TextRole = "content") {
+  const { model, baseUrl, apiKey } = getLLMCredentialsForRole(role);
+  return { model, baseUrl, apiKey };
+}
+
+async function callChat(
+  messages: ChatMessage[],
+  opts?: { jsonMode?: boolean; maxTokens?: number; role?: TextRole },
+) {
   const jsonMode = opts?.jsonMode ?? true;
   const maxTokens = opts?.maxTokens ?? 2048;
+  const role = opts?.role ?? "content";
 
-  const apiKey = getEnvValue("AI_API_KEY") ?? process.env.AI_API_KEY;
+  const { model, baseUrl, apiKey } = getLLMConfig(role);
   if (!apiKey) {
     return null;
   }
-
-  const { model, baseUrl } = getLLMConfig();
 
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
@@ -399,7 +434,7 @@ JSON 数组，每个元素包含：
     },
   ];
 
-  const raw = await callChat(prompt, { jsonMode: true, maxTokens: 2048 });
+  const raw = await callChat(prompt, { jsonMode: true, maxTokens: 2048, role: "outline" });
   const parsed = safeParse<{ outlines?: OutlineOption[] }>(raw, {});
 
   if (parsed.outlines && parsed.outlines.length > 0) {
@@ -635,7 +670,7 @@ JSON：{ "title": string, "summary": string, "content": string }
   ];
 
   const maxTokens = computeContentMaxTokens(wordCount);
-  const raw = await callChat(prompt, { jsonMode: true, maxTokens });
+  const raw = await callChat(prompt, { jsonMode: true, maxTokens, role: "content" });
   const parsed = safeParse<{ title?: string; summary?: string; content?: string }>(
     raw,
     {},
@@ -740,7 +775,7 @@ ${ARTICLE_HTML_FORMAT_RULES_BRIEF}
     },
     { role: "user", content: input.content },
   ];
-  const raw = await callChat(prompt, { jsonMode: true, maxTokens: 2048 });
+  const raw = await callChat(prompt, { jsonMode: true, maxTokens: 2048, role: "polish" });
   const parsed = safeParse<{ content?: string }>(raw, {});
   if (parsed.content && parsed.content.length > 200) {
     return normalizeCalloutBlocks(parsed.content);
@@ -752,34 +787,56 @@ export async function expandSection(input: {
   content: string;
   instruction?: string;
 }) {
+  const originalPlain = countPlainTextChars(input.content);
+  const maxTokens = Math.min(
+    8192,
+    Math.max(4096, Math.ceil(input.content.length / 2) + 1600),
+  );
+
   const prompt: ChatMessage[] = [
     {
       role: "system",
       content:
-        `你是公众号扩写助手。扩写用户给出的 HTML 段落，输出 JSON：{ "content": string }。保持 HTML 结构和整体风格，补充具体案例、步骤或细节。
+        `你是公众号扩写助手。把用户给出的整篇 HTML 正文扩写得更充实，然后输出完整 HTML。
 
 ${ARTICLE_HTML_FORMAT_RULES_BRIEF}
 
-扩写要有实质信息，不注水、不鸡汤；有判断处可自然用 <strong> 标注 2-8 字核心词；禁止绝对化表述和无依据断言；不得引入格式规范以外的 HTML 结构。`,
+【扩写要求】
+- 输出 JSON：{ "content": string }，content 必须是扩写后的**完整正文 HTML**（不是增量片段）
+- 在各章节内部补充具体案例、步骤、对比或细节，保持原有结构与风格
+- 禁止只在文末追加一段；禁止重复粘贴「总结核心动作 / 小练习」等模板套话
+- 禁止把原文原样复制后再拼接一遍
+- 扩写要有实质信息，不注水、不鸡汤；有判断处可自然用 <strong> 标注 2-8 字核心词
+- 禁止绝对化表述和无依据断言；不得引入格式规范以外的 HTML 结构
+- 扩写后正文字数应明显多于原文`,
     },
     {
       role: "user",
       content: JSON.stringify({
         content: input.content,
         instruction: input.instruction ?? "补具体例子和执行步骤",
+        originalPlainChars: originalPlain,
       }),
     },
   ];
-  const raw = await callChat(prompt, { jsonMode: true, maxTokens: 2048 });
-  const parsed = safeParse<{ content?: string }>(raw, {});
-  if (parsed.content && parsed.content.length > 200) {
-    return normalizeCalloutBlocks(parsed.content);
+
+  const raw = await callChat(prompt, { jsonMode: true, maxTokens, role: "expand" });
+  if (!raw) {
+    throw new Error("未配置 AI API Key，无法扩写");
   }
-  return padText(
-    input.content,
-    Math.max(input.content.length + 600, 800),
-    "扩写段落",
-  );
+
+  const parsed = safeParse<{ content?: string }>(raw, {});
+  if (!parsed.content || parsed.content.length < 200) {
+    throw new Error("扩写失败：模型未返回有效正文，请重试");
+  }
+
+  const expanded = normalizeCalloutBlocks(parsed.content);
+  const expandedPlain = countPlainTextChars(expanded);
+  if (expandedPlain <= originalPlain + 40) {
+    throw new Error("扩写失败：正文几乎没有变长，请重试");
+  }
+
+  return expanded;
 }
 
 export async function generateTitles(input: {
@@ -827,7 +884,7 @@ export async function generateTitles(input: {
     },
   ];
 
-  const raw = await callChat(prompt, { jsonMode: true, maxTokens: 1024 });
+  const raw = await callChat(prompt, { jsonMode: true, maxTokens: 1024, role: "titles" });
   const parsed = safeParse<{ titles?: Array<{ text: string; style: string }> }>(raw, {});
 
   if (parsed.titles && parsed.titles.length > 0) {
@@ -877,7 +934,7 @@ export async function generateSummary(input: {
         }),
       },
     ];
-    const raw = await callChat(prompt, { jsonMode: true, maxTokens: 512 });
+    const raw = await callChat(prompt, { jsonMode: true, maxTokens: 512, role: "summary" });
     const parsed = safeParse<{ summary?: string }>(raw, {});
     if (parsed.summary && parsed.summary.trim().length >= 20) {
       return {
@@ -1003,7 +1060,7 @@ Output JSON: { "prompt": string }`,
         diversityNote: `Section ${sectionIndex + 1} of ${totalSections} — must NOT look identical to other sections; honor layoutVariant strictly.`,
       }),
     },
-  ], { jsonMode: true, maxTokens: 420 });
+  ], { jsonMode: true, maxTokens: 420, role: "section-image" });
 
   const parsed = safeParse<{ prompt?: string }>(prompt, {});
   if (parsed.prompt) return reinforceSectionPrompt(parsed.prompt, variant);
@@ -1034,75 +1091,204 @@ function reinforceSectionPrompt(
   return `${prompt.trim()} ${hints.join(" ")}`;
 }
 
+/** 从主题/标题/要点提炼封面中文关键词，避免模型编造无关生活类标签 */
+function deriveCoverKeywords(
+  topic: string,
+  title: string,
+  keyPoints: string[] = [],
+): string[] {
+  const candidates: string[] = [];
+  const push = (raw: string) => {
+    const cleaned = raw
+      .replace(/[《》【】\[\]（）()「」""''、，。！？：；]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!cleaned) return;
+    for (const part of cleaned.split(/[\s/\-|—–]+/)) {
+      const t = part.trim();
+      // 封面卡只适合极短标签，过长会画糊或溢出
+      if (t.length >= 2 && t.length <= 6) candidates.push(t.slice(0, 6));
+    }
+  };
+
+  push(topic);
+  if (title && title !== topic) push(title.slice(0, 24));
+  for (const point of keyPoints.slice(0, 4)) {
+    push(point.replace(/[0-9０-９]+[.、．)\]]\s*/g, "").slice(0, 12));
+  }
+
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of candidates) {
+    if (seen.has(item)) continue;
+    seen.add(item);
+    result.push(item);
+    if (result.length >= 4) break;
+  }
+
+  if (result.length >= 3) return result.slice(0, 4);
+  if (topic.trim()) return [topic.trim().slice(0, 4), "实践", "方法"].slice(0, 3);
+  return ["主题", "方法", "实践"];
+}
+
+const LIFESTYLE_COVER_KEYWORD_RE =
+  /美食|旅行|旅游|攻略|生活小技巧|文化漫谈|穿搭|护肤|美食推荐|生活方式|理财|星座|情感|养生|家居|亲子/;
+
+function isOffTopicCoverKeyword(keyword: string, topic: string, title: string): boolean {
+  if (LIFESTYLE_COVER_KEYWORD_RE.test(keyword)) {
+    const corpus = `${topic}${title}`;
+    return !LIFESTYLE_COVER_KEYWORD_RE.test(corpus);
+  }
+  return false;
+}
+
+function pickCoverKeywords(
+  llmKeywords: string[] | undefined,
+  topic: string,
+  title: string,
+  keyPoints: string[],
+): string[] {
+  const derived = deriveCoverKeywords(topic, title, keyPoints);
+  const fromLlm = (llmKeywords ?? [])
+    .map((k) => k.replace(/\s+/g, "").trim())
+    .filter((k) => k.length >= 2 && k.length <= 6)
+    .filter((k) => !isOffTopicCoverKeyword(k, topic, title));
+
+  if (fromLlm.length >= 3) return fromLlm.slice(0, 4);
+  return derived;
+}
+
+/** 用英文描述主题域，避免把中文主题原文塞进生图 prompt（易被画到角落） */
+function coverDomainHint(topic: string): string {
+  const t = topic.toLowerCase();
+  if (/agent|智能体/.test(t)) return "AI agents, tools, and automation workflows";
+  if (/前端|react|vue|javascript|css|web/.test(t)) return "frontend engineering and AI-assisted coding";
+  if (/prompt|提示词/.test(t)) return "prompt engineering and LLM workflows";
+  if (/后端|api|服务端/.test(t)) return "backend engineering and APIs";
+  if (/产品|运营/.test(t)) return "product thinking and growth tactics";
+  return "professional tech knowledge and practical methods";
+}
+
 /** 为封面图生成 prompt - 调用 LLM 生成豆包 seedream 兼容 prompt */
 export async function generateCoverPrompt(
   topic: string,
   _style?: string | null,
-  context?: { title?: string | null; summary?: string | null; keyPoints?: string[] },
+  context?: {
+    title?: string | null;
+    summary?: string | null;
+    keyPoints?: string[];
+    contentExcerpt?: string | null;
+  },
 ): Promise<string> {
   const title = context?.title?.trim() || topic;
+  const keyPoints = context?.keyPoints ?? [];
+  const seedKeywords = deriveCoverKeywords(topic, title, keyPoints);
+  const domainHint = coverDomainHint(topic);
+  const contentExcerpt = (context?.contentExcerpt ?? "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 800);
 
   const prompt = await callChat([
     {
       role: "system",
-      content: IMAGE_PROMPT_SYSTEM + `\n\nCreate a cover illustration for a WeChat article. The image MUST visually reflect the specific topic — do NOT create a generic cover. Do NOT mention aspect ratios, dimensions, or format specs in the prompt — the image size is handled separately.
+      content: IMAGE_PROMPT_SYSTEM + `\n\nCreate a cover illustration for a WeChat article. The image MUST visually reflect THIS article's topic — never a generic lifestyle blog cover.
 
 STYLE ANCHOR (fixed):
 ${IMAGE_STYLE_ANCHOR}
 
 LAYOUT (pick ONE that fits the topic — vary composition, keep style):
-- LOWER ARC: 3-5 sticker cards arranged in a gentle arc across the lower third
+- LOWER ARC: 3-4 sticker cards arranged in a gentle arc across the lower third
 - DIAGONAL CASCADE: cards staggered diagonally from lower-left to lower-right
 - CENTER CLUSTER: one hero card with 2-3 smaller cards grouped below it
 - SPLIT BAND: cards sitting on a hand-drawn colored band/strip across the lower area
 
-RULES (strict):
-- The top 40% of the image must contain ZERO text — only plain cream background and tiny decorative doodles (stars/sparkles). WeChat overlays the title here.
-- ALL Chinese text ONLY inside sticker cards in the lower area — never floating headers or corner titles
-- Extract 3-5 distinct core Chinese keywords (2-6 characters each) from topic, summary, and keyPoints
-- Do NOT render the full article title anywhere in the image
-- articleTitle in user input is context only — never paint it on the cover
-- Use topic-relevant icons and decorative metaphors (not the same stars-and-cards template every time)
+KEYWORD RULES (critical):
+- Output 3-4 Chinese keywords, each EXACTLY 2-6 characters — short labels only (e.g. 前端、Agent、Prompt)
+- Keywords ONLY from articleTopic / articleTitle / summary / keyPoints
+- FORBIDDEN unless the article itself is about them: 美食推荐、旅行攻略、生活小技巧、文化漫谈、穿搭、护肤、理财、星座
+- Seed keywords for reference: ${JSON.stringify(seedKeywords)}
+- Icons/metaphors MUST match domain (${domainHint}) — not food/travel/home
 
-Output JSON: { "prompt": string }`,
+TEXT PLACEMENT (absolute — image models often ignore this, so be extreme):
+- The UPPER HALF of the image must be completely blank of ALL text — no Chinese, no English, no topic, no title, no tags
+- ESPECIALLY forbid text in the top-left corner, top-right corner, and top-center
+- The ONLY Chinese text in the whole image is the short keywords INSIDE the lower sticker cards
+- Never paint articleTopic / articleTitle / summary as a header or corner watermark
+- Do not write words like "title", "topic", or the raw topic string anywhere on the canvas
+
+Output JSON: { "prompt": string, "keywords": string[] }
+In "prompt": describe visuals in English; when mentioning card labels, list ONLY the short keywords. Never quote the full article topic/title as text to draw.`,
     },
     {
       role: "user",
       content: JSON.stringify({
-        articleTopic: topic,
-        articleTitleContextOnly: title,
-        summary: context?.summary || "",
-        keyPoints: context?.keyPoints || [],
+        domainHint,
+        // 仅作语义上下文，明确禁止绘制这些完整字符串
+        contextForMeaningOnly: {
+          articleTopic: topic,
+          articleTitle: title,
+          summary: context?.summary || "",
+          keyPoints,
+          contentExcerpt: contentExcerpt || undefined,
+        },
+        doNotPaintTheseStrings: [topic, title].filter(Boolean),
+        preferredKeywords: seedKeywords,
       }),
     },
-  ], { jsonMode: true, maxTokens: 256 });
+  ], { jsonMode: true, maxTokens: 420, role: "cover-prompt" });
 
-  const parsed = safeParse<{ prompt?: string }>(prompt, {});
-  if (parsed.prompt) return reinforceCoverPrompt(parsed.prompt);
+  const parsed = safeParse<{ prompt?: string; keywords?: string[] }>(prompt, {});
+  const keywords = pickCoverKeywords(parsed.keywords, topic, title, keyPoints);
 
-  // fallback：不写标题文字，避免模型在角落渲染标题
-  return (
-    "Hand-drawn sticker-style WeChat article cover illustration. Soft macaron pastel cards with Chinese keyword labels inside cards only. " +
-    "Top 40 percent completely empty of text, plain cream background with tiny star doodles. " +
-    "Cards with icons arranged horizontally in lower center. No floating text, no corner titles, no article headline."
+  if (parsed.prompt) {
+    return reinforceCoverPrompt(parsed.prompt, keywords, topic, title);
+  }
+
+  return reinforceCoverPrompt(
+    `${IMAGE_STYLE_ANCHOR} WeChat article cover about ${domainHint}. ` +
+      `Lower third only: 3-4 macaron sticker cards labeled exactly ${keywords.map((k) => `"${k}"`).join(", ")}. ` +
+      `Topic-relevant hand-drawn icons (code brackets, agent nodes, workflow arrows — not food/travel). ` +
+      `Upper half completely empty of text. No corner labels. No floating titles.`,
+    keywords,
+    topic,
+    title,
   );
 }
 
-/** 追加封面约束，降低模型在空白区乱加标题的概率 */
-function reinforceCoverPrompt(prompt: string): string {
-  const lower = prompt.toLowerCase();
-  const hints: string[] = [];
-  if (!/top 40|upper 40|top area|no text in the top/i.test(prompt)) {
-    hints.push("Top 40% of image has no text at all, only plain background.");
+/** 追加封面约束：禁止角落标题，只允许卡片内短关键词 */
+function reinforceCoverPrompt(
+  prompt: string,
+  keywords: string[],
+  topic: string,
+  title: string,
+): string {
+  let cleaned = prompt.trim();
+
+  // 去掉 prompt 里容易被模型「照抄上屏」的整段主题/标题引文
+  for (const raw of [title, topic]) {
+    const t = raw?.trim();
+    if (!t || t.length < 2) continue;
+    if (keywords.includes(t)) continue;
+    cleaned = cleaned.split(t).join("the article subject");
   }
-  if (!/inside card|within card|only inside/i.test(lower)) {
-    hints.push("All Chinese text appears only inside sticker cards, never in corners or as floating headers.");
+
+  const hints = [
+    "UPPER HALF of the image: absolutely no text of any kind (no Chinese, no English, no logos).",
+    "No text in top-left corner, top-right corner, or top-center — leave blank cream background only.",
+    `The ONLY Chinese text allowed anywhere in the image: ${keywords.map((k) => `「${k}」`).join("、")} — each written once, only inside lower sticker cards.`,
+    "Do not print the article topic or title as a separate header, watermark, or corner tag.",
+    "Card labels must be short (2-6 Chinese characters). Never put long sentences on cards.",
+  ];
+
+  if (LIFESTYLE_COVER_KEYWORD_RE.test(cleaned) && !LIFESTYLE_COVER_KEYWORD_RE.test(topic)) {
+    hints.push(
+      "Remove any lifestyle labels such as 美食推荐/旅行攻略/生活小技巧/文化漫谈 — they are off-topic.",
+    );
   }
-  if (!/do not.*title|never.*title|no article title/i.test(lower)) {
-    hints.push("Do not render the article title or duplicate keywords outside cards.");
-  }
-  if (hints.length === 0) return prompt;
-  return `${prompt.trim()} ${hints.join(" ")}`;
+
+  return `${cleaned} ${hints.join(" ")}`;
 }
 
 export async function runRiskCheck(title: string, content: string) {

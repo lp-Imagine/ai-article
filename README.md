@@ -1,53 +1,54 @@
 # 公众号 AI 发文助手
 
-一个面向微信公众号的内容创作工作台：从选题、生成大纲、撰写正文，到配图、预览、风险检测，一键推送到微信草稿箱。支持桌面端与移动端，长任务可后台运行并通过浮标追踪进度。
+面向微信公众号的内容创作工作台：选题 → 大纲 → 正文 → 配图 → 预览 / 检测 → 推送草稿箱。支持桌面端与移动端；长任务可后台运行，并通过浮标追踪进度。
 
 ## 功能概览
 
 ### 创作工作流
 
-1. **工作台** — 填写主题与写作参数，一键创建文章并生成多个大纲方案
-2. **大纲选择** — 对比方案、选定方向，可重新生成大纲
+1. **工作台** — 填写主题与写作参数，创建文章并生成多个大纲方案
+2. **大纲选择** — 对比方案、选定方向，可重新生成
 3. **正文生成** — AI 生成 HTML 正文，支持扩写、润色、格式刷新
 4. **元信息与配图** — 备选标题、摘要、封面图、章节配图
 5. **预览与推送** — 公众号样式预览，确认后推送到微信草稿箱
 
 ### AI 能力
 
-- 多方案大纲生成（2～6 个）
+- 多方案大纲（2～6 个）
 - 正文生成 / 扩写 / 全文润色
-- 备选标题、摘要生成
+- 备选标题、摘要
 - 封面图与章节配图（需配置图像模型）
 - 内容风险检测
+- **主模型 + 辅助模型**：大纲 / 正文等用主文本模型；标题、摘要、封面提示词、章节配图文案等可用更轻量的辅助模型（可跨厂商：独立 Base URL / API Key）
 
 ### 微信集成
 
-- 正文转换为微信兼容 HTML（callout、代码块、摘要注入等）
+- 正文转为微信兼容 HTML（callout、代码块、摘要注入等）
 - 草稿箱推送与推送历史
-- 设置页可测试公众号 API 连通性
+- 设置页可测试公众号 API 连通性（需将服务器出口 IP 加入公众号 IP 白名单）
 
 ### 后台任务与浮标
 
 长耗时操作（生成大纲、正文、配图等）支持：
 
-- **切换页面继续运行** — 任务在后台不中断
-- **右下角浮标** — 在其他页面显示进行中的任务，点击回到对应文章
-- **多任务** — 浮标可展开列表，分别跳转或取消
-- **进度恢复** — 返回文章页自动恢复进度弹窗
-- **PC 侧栏提示** — 桌面端左侧边栏同步显示进行中任务
+- 切换页面后任务继续运行
+- 右下角浮标展示进行中任务，点击回到对应文章
+- 多任务列表：分别跳转或取消
+- 返回文章页自动恢复进度弹窗；网关超时等情况下会尝试与后台结果对齐
+- 桌面端侧栏同步显示进行中任务
 
 ### 移动端
 
-- 底部 Tab 导航（工作台 / 历史 / 设置）
-- 文章页底部操作栏：保存、预览、推送
-- 全屏公众号预览
-- 进度弹窗适配安全区与底部导航
+- 底部 Tab：工作台 / 历史 / 设置
+- **文章编辑分步**：大纲 | 正文 | 发布（桌面端仍一屏铺开）
+- 工作台表单压缩：次要字段收入「更多选项」，提交按钮保持可见
+- 全屏公众号预览；进度弹窗适配安全区与底部导航
 
 ### 界面
 
 - macOS 风格蓝调毛玻璃 UI
-- 桌面端侧边栏 + 顶栏操作组（预览 / 生成正文 / 推送）
-- 历史列表与最近文章展示任务进行中状态
+- 桌面端侧边栏 + 顶栏操作（预览 / 生成正文 / 推送）
+- 历史记录支持删除；列表展示任务进行中状态
 
 ## 技术栈
 
@@ -70,10 +71,11 @@
 # 安装依赖
 npm install
 
-# 配置数据库（可复制 .env.example）
+# 配置环境变量
 cp .env.example .env
-# 本地开发请使用：
-# DATABASE_URL="file:./dev.db"
+
+# 本地开发请使用本地库路径，例如：
+# DATABASE_URL="file:./prisma/dev.db"
 
 # 应用数据库迁移
 npx prisma migrate dev
@@ -86,15 +88,16 @@ npm run dev
 
 ### 首次配置
 
-进入 **设置** 页完成配置（也可写入环境变量，设置页保存后会同步到运行时）：
+进入 **设置** 页完成配置（也可写入环境变量；设置页保存后会同步到运行时）：
 
 | 配置项 | 说明 |
 |--------|------|
-| AI API Key / Base URL / 文本模型 | 大纲、正文等文本生成 |
+| AI API Key / Base URL / 文本模型 | 主模型：大纲、正文、润色、扩写等 |
+| 辅助 AI Base URL / API Key / 模型 | 可选；标题、摘要、封面提示词等轻量任务 |
 | 图像 API / 图像模型 | 封面与章节配图（可选） |
 | 微信公众号 AppID / AppSecret | 草稿箱推送（可选） |
 
-各模块均提供「测试连接」按钮。
+各模块提供「测试连接」按钮（含辅助模型连通性检测）。
 
 ### 常用命令
 
@@ -116,73 +119,75 @@ src/
 │   ├── history/            # 历史记录
 │   ├── settings/           # 设置
 │   └── articles/[id]/      # 文章编辑
-├── components/             # UI 组件（预览、进度、浮标等）
-├── hooks/                  # 后台任务等 React Hooks
-└── lib/                    # AI、微信、数据库、任务追踪
+├── components/             # UI（预览、进度、推送、浮标等）
+├── hooks/                  # 后台任务等 Hooks
+└── lib/                    # AI、微信、数据库、任务追踪、配置桥接
 prisma/                     # 数据模型与迁移
+docker/
+├── entrypoint.sh           # 容器启动：迁移后拉起服务
+└── bundle-prisma-cli.mjs   # 镜像内精简 Prisma CLI
 ```
 
-## 部署到 Railway
+## Docker 部署
 
-项目已包含 Docker 与 Railway 配置，**无需改代码**即可从 GitHub 自动构建部署。SQLite 数据需挂载持久卷，否则重启后数据会丢失。
+SQLite 数据需挂载持久卷，否则容器重建后数据会丢失。
 
-### 前置条件
+### 环境变量
 
-- GitHub 仓库已推送本项目
-- [Railway](https://railway.com) 账号（新用户约 $5 试用额度；长期稳定建议 **Hobby 约 $5/月**）
+至少设置：
 
-### 部署步骤
+| 变量 | 示例 | 说明 |
+|------|------|------|
+| `DATABASE_URL` | `file:/data/prod.db` | 与挂载路径一致 |
+| `AI_API_KEY` | （你的 Key） | 主文本模型（也可部署后在设置页填写） |
+| `AI_BASE_URL` | `https://api.openai.com/v1` | 可选 |
+| `TEXT_MODEL_NAME` | `gpt-4o-mini` | 可选 |
 
-1. **新建项目** — 登录 Railway → **New Project** → **Deploy from GitHub repo**，选择本仓库。
-2. **挂载 Volume（必做）** — 进入服务 → **Volumes** → **Add Volume**：
-   - Mount Path：`/data`
-   - 用于存放 SQLite 数据库文件
-3. **环境变量** — 服务 → **Variables**，至少设置：
+可选增强：
 
-   | 变量 | 值 | 说明 |
-   |------|-----|------|
-   | `DATABASE_URL` | `file:/data/prod.db` | 与 Volume 路径一致 |
-   | `AI_API_KEY` | （你的 Key） | 文本生成（也可部署后在设置页填写） |
-   | `AI_BASE_URL` | 如 `https://api.openai.com/v1` | 可选，有默认值 |
-   | `TEXT_MODEL_NAME` | 如 `gpt-4o-mini` | 可选 |
+| 变量 | 说明 |
+|------|------|
+| `AUXILIARY_AI_BASE_URL` / `AUXILIARY_AI_API_KEY` / `AUXILIARY_TEXT_MODEL_NAME` | 辅助文本模型（可跨厂商） |
+| `IMAGE_*` | 图像生成 |
+| `WECHAT_APP_ID` / `WECHAT_APP_SECRET` | 微信草稿推送 |
 
-   完整列表见仓库根目录 [`.env.example`](.env.example)。微信、图像等配置可在部署后于 **设置** 页保存（写入数据库）。
-
-4. **部署** — Railway 会读取 [`Dockerfile`](Dockerfile) 与 [`railway.toml`](railway.toml) 自动构建。容器启动时会执行 `prisma migrate deploy` 初始化/升级数据库。
-5. **公网访问** — **Settings** → **Networking** → **Generate Domain**，获得 `*.up.railway.app` 地址。
+完整列表见 [`.env.example`](.env.example)。微信、图像、辅助模型等也可部署后在 **设置** 页保存。
 
 ### 相关文件
 
 | 文件 | 作用 |
 |------|------|
-| `Dockerfile` | Next.js standalone 多阶段镜像，含 Prisma |
-| `docker/entrypoint.sh` | 启动前自动跑数据库迁移 |
-| `railway.toml` | Railway 构建与健康检查配置 |
+| `Dockerfile` | Next.js standalone 多阶段镜像（含 Prisma） |
+| `docker/entrypoint.sh` | 启动前执行 `prisma migrate deploy` |
+| `docker/bundle-prisma-cli.mjs` | 构建阶段打包精简 Prisma CLI |
 | `.env.example` | 环境变量模板 |
 
-### 本地 Docker 验证（可选）
+### 本地验证
 
 ```bash
 docker build -t wechat-ai-writer .
 docker run --rm -p 3000:3000 \
   -e DATABASE_URL="file:/data/prod.db" \
+  -e AI_API_KEY="sk-..." \
   -v wechat-ai-data:/data \
   wechat-ai-writer
 ```
 
-浏览器打开 [http://localhost:3000](http://localhost:3000)。
+浏览器打开 [http://localhost:3000](http://localhost:3000)。可用环境变量 `PORT` 覆盖默认端口 `3000`。
 
 ### 安全提示
 
-- 部署到公网后**无内置登录**，任何人可访问；建议后续加访问控制，或仅在内网/VPN 使用。
-- API Key、微信 Secret 请勿提交到 Git；使用 Railway Variables 或设置页配置。
+- 部署到公网后**无内置登录**，任何人可访问；建议加访问控制，或仅在内网 / VPN 使用。
+- API Key、微信 Secret 请勿提交到 Git；使用环境变量或设置页配置。
 
 ## 开发说明
 
-- 微信正文样式转换见 `src/lib/wechat-style.ts`
-- 后台任务状态存于 `sessionStorage`，跨页通过 `src/lib/article-task-tracker.ts` 与 `BackgroundTaskFloat` 组件同步
-- 修改 Prisma schema 后执行 `npx prisma migrate dev`
+- 微信正文样式：`src/lib/wechat-style.ts`
+- 配置桥接（环境变量 ↔ 设置页 / 数据库）：`src/lib/config-bridge.ts`
+- 后台任务状态存于 `sessionStorage`，跨页通过 `src/lib/article-task-tracker.ts` 与浮标组件同步
+- API 响应解析与超时容错：`src/lib/api-client.ts`
+- 修改 Prisma schema 后执行：`npx prisma migrate dev`
 
 ## License
 
-Private — 本地/内部使用。
+Private — 本地 / 内部使用。

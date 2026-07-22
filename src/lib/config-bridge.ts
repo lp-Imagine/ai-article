@@ -2,14 +2,18 @@ import { db } from "@/lib/db";
 
 type SecretKey =
   | "AI_API_KEY"
+  | "AUXILIARY_AI_API_KEY"
   | "WECHAT_APP_SECRET";
 
 const ENV_KEY_MAP: Record<string, string> = {
   aiApiKey: "AI_API_KEY",
+  auxiliaryAiApiKey: "AUXILIARY_AI_API_KEY",
   wechatAppSecret: "WECHAT_APP_SECRET",
   textModelName: "TEXT_MODEL_NAME",
+  auxiliaryTextModelName: "AUXILIARY_TEXT_MODEL_NAME",
   imageModelName: "IMAGE_MODEL_NAME",
   aiBaseUrl: "AI_BASE_URL",
+  auxiliaryAiBaseUrl: "AUXILIARY_AI_BASE_URL",
   wechatAppId: "WECHAT_APP_ID",
   imageApiKey: "IMAGE_API_KEY",
   imageBaseUrl: "IMAGE_BASE_URL",
@@ -59,5 +63,5 @@ export function getEnvValue(key: string): string | undefined {
 }
 
 export function isSecretKey(envKey: string): envKey is SecretKey {
-  return envKey === "AI_API_KEY" || envKey === "WECHAT_APP_SECRET";
+  return envKey === "AI_API_KEY" || envKey === "AUXILIARY_AI_API_KEY" || envKey === "WECHAT_APP_SECRET";
 }

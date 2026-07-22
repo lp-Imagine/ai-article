@@ -19,37 +19,8 @@ RUN npm run build
 # Prisma CLI + transitive deps for `migrate deploy` in entrypoint
 FROM builder AS prisma-cli
 WORKDIR /app
-RUN node <<'EOF'
-const fs = require("fs");
-const path = require("path");
-const { execSync } = require("child_process");
-
-function collect(pkg, seen = new Set()) {
-  if (seen.has(pkg)) return seen;
-  seen.add(pkg);
-  const parts = pkg.startsWith("@") ? pkg.split("/") : [pkg];
-  const pkgJson = path.join("node_modules", ...parts, "package.json");
-  if (!fs.existsSync(pkgJson)) return seen;
-  const meta = JSON.parse(fs.readFileSync(pkgJson, "utf8"));
-  for (const dep of Object.keys({
-    ...(meta.dependencies || {}),
-    ...(meta.optionalDependencies || {}),
-  })) {
-    collect(dep, seen);
-  }
-  return seen;
-}
-
-fs.mkdirSync("/prisma-bundle/node_modules", { recursive: true });
-for (const pkg of collect("prisma")) {
-  const parts = pkg.startsWith("@") ? pkg.split("/") : [pkg];
-  const src = path.join("node_modules", ...parts);
-  const dest = path.join("/prisma-bundle/node_modules", ...parts);
-  if (!fs.existsSync(src)) continue;
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  execSync(`cp -r "${src}" "${dest}"`);
-}
-EOF
+COPY docker/bundle-prisma-cli.mjs ./docker/bundle-prisma-cli.mjs
+RUN node docker/bundle-prisma-cli.mjs
 
 FROM base AS runner
 WORKDIR /app
@@ -57,7 +28,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV HOSTNAME=0.0.0.0
-# Railway 会注入 PORT；本地默认 3000
+# 容器默认端口；可用环境变量 PORT 覆盖
 ENV PORT=3000
 
 RUN apk add --no-cache su-exec \
@@ -70,6 +41,8 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 COPY --from=builder /app/prisma ./prisma
 COPY --from=prisma-cli /prisma-bundle/node_modules/ ./node_modules/
+RUN test -f node_modules/effect/package.json \
+  && test -f node_modules/prisma/build/index.js
 
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

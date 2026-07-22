@@ -3,6 +3,50 @@ import { db } from "@/lib/db";
 import { generateSectionImagePrompt } from "@/lib/ai";
 import { generateSectionImage } from "@/lib/image-gen";
 import { syncConfigsToEnv } from "@/lib/config-bridge";
+import { mapWithConcurrency } from "@/lib/map-with-concurrency";
+
+const INLINE_IMAGE_CONCURRENCY = 2;
+
+type SectionJob = {
+  insertAfter: number;
+  heading: string;
+  sectionContent: string;
+  documentOrderIndex: number;
+  sortOrder: number;
+};
+
+type SectionResult = {
+  insertAfter: number;
+  heading: string;
+  url: string;
+  prompt: string;
+  sortOrder: number;
+};
+
+function isSkippedSectionHeading(heading: string) {
+  return heading.includes("写在最后") || heading.includes("结尾") || heading.includes("总结");
+}
+
+function buildContentWithFigures(
+  baseContent: string,
+  results: SectionResult[],
+  completedCount: number,
+  totalToGenerate: number,
+): string {
+  const sorted = [...results].sort((a, b) => b.insertAfter - a.insertAfter);
+  let content = baseContent;
+
+  for (const result of sorted) {
+    const figureHtml =
+      `\n<figure data-progress="${completedCount}/${totalToGenerate}">\n` +
+      `  <img src="${result.url}" alt="${result.heading}" />\n` +
+      `  <figcaption>${result.heading}</figcaption>\n` +
+      `</figure>\n`;
+    content = content.slice(0, result.insertAfter) + figureHtml + content.slice(result.insertAfter);
+  }
+
+  return content;
+}
 
 export async function POST(
   _req: Request,
@@ -30,13 +74,8 @@ export async function POST(
   }
 
   try {
-    // 先从正文里移除所有旧的 <figure>...</figure> 配图（覆盖语义）
-    const baseContent = article.content.replace(
-      /<figure[\s\S]*?<\/figure>/g,
-      "",
-    );
+    const baseContent = article.content.replace(/<figure[\s\S]*?<\/figure>/g, "");
 
-    // 从清理后的内容提取 h2 章节（避免旧 figure 导致索引偏移）
     const h2Regex = /<h2[^>]*>(.*?)<\/h2>/g;
     const sectionMatches = [...baseContent.matchAll(h2Regex)];
 
@@ -47,93 +86,121 @@ export async function POST(
       );
     }
 
-    // 清理旧的 inline 图片记录
     await db.imageAsset.deleteMany({
       where: { articleId: id, type: "inline" },
     });
 
-    // 在数据库里放置进度标记 - 用 image_assets 表里的 progress 字段标记当前进度
-    // 这里用先写一条 placeholder 记录的方式让前端能感知
-    const totalToGenerate = sectionMatches.filter((m) => {
-      const heading = m[1].replace(/<[^>]+>/g, "").trim();
-      return !heading.includes("写在最后") && !heading.includes("结尾") && !heading.includes("总结");
-    }).length;
+    const jobs: SectionJob[] = [];
 
-    // 为每个 h2 章节生成配图
-    let updatedContent = baseContent;
-    const generatedImages: Array<{ heading: string; url: string }> = [];
-    let generatedCount = 0;
-
-    // 从后往前插入图片，避免索引偏移
-    for (let i = sectionMatches.length - 1; i >= 0; i--) {
+    for (let i = 0; i < sectionMatches.length; i += 1) {
       const match = sectionMatches[i];
       const heading = match[1].replace(/<[^>]+>/g, "").trim();
-
-      // 跳过"写在最后"等结尾章节
-      if (heading.includes("写在最后") || heading.includes("结尾") || heading.includes("总结")) {
-        continue;
-      }
+      if (isSkippedSectionHeading(heading)) continue;
 
       const documentOrderIndex = sectionMatches
         .slice(0, i)
-        .filter((m) => {
-          const h = m[1].replace(/<[^>]+>/g, "").trim();
-          return !h.includes("写在最后") && !h.includes("结尾") && !h.includes("总结");
-        }).length;
+        .filter((m) => !isSkippedSectionHeading(m[1].replace(/<[^>]+>/g, "").trim())).length;
 
-      // 提取该章节的内容（去掉 HTML 标签，取更多上下文）
       const insertPos = match.index!;
       const afterSection = baseContent.slice(insertPos + match[0].length);
       const nextBreak = afterSection.search(/<h2|<hr\s*\/?>/);
-      const rawContent = nextBreak === -1
-        ? afterSection.slice(0, 1200)
-        : afterSection.slice(0, Math.min(nextBreak, 1200));
-      // 去掉 HTML 标签，只保留纯文本
+      const rawContent =
+        nextBreak === -1
+          ? afterSection.slice(0, 1200)
+          : afterSection.slice(0, Math.min(nextBreak, 1200));
       const sectionContent = rawContent.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
 
-      // 在生成前先更新进度 - 用一个 sentinel 文本标记
-      // 这里直接把当前生成进度作为 figure 的 alt 标记，方便前端轮询识别
-      try {
-        const prompt = await generateSectionImagePrompt(
-          article.topic,
-          article.style,
-          heading,
-          sectionContent,
-          { sectionIndex: documentOrderIndex, totalSections: totalToGenerate },
+      jobs.push({
+        insertAfter: insertPos + match[0].length,
+        heading,
+        sectionContent,
+        documentOrderIndex,
+        sortOrder: i,
+      });
+    }
+
+    const totalToGenerate = jobs.length;
+    if (totalToGenerate === 0) {
+      return NextResponse.json(
+        { code: 400, message: "没有可生成配图的章节", data: null },
+        { status: 400 },
+      );
+    }
+
+    const completedResults: SectionResult[] = [];
+    let persistChain = Promise.resolve();
+
+    const enqueuePersist = (result: SectionResult) => {
+      persistChain = persistChain.then(async () => {
+        completedResults.push(result);
+        const content = buildContentWithFigures(
+          baseContent,
+          completedResults,
+          completedResults.length,
+          totalToGenerate,
         );
-        const { url } = await generateSectionImage(prompt);
 
-        const figureHtml = `\n<figure data-progress="${generatedCount + 1}/${totalToGenerate}">\n  <img src="${url}" alt="${heading}" />\n  <figcaption>${heading}</figcaption>\n</figure>\n`;
-
-        const before = updatedContent.slice(0, insertPos + match[0].length);
-        const after = updatedContent.slice(insertPos + match[0].length);
-        updatedContent = before + figureHtml + after;
-
-        generatedImages.unshift({ heading, url });
-        generatedCount += 1;
-
-        // 每生成一张图就立刻写回数据库（包含进度信息），让前端可以轮询
         await db.article.update({
           where: { id },
-          data: { content: updatedContent },
+          data: { content },
         });
 
-        // 记录到最终 image_assets 表
         await db.imageAsset.create({
           data: {
             articleId: id,
             type: "inline",
             source: "ai",
-            url,
-            prompt,
-            sortOrder: i,
+            url: result.url,
+            prompt: result.prompt,
+            sortOrder: result.sortOrder,
           },
         });
-      } catch (err) {
-        console.error(`[inline-image] failed for "${heading}":`, err instanceof Error ? err.message : err);
-        continue;
-      }
-    }
+      });
+    };
+
+    const generationResults = await mapWithConcurrency(
+      jobs,
+      INLINE_IMAGE_CONCURRENCY,
+      async (job) => {
+        try {
+          const prompt = await generateSectionImagePrompt(
+            article.topic,
+            article.style,
+            job.heading,
+            job.sectionContent,
+            {
+              sectionIndex: job.documentOrderIndex,
+              totalSections: totalToGenerate,
+            },
+          );
+          const { url } = await generateSectionImage(prompt);
+
+          const result: SectionResult = {
+            insertAfter: job.insertAfter,
+            heading: job.heading,
+            url,
+            prompt,
+            sortOrder: job.sortOrder,
+          };
+
+          await enqueuePersist(result);
+          return result;
+        } catch (err) {
+          console.error(
+            `[inline-image] failed for "${job.heading}":`,
+            err instanceof Error ? err.message : err,
+          );
+          return null;
+        }
+      },
+    );
+
+    await persistChain;
+
+    const generatedImages = generationResults
+      .filter((item): item is SectionResult => item !== null)
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map(({ heading, url }) => ({ heading, url }));
 
     if (generatedImages.length === 0) {
       return NextResponse.json(
@@ -142,7 +209,13 @@ export async function POST(
       );
     }
 
-    // 保存更新后的正文（再次确保最终版本）
+    const updatedContent = buildContentWithFigures(
+      baseContent,
+      completedResults,
+      completedResults.length,
+      totalToGenerate,
+    );
+
     const updated = await db.article.update({
       where: { id },
       data: {

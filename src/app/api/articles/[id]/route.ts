@@ -85,3 +85,26 @@ export async function PUT(
     );
   }
 }
+
+export async function DELETE(
+  _request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const { id } = await context.params;
+
+  const existing = await db.article.findUnique({ where: { id } });
+  if (!existing) {
+    return NextResponse.json(
+      { code: 404, message: "文章不存在", data: null },
+      { status: 404 },
+    );
+  }
+
+  await db.article.delete({ where: { id } });
+
+  return NextResponse.json({
+    code: 0,
+    message: "ok",
+    data: { id },
+  });
+}

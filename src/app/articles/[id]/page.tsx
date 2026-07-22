@@ -31,6 +31,7 @@ import {
   registerArticleTaskAbortController,
   unregisterArticleTaskAbortController,
   startArticleBackgroundTask,
+  reconcileBackgroundTaskAfterRequestFailure,
 } from "@/lib/article-task-tracker";
 
 type PublishRecord = {
@@ -89,8 +90,8 @@ const statusVariant: Record<string, string> = {
 const LONG_RUNNING_ACTIONS: Record<string, { title: string; estimatedSeconds: number }> = {
   "生成大纲": { title: "正在生成大纲方案", estimatedSeconds: 45 },
   "重新生成大纲": { title: "正在重新生成大纲", estimatedSeconds: 45 },
-  "生成正文": { title: "正在生成正文与封面图", estimatedSeconds: 60 },
-  "生成章节配图": { title: "正在为各章节生成配图", estimatedSeconds: 90 },
+  "生成正文": { title: "正在生成正文与封面图", estimatedSeconds: 180 },
+  "生成章节配图": { title: "正在为各章节生成配图", estimatedSeconds: 300 },
   "生成封面图": { title: "正在生成封面图（替换）", estimatedSeconds: 30 },
   "全文润色": { title: "正在润色全文", estimatedSeconds: 20 },
   "扩写正文": { title: "正在扩写正文", estimatedSeconds: 15 },
@@ -113,6 +114,9 @@ export default function ArticlePage({
   const [editorTab, setEditorTab] = useState<"meta" | "content">("meta");
   const [activeOutlineView, setActiveOutlineView] = useState(0);
   const [outlinePanelOpen, setOutlinePanelOpen] = useState(true);
+  const [mobileStage, setMobileStage] = useState<"outline" | "content" | "publish">("outline");
+  const [expandedOutlineSection, setExpandedOutlineSection] = useState<number | null>(null);
+  const mobileStageReadyRef = useRef(false);
   const [titleCandidates, setTitleCandidates] = useState<Array<{ text: string; style: string }>>([]);
   const [progress, setProgress] = useState<{
     open: boolean;
@@ -121,7 +125,8 @@ export default function ArticlePage({
     generatedCount?: number;
     totalCount?: number;
     error?: string | null;
-  }>({ open: false, title: "", steps: [] });
+    startedAt?: number | null;
+  }>({ open: false, title: "", steps: [], startedAt: null });
   const [progressKey, setProgressKey] = useState(0);
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
 
@@ -143,6 +148,7 @@ export default function ArticlePage({
     generatedCount: 0,
     totalCount: 1,
     error: null,
+    startedAt: null as number | null,
   }), []);
 
   const clearProgressCloseTimer = useCallback(() => {
@@ -227,6 +233,24 @@ export default function ArticlePage({
     }
   }, [article?.selectedOutlineIndex]);
 
+  // 移动端按文章进度进入对应 Tab；有正文时大纲默认收起（仅初始化一次）
+  useEffect(() => {
+    if (!article || mobileStageReadyRef.current) return;
+    mobileStageReadyRef.current = true;
+    const hasContent = Boolean(article.content?.trim());
+    const hasOutline = Array.isArray(article.outline) && article.outline.length > 0;
+    if (hasContent) {
+      setMobileStage("content");
+      setOutlinePanelOpen(false);
+    } else if (hasOutline) {
+      setMobileStage("outline");
+      setOutlinePanelOpen(true);
+    } else {
+      setMobileStage("outline");
+      setOutlinePanelOpen(true);
+    }
+  }, [article]);
+
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -270,6 +294,7 @@ export default function ArticlePage({
         generatedCount: 0,
         totalCount: 1,
         error: null,
+        startedAt: task.startedAt,
       });
       setBusy(task.label);
     };
@@ -312,7 +337,7 @@ export default function ArticlePage({
       stopped = true;
       clearInterval(timer);
     };
-  }, [id, loading, toast, resetProgressState]);
+  }, [id, loading, busy, toast, resetProgressState]);
 
   function cancelCurrent() {
     cancelArticleBackgroundTask(id);
@@ -503,6 +528,7 @@ export default function ArticlePage({
       const totalSections = isInlineImages
         ? (article?.content?.match(/<h2[^>]*>/g)?.length ?? 0) - 1
         : 1;
+      const startedAt = Date.now();
       setProgressKey((key) => key + 1);
       setProgress({
         open: true,
@@ -519,6 +545,7 @@ export default function ArticlePage({
         generatedCount: 0,
         totalCount: Math.max(1, totalSections),
         error: null,
+        startedAt,
       });
 
       startArticleBackgroundTask({
@@ -526,7 +553,7 @@ export default function ArticlePage({
         label,
         title: longCfg.title,
         articleLabel: article?.title ?? article?.topic ?? "未命名文章",
-        startedAt: Date.now(),
+        startedAt,
         statusAtStart: article?.status ?? "draft",
         contentLengthAtStart: plainTextLengthFromHtml(article?.content ?? ""),
       });
@@ -665,6 +692,40 @@ export default function ArticlePage({
           scheduleProgressClose(progressSessionId, 1200);
         }
       } else {
+        const task = isLong ? getArticleBackgroundTask(id) : null;
+        if (task) {
+          const outcome = await reconcileBackgroundTaskAfterRequestFailure(task);
+          if (outcome === "completed") {
+            clearArticleBackgroundTask(id);
+            if (!mountedRef.current) return;
+            await refresh();
+            if (toastId) toast.dismiss(toastId);
+            actionToastIdRef.current = null;
+            toast.show({ title: "操作成功", message: `${label}完成`, variant: "success" });
+            if (isLong) {
+              setProgress((p) => ({
+                ...p,
+                generatedCount: isInlineImages ? p.totalCount : p.totalCount,
+                steps: p.steps.map((s, i) =>
+                  i >= 1 ? { ...s, status: "done" as const } : s,
+                ),
+              }));
+              scheduleProgressClose(progressSessionId, 800);
+            }
+            return;
+          }
+          if (outcome === "pending") {
+            if (!mountedRef.current) return;
+            toast.show({
+              title: `${label}仍在进行`,
+              message: "连接已中断，服务端可能仍在处理。请保持页面打开，完成后会自动刷新。",
+              variant: "info",
+              duration: 8000,
+            });
+            return;
+          }
+        }
+
         clearArticleBackgroundTask(id);
         const message = err instanceof Error ? err.message : `${label} 失败`;
         if (!mountedRef.current) return;
@@ -693,7 +754,7 @@ export default function ArticlePage({
   async function handlePushConfirm() {
     setPushDialogOpen(false);
     if (article) {
-      await saveArticle();
+      await saveArticle({ silent: true });
     }
     await callAction(`/api/articles/${id}/push-draft`, "推送公众号草稿箱");
     const res = await fetch(`/api/articles/${id}`, { cache: "no-store" });
@@ -732,7 +793,7 @@ export default function ArticlePage({
     }
   }
 
-  async function saveArticle() {
+  async function saveArticle(options?: { silent?: boolean }) {
     if (!article) return;
     setSaving(true);
     try {
@@ -749,11 +810,14 @@ export default function ArticlePage({
       });
       const json = (await res.json()) as ApiResponse<unknown>;
       if (json.code !== 0) throw new Error(json.message || "保存失败");
-      toast.show({ message: "草稿已保存", variant: "success" });
+      if (!options?.silent) {
+        toast.show({ message: "草稿已保存", variant: "success" });
+      }
       await refresh();
     } catch (err) {
       const message = err instanceof Error ? err.message : "保存失败";
       toast.show({ message, variant: "error" });
+      if (options?.silent) throw err;
     } finally {
       setSaving(false);
     }
@@ -803,21 +867,19 @@ export default function ArticlePage({
           返回工作台
         </Link>
         <div className="article-topbar-row">
-          <div className="min-w-0 flex-1">
+          <div className="article-topbar-main">
             <h1 className="article-topbar-title">{article.title ?? article.topic}</h1>
-            <div className="meta-pills">
-              <span className="meta-pill">
-                主题 <strong>{article.topic}</strong>
-              </span>
-              {article.style ? (
-                <span className="meta-pill">
-                  风格 <strong>{article.style}</strong>
+            <div className="article-topbar-meta">
+              {article.title && article.topic !== article.title ? (
+                <span className="article-topbar-meta-item" title={article.topic}>
+                  {article.topic}
                 </span>
               ) : null}
+              {article.style ? (
+                <span className="article-topbar-meta-item">{article.style}</span>
+              ) : null}
               {article.wordCount ? (
-                <span className="meta-pill">
-                  目标 <strong>{article.wordCount} 字</strong>
-                </span>
+                <span className="article-topbar-meta-item">目标 {article.wordCount} 字</span>
               ) : null}
               <span className={`badge ${statusClass}`}>
                 {statusLabel[article.status] ?? article.status}
@@ -826,12 +888,13 @@ export default function ArticlePage({
           </div>
           <div className="article-topbar-right">
             {article.wordCount ? (
-              <div className="word-stat">
-                <p className="word-stat-label">正文字数</p>
-                <p className="word-stat-value">
-                  {plainCharCount} / {article.wordCount}
-                </p>
-                <div className="progress-bar mt-2">
+              <div className="word-stat" title="正文字数">
+                <span className="word-stat-value">
+                  {plainCharCount}
+                  <span className="word-stat-sep">/</span>
+                  {article.wordCount}
+                </span>
+                <div className="progress-bar word-stat-bar">
                   <div
                     className="progress-bar-fill"
                     style={{ width: `${Math.round(targetProgress * 100)}%` }}
@@ -840,7 +903,7 @@ export default function ArticlePage({
               </div>
             ) : null}
             <div className="article-topbar-actions">
-            <button onClick={saveArticle} disabled={saving} className="btn-secondary text-sm">
+            <button onClick={() => void saveArticle()} disabled={saving} className="btn-secondary text-sm">
               {saving ? (
                 <span className="inline-flex items-center gap-1.5">
                   <span className="inline-block size-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
@@ -895,26 +958,55 @@ export default function ArticlePage({
           </div>
         </div>
         {article.wechatDraftId ? (
-          <p className="mt-3 text-xs text-[var(--muted)]">微信草稿 ID：{article.wechatDraftId}</p>
+          <p className="article-topbar-draft-id">微信草稿 ID：{article.wechatDraftId}</p>
         ) : null}
+
+        <nav className="mobile-stage-tabs" aria-label="编辑步骤">
+          {(
+            [
+              { id: "outline" as const, label: "大纲", icon: ListTree },
+              { id: "content" as const, label: "正文", icon: FileText },
+              { id: "publish" as const, label: "发布", icon: Send },
+            ] as const
+          ).map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              type="button"
+              className={`mobile-stage-tab ${mobileStage === id ? "mobile-stage-tab-active" : ""}`}
+              onClick={() => setMobileStage(id)}
+            >
+              <Icon size={15} />
+              {label}
+            </button>
+          ))}
+        </nav>
       </div>
 
       <div className="editor-stack">
+        <div
+          className={`mobile-stage-panel ${mobileStage === "outline" ? "mobile-stage-panel-active" : ""}`}
+          data-stage="outline"
+        >
         {outlines.length > 0 && (
-          <section className="outline-panel">
-            <div className="outline-panel-head">
+          <section className="outline-panel stage-order-outline">
+            <button
+              type="button"
+              className="outline-panel-head outline-panel-head-toggle"
+              onClick={() => setOutlinePanelOpen((v) => !v)}
+              aria-expanded={outlinePanelOpen}
+            >
               <p className="outline-panel-title inline-flex items-center gap-2">
                 <ListTree size={15} />
                 大纲选择
+                {!outlinePanelOpen && hasSelectedOutline ? (
+                  <span className="outline-panel-summary">
+                    · 方案 {(article.selectedOutlineIndex ?? 0) + 1}
+                    · {outlines[article.selectedOutlineIndex ?? 0]?.sections?.length ?? 0} 章
+                  </span>
+                ) : null}
               </p>
-              <button
-                type="button"
-                onClick={() => setOutlinePanelOpen((v) => !v)}
-                className="collapse-toggle"
-              >
-                {outlinePanelOpen ? "收起" : "展开"}
-              </button>
-            </div>
+              <span className="collapse-toggle">{outlinePanelOpen ? "收起" : "展开"}</span>
+            </button>
 
             {outlinePanelOpen && (
               <>
@@ -926,14 +1018,19 @@ export default function ArticlePage({
                       <button
                         key={option.index}
                         type="button"
-                        onClick={() => setActiveOutlineView(option.index)}
+                        onClick={() => {
+                          setActiveOutlineView(option.index);
+                          setExpandedOutlineSection(null);
+                        }}
                         className={`outline-tab-btn ${isActive ? "outline-tab-btn-active" : ""} ${isSelected ? "outline-tab-btn-selected" : ""}`}
                       >
                         <span className="outline-tab-label">
                           方案 {option.index + 1}
                           {isSelected ? " · 已选" : ""}
                         </span>
-                        <span className="outline-tab-name">{option.title}</span>
+                        <span className="outline-tab-name" title={option.title}>
+                          {option.title}
+                        </span>
                       </button>
                     );
                   })}
@@ -943,15 +1040,33 @@ export default function ArticlePage({
                   <div className="outline-detail-panel">
                     <p className="outline-detail-desc">{viewingOutline.positioning}</p>
                     <div className="outline-sections-grid">
-                      {viewingOutline.sections.map((s, idx) => (
-                        <div key={idx} className="outline-section-compact">
-                          <div className="outline-section-compact-head">
-                            <span className="outline-section-compact-num">{idx + 1}</span>
-                            <span>{s.heading}</span>
+                      {viewingOutline.sections.map((s, idx) => {
+                        const open = expandedOutlineSection === idx;
+                        return (
+                          <div
+                            key={idx}
+                            className={`outline-section-compact ${open ? "outline-section-compact-open" : ""}`}
+                          >
+                            <button
+                              type="button"
+                              className="outline-section-compact-toggle"
+                              onClick={() =>
+                                setExpandedOutlineSection((cur) => (cur === idx ? null : idx))
+                              }
+                              aria-expanded={open}
+                            >
+                              <span className="outline-section-compact-head">
+                                <span className="outline-section-compact-num">{idx + 1}</span>
+                                <span>{s.heading}</span>
+                              </span>
+                              <span className="outline-section-chevron" aria-hidden>
+                                {open ? "−" : "+"}
+                              </span>
+                            </button>
+                            <p className="outline-section-compact-summary">{s.summary}</p>
                           </div>
-                          <p className="outline-section-compact-summary">{s.summary}</p>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                     <div className="outline-detail-actions">
                       <p className="text-xs text-[var(--muted)]">
@@ -985,7 +1100,34 @@ export default function ArticlePage({
           </section>
         )}
 
-        <div className="workflow-bar">
+        <div className="mobile-stage-actions">
+          <WorkflowButton
+            busy={busy}
+            label="重新生成大纲"
+            icon={<RefreshCw size={14} />}
+            onClick={() => callAction(`/api/articles/${id}/generate-outline`, "重新生成大纲")}
+          />
+          <WorkflowButton
+            busy={busy}
+            label="生成正文"
+            icon={<FileText size={14} />}
+            onClick={() => {
+              setMobileStage("content");
+              setOutlinePanelOpen(false);
+              void callAction(`/api/articles/${id}/generate-content`, "生成正文");
+            }}
+            disabled={!hasSelectedOutline}
+            title={hasSelectedOutline ? undefined : "请先选择一个大纲"}
+            className="workflow-btn-primary"
+          />
+        </div>
+        </div>
+
+        <div
+          className={`mobile-stage-panel ${mobileStage === "content" ? "mobile-stage-panel-active" : ""}`}
+          data-stage="content"
+        >
+        <div className="workflow-bar workflow-bar-desktop stage-order-workflow">
           <span className="workflow-bar-label">AI 操作</span>
           <WorkflowButton
             busy={busy}
@@ -1032,57 +1174,27 @@ export default function ArticlePage({
           ) : null}
         </div>
 
-        {(pushResult?.draftId || pushRecords.length > 0) && (
-          <div className="space-y-2">
-            {pushResult && pushResult.draftId ? (
-              <div className="push-inline border-[rgba(5,150,105,0.25)] bg-[var(--success-soft)]">
-                <span className="text-sm font-semibold text-[var(--success)]">✓ 推送成功</span>
-                <span className="text-xs text-[var(--muted)]">草稿 ID：{pushResult.draftId}</span>
-                <a
-                  href="https://mp.weixin.qq.com/cgi-bin/appmsg?t=media/appmsg_edit_v2&action=edit&isNew=1&type=10&lang=zh_CN"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-[var(--accent)] hover:underline"
-                >
-                  前往微信公众平台 →
-                </a>
-              </div>
-            ) : null}
-            {pushRecords.length > 0 ? (
-              <details className="push-inline">
-                <summary className="cursor-pointer text-sm font-medium">
-                  推送历史 · {pushRecords.length} 条
-                </summary>
-                <div className="mt-3 w-full space-y-2">
-                  {pushRecords.map((r) => (
-                    <div key={r.id} className="flex items-center justify-between gap-3 text-xs">
-                      <div className="flex items-center gap-2">
-                        <span className={`badge ${r.status === "success" ? "badge-success" : "badge-danger"}`}>
-                          {r.status === "success" ? "成功" : "失败"}
-                        </span>
-                        <span className="text-[var(--muted)]">
-                          {new Date(r.createdAt).toLocaleString("zh-CN", {
-                            month: "2-digit",
-                            day: "2-digit",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </span>
-                      </div>
-                      {r.errorMessage ? (
-                        <span className="truncate text-[var(--danger)]" title={r.errorMessage}>
-                          {r.errorMessage}
-                        </span>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-              </details>
-            ) : null}
-          </div>
-        )}
+        <div className="mobile-stage-actions">
+          <WorkflowButton
+            busy={busy}
+            label="风险检测"
+            icon={<Shield size={14} />}
+            onClick={() => callAction(`/api/articles/${id}/risk-check`, "风险检测")}
+          />
+          {article.title ? (
+            <button
+              type="button"
+              onClick={() => copyTitle(article.title ?? "")}
+              className="workflow-btn"
+              title="复制标题"
+            >
+              <Copy size={14} />
+              复制标题
+            </button>
+          ) : null}
+        </div>
 
-        <div className="editor-panel">
+        <div className="editor-panel stage-order-editor">
           <div className="editor-panel-head">
             <div className="editor-tabs !border-0 !bg-transparent !p-0">
               <button
@@ -1189,22 +1301,13 @@ export default function ArticlePage({
           </div>
         </div>
 
-        <div>
-          <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
-            快捷工具
-          </p>
+        <div className="stage-order-content-tools">
+          <p className="tool-section-label tool-section-label-content">正文工具</p>
           <div className="tool-chip-grid">
-            <ActionChip
-              busy={busy}
-              label="文章预览"
-              onClick={() => setPreviewOpen(true)}
-              disabled={!article.content}
-            />
             <ActionChip busy={busy} label="生成备选标题" onClick={handleGenerateTitles} />
             <ActionChip busy={busy} label="生成摘要" onClick={handleGenerateSummary} disabled={!article.content && !article.topic} />
             <ActionChip busy={busy} label="扩写正文" onClick={() => callAction(`/api/articles/${id}/expand`, "扩写正文")} disabled={!article.content} />
             <ActionChip busy={busy} label="全文润色" onClick={() => callAction(`/api/articles/${id}/polish`, "全文润色")} disabled={!article.content} />
-            <ActionChip busy={busy} label="生成封面图" onClick={() => callAction(`/api/articles/${id}/generate-cover`, "生成封面图")} />
             <ActionChip busy={busy} label="章节配图" onClick={() => callAction(`/api/articles/${id}/generate-inline-images`, "生成章节配图")} disabled={!article.content} />
             <ActionChip
               busy={busy}
@@ -1213,6 +1316,88 @@ export default function ArticlePage({
               disabled={!article.content}
             />
           </div>
+        </div>
+        </div>
+
+        <div
+          className={`mobile-stage-panel ${mobileStage === "publish" ? "mobile-stage-panel-active" : ""}`}
+          data-stage="publish"
+        >
+        {(pushResult?.draftId || pushRecords.length > 0) && (
+          <div className="space-y-2 stage-order-push">
+            {pushResult && pushResult.draftId ? (
+              <div className="push-inline border-[rgba(5,150,105,0.25)] bg-[var(--success-soft)]">
+                <span className="text-sm font-semibold text-[var(--success)]">✓ 推送成功</span>
+                <span className="text-xs text-[var(--muted)]">草稿 ID：{pushResult.draftId}</span>
+                <a
+                  href="https://mp.weixin.qq.com/cgi-bin/appmsg?t=media/appmsg_edit_v2&action=edit&isNew=1&type=10&lang=zh_CN"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-[var(--accent)] hover:underline"
+                >
+                  前往微信公众平台 →
+                </a>
+              </div>
+            ) : null}
+            {pushRecords.length > 0 ? (
+              <details className="push-inline">
+                <summary className="cursor-pointer text-sm font-medium">
+                  推送历史 · {pushRecords.length} 条
+                </summary>
+                <div className="mt-3 w-full space-y-2">
+                  {pushRecords.map((r) => (
+                    <div key={r.id} className="flex items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className={`badge ${r.status === "success" ? "badge-success" : "badge-danger"}`}>
+                          {r.status === "success" ? "成功" : "失败"}
+                        </span>
+                        <span className="text-[var(--muted)]">
+                          {new Date(r.createdAt).toLocaleString("zh-CN", {
+                            month: "2-digit",
+                            day: "2-digit",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </span>
+                      </div>
+                      {r.errorMessage ? (
+                        <span className="truncate text-[var(--danger)]" title={r.errorMessage}>
+                          {r.errorMessage}
+                        </span>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </details>
+            ) : null}
+          </div>
+        )}
+
+        <div className="stage-order-publish-tools">
+          <p className="tool-section-label tool-section-label-publish">发布工具</p>
+          <div className="tool-chip-grid">
+            <ActionChip
+              busy={busy}
+              label="文章预览"
+              onClick={() => setPreviewOpen(true)}
+              disabled={!article.content}
+            />
+            <ActionChip busy={busy} label="生成封面图" onClick={() => callAction(`/api/articles/${id}/generate-cover`, "生成封面图")} />
+            <ActionChip
+              busy={busy}
+              label="推送草稿箱"
+              onClick={() => {
+                setPushResult(null);
+                setPushDialogOpen(true);
+              }}
+              disabled={!article.content}
+            />
+          </div>
+        </div>
+
+        {article.wechatDraftId ? (
+          <p className="text-xs text-[var(--muted)]">微信草稿 ID：{article.wechatDraftId}</p>
+        ) : null}
         </div>
       </div>
 
@@ -1235,6 +1420,7 @@ export default function ArticlePage({
         generatedCount={progress.generatedCount}
         totalCount={progress.totalCount}
         error={progress.error}
+        startedAt={progress.startedAt}
         onCancel={requestCancelCurrent}
       />
 
@@ -1259,38 +1445,57 @@ export default function ArticlePage({
         targetWords={article.wordCount}
       />
 
+      {!pushDialogOpen && !previewOpen && !progress.open && !cancelConfirmOpen ? (
       <div className="mobile-editor-dock">
         <button
           type="button"
-          onClick={saveArticle}
+          onClick={() => void saveArticle()}
           disabled={saving}
           className="mobile-editor-dock-btn mobile-editor-dock-btn-secondary"
         >
           <Save size={16} />
           {saving ? "保存中" : "保存"}
         </button>
-        <button
-          type="button"
-          onClick={() => setPreviewOpen(true)}
-          disabled={!article.content}
-          className="mobile-editor-dock-btn mobile-editor-dock-btn-secondary"
-        >
-          <Eye size={16} />
-          预览
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            setPushResult(null);
-            setPushDialogOpen(true);
-          }}
-          disabled={busy !== null || !article.content}
-          className="mobile-editor-dock-btn mobile-editor-dock-btn-primary"
-        >
-          <Send size={16} />
-          推送
-        </button>
+        {mobileStage === "outline" ? (
+          <button
+            type="button"
+            onClick={() => {
+              setMobileStage("content");
+              setOutlinePanelOpen(false);
+              void callAction(`/api/articles/${id}/generate-content`, "生成正文");
+            }}
+            disabled={busy !== null || !hasSelectedOutline}
+            className="mobile-editor-dock-btn mobile-editor-dock-btn-primary"
+          >
+            <FileText size={16} />
+            {busy === "生成正文" ? "生成中" : "生成正文"}
+          </button>
+        ) : mobileStage === "content" ? (
+          <button
+            type="button"
+            onClick={() => setPreviewOpen(true)}
+            disabled={!article.content}
+            className="mobile-editor-dock-btn mobile-editor-dock-btn-primary"
+          >
+            <Eye size={16} />
+            预览
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setPushResult(null);
+              setPushDialogOpen(true);
+            }}
+            disabled={busy !== null || !article.content}
+            className="mobile-editor-dock-btn mobile-editor-dock-btn-primary"
+          >
+            <Send size={16} />
+            推送
+          </button>
+        )}
       </div>
+      ) : null}
     </>
   );
 }
