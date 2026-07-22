@@ -175,6 +175,24 @@ docker run --rm -p 3000:3000 \
 
 浏览器打开 [http://localhost:3000](http://localhost:3000)。可用环境变量 `PORT` 覆盖默认端口 `3000`。
 
+### 服务器一键更新（宝塔）
+
+代码 push 到 GitHub 后，在服务器执行：
+
+```bash
+cd /www/ai-article && bash docker/deploy.sh
+```
+
+脚本会：拉代码（`git pull` 失败则自动改用 zip）→ 重建镜像 → 重启容器。数据目录默认 `/www/data/ai-article`，不会丢。
+
+首次若还没有脚本，可先：
+
+```bash
+curl -fsSL -o /www/ai-article/docker/deploy.sh \
+  https://raw.githubusercontent.com/lp-Imagine/ai-article/master/docker/deploy.sh
+chmod +x /www/ai-article/docker/deploy.sh
+```
+
 ### 安全提示
 
 - 部署到公网后**无内置登录**，任何人可访问；建议加访问控制，或仅在内网 / VPN 使用。
