@@ -162,7 +162,7 @@ function LoginForm() {
         </span>
         <span className="auth-remember-copy">
           <span className="auth-remember-title">记住密码</span>
-          <span className="auth-remember-desc">下次打开自动填入账号信息</span>
+          <span className="auth-remember-desc">自动填入账号，会话保持 30 天</span>
         </span>
       </label>
 

@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import {
   createSession,
   ensureBootstrapAdmin,
+  SESSION_DAYS_REGISTER,
   sessionCookieOptions,
 } from "@/lib/auth";
 import { hashPassword } from "@/lib/password";
@@ -41,7 +42,7 @@ export async function POST(request: Request) {
       },
     });
 
-    const token = await createSession(user.id);
+    const token = await createSession(user.id, SESSION_DAYS_REGISTER);
     const response = NextResponse.json({
       code: 0,
       message: "ok",
@@ -52,7 +53,9 @@ export async function POST(request: Request) {
         role: user.role,
       },
     });
-    response.cookies.set(sessionCookieOptions(token));
+    response.cookies.set(
+      sessionCookieOptions(token, SESSION_DAYS_REGISTER * 24 * 60 * 60),
+    );
     return response;
   } catch (error) {
     return NextResponse.json(

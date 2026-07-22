@@ -6,9 +6,12 @@ import { hashPassword } from "@/lib/password";
 import { SESSION_COOKIE } from "@/lib/auth-constants";
 
 export { SESSION_COOKIE };
-const SESSION_DAYS = 30;
-export const SESSION_DAYS_REMEMBER = 90;
-export const SESSION_DAYS_SHORT = 7;
+/** 注册后自动登录 */
+export const SESSION_DAYS_REGISTER = 7;
+/** 勾选「记住密码」 */
+export const SESSION_DAYS_REMEMBER = 30;
+/** 普通登录（未勾选记住密码）= 24 小时 */
+export const SESSION_DAYS_SHORT = 1;
 
 export type SessionUser = {
   id: string;
@@ -71,7 +74,7 @@ export function createSessionToken(): string {
   return randomBytes(32).toString("hex");
 }
 
-export async function createSession(userId: string, days = SESSION_DAYS): Promise<string> {
+export async function createSession(userId: string, days = SESSION_DAYS_REGISTER): Promise<string> {
   const token = createSessionToken();
   const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
   await db.session.create({
@@ -133,7 +136,10 @@ export function sessionCookieSecure() {
   return false;
 }
 
-export function sessionCookieOptions(token: string, maxAgeSeconds = SESSION_DAYS * 24 * 60 * 60) {
+export function sessionCookieOptions(
+  token: string,
+  maxAgeSeconds = SESSION_DAYS_REGISTER * 24 * 60 * 60,
+) {
   return {
     name: SESSION_COOKIE,
     value: token,
