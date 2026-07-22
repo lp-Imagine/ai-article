@@ -10,8 +10,8 @@ function createPrismaClient() {
   });
 }
 
-function isClientCurrent(client: PrismaClient | undefined): client is PrismaClient {
-  // 热更新后可能仍缓存旧 Client（无 User/Session 模型）
+/** 热更新后可能仍缓存旧 Client（无 User/Session 模型） */
+function isClientCurrent(client: PrismaClient | undefined): boolean {
   const user = (client as unknown as { user?: { findFirst?: unknown } } | undefined)?.user;
   return typeof user?.findFirst === "function";
 }
@@ -23,7 +23,7 @@ if (existing && !isClientCurrent(existing)) {
 }
 
 export const db: PrismaClient = isClientCurrent(globalForPrisma.prisma)
-  ? globalForPrisma.prisma
+  ? globalForPrisma.prisma!
   : createPrismaClient();
 
 if (process.env.NODE_ENV !== "production") {
