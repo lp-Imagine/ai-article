@@ -14,5 +14,13 @@ mkdir -p "$db_dir"
 echo "[entrypoint] Running Prisma migrations..."
 ./node_modules/.bin/prisma migrate deploy
 
-echo "[entrypoint] Starting application..."
+# 迁移以 root 执行，确保 SQLite 文件对 nextjs 用户可写
+if [ -n "$db_dir" ] && [ "$db_dir" != "." ]; then
+  chown -R nextjs:nodejs "$db_dir" 2>/dev/null || true
+fi
+if [ -f "$db_path" ]; then
+  chown nextjs:nodejs "$db_path" 2>/dev/null || true
+fi
+
+echo "[entrypoint] Starting application on PORT=${PORT:-3000}..."
 exec su-exec nextjs "$@"

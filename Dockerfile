@@ -21,8 +21,9 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+# Railway 会注入 PORT；本地默认 3000
+ENV PORT=3000
 
 RUN apk add --no-cache su-exec \
   && addgroup --system --gid 1001 nodejs \
