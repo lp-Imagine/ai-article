@@ -203,6 +203,24 @@ cd /www/ai-article && bash docker/deploy.sh
 ```bash
 cd /www/ai-article && SKIP_PULL=1 bash docker/deploy.sh
 ```
+
+### 开启 HTTPS（宝塔，推荐有域名）
+
+HTTPS 由 **宝塔 Nginx** 终结，容器仍只监听本机 `127.0.0.1:3000`。纯 IP（如 `http://101.43.95.33`）一般拿不到免费证书，需要先准备域名。
+
+1. **域名解析** — A 记录指向服务器公网 IP。
+2. **宝塔建站** — 网站 → 添加站点（填域名）；反向代理到 `http://127.0.0.1:3000`（可参考 [`docker/nginx-baota.conf.example`](docker/nginx-baota.conf.example)）。
+3. **申请证书** — 站点 → SSL → Let's Encrypt → 申请 → 开启「强制 HTTPS」。
+4. **开启 Secure Cookie** — 证书生效后重新跑部署（或只重建容器）：
+
+```bash
+cd /www/ai-article && COOKIE_SECURE=1 bash docker/deploy.sh
+```
+
+之后用 `https://你的域名` 访问；不要再用裸 IP 的 HTTP，否则 Secure Cookie 会失效。
+
+没有域名时：可继续用 HTTP，保持 `COOKIE_SECURE=0`（默认）；或自签证书（浏览器会提示不安全，一般不推荐）。
+
 ### 安全提示
 
 - 已内置账号登录 / 注册；文章与设置按用户隔离。默认超管：`admin` / `admin123`（可用环境变量 `SUPER_ADMIN_USERNAME` / `SUPER_ADMIN_PASSWORD` 覆盖）。

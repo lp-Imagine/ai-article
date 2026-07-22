@@ -147,4 +147,6 @@ docker ps --filter "name=$CONTAINER_NAME"
 echo
 docker logs "$CONTAINER_NAME" --tail 20
 echo
-echo "完成。浏览器刷新 http://你的IP 即可。"
+echo "完成。"
+echo "  HTTP：http://你的IP 或 http://你的域名"
+echo "  HTTPS 配好后请用：COOKIE_SECURE=1 bash docker/deploy.sh"

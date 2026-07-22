@@ -1,0 +1,30 @@
+# 宝塔「网站」→ 对应站点 → 配置文件 可参考以下反代片段。
+# 应用容器监听 127.0.0.1:3000，由 Nginx 对外提供 80/443。
+#
+# 域名解析到服务器后，在宝塔站点 SSL 页申请 Let's Encrypt 即可。
+# 申请成功后请强制 HTTPS，并用下面命令重新部署容器（开启 Secure Cookie）：
+#   COOKIE_SECURE=1 bash docker/deploy.sh
+
+server {
+    listen 80;
+    listen 443 ssl http2;
+    server_name your-domain.com;   # 改成你的域名
+
+    # SSL 证书由宝塔自动写入（申请 Let's Encrypt 后勿删）
+    # ssl_certificate     /www/server/panel/vhost/cert/your-domain.com/fullchain.pem;
+    # ssl_certificate_key /www/server/panel/vhost/cert/your-domain.com/privkey.pem;
+
+    client_max_body_size 20m;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 300s;
+    }
+}
