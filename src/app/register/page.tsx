@@ -1,14 +1,12 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Eye, EyeOff } from "lucide-react";
 import { AuthShell } from "@/components/auth-shell";
 import { SliderCaptcha } from "@/components/slider-captcha";
 import { markOnboardingPending } from "@/lib/onboarding";
 
 export default function RegisterPage() {
-  const router = useRouter();
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
@@ -30,6 +28,7 @@ export default function RegisterPage() {
       const res = await fetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
         body: JSON.stringify({
           username,
           password,
@@ -45,8 +44,7 @@ export default function RegisterPage() {
       if (json.data?.id) {
         markOnboardingPending(json.data.id);
       }
-      router.replace("/");
-      router.refresh();
+      window.location.assign("/");
     } catch {
       setError("网络错误，请重试");
       setCaptchaReset((n) => n + 1);

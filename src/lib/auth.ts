@@ -125,13 +125,21 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   };
 }
 
+export function sessionCookieSecure() {
+  const flag = process.env.COOKIE_SECURE?.trim().toLowerCase();
+  if (flag === "1" || flag === "true" || flag === "yes") return true;
+  if (flag === "0" || flag === "false" || flag === "no") return false;
+  // 默认不设 Secure：HTTP（IP / 宝塔反代未开 HTTPS）下浏览器会丢弃 Secure Cookie，导致登录后无法跳转
+  return false;
+}
+
 export function sessionCookieOptions(token: string, maxAgeSeconds = SESSION_DAYS * 24 * 60 * 60) {
   return {
     name: SESSION_COOKIE,
     value: token,
     httpOnly: true,
     sameSite: "lax" as const,
-    secure: process.env.NODE_ENV === "production",
+    secure: sessionCookieSecure(),
     path: "/",
     maxAge: maxAgeSeconds,
   };

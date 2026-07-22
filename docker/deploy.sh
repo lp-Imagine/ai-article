@@ -137,6 +137,7 @@ docker run -d \
   --restart unless-stopped \
   -p 127.0.0.1:3000:3000 \
   -e DATABASE_URL="file:/data/prod.db" \
+  -e COOKIE_SECURE="${COOKIE_SECURE:-0}" \
   -v "$DATA_DIR":/data \
   "$IMAGE_NAME"
 

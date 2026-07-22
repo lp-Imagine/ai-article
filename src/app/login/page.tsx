@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, Suspense, useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Eye, EyeOff, Check } from "lucide-react";
 import { AuthShell } from "@/components/auth-shell";
 import { SliderCaptcha } from "@/components/slider-captcha";
@@ -38,7 +38,6 @@ function writeRemembered(payload: RememberPayload | null) {
 }
 
 function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const next = searchParams.get("next") || "/";
 
@@ -74,6 +73,7 @@ function LoginForm() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
         body: JSON.stringify({ username, password, remember }),
       });
       const json = await res.json();
@@ -85,8 +85,9 @@ function LoginForm() {
 
       writeRemembered(remember ? { username, password } : null);
 
-      router.replace(next.startsWith("/") ? next : "/");
-      router.refresh();
+      // 整页跳转，确保中间件能读到刚写入的会话 Cookie
+      const target = next.startsWith("/") ? next : "/";
+      window.location.assign(target);
     } catch {
       setError("网络错误，请重试");
       setCaptchaReset((n) => n + 1);

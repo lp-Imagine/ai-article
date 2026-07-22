@@ -207,6 +207,7 @@ cd /www/ai-article && SKIP_PULL=1 bash docker/deploy.sh
 
 - 已内置账号登录 / 注册；文章与设置按用户隔离。默认超管：`admin` / `admin123`（可用环境变量 `SUPER_ADMIN_USERNAME` / `SUPER_ADMIN_PASSWORD` 覆盖）。
 - 用户管理页仅超级管理员可访问。
+- 用 **HTTP（IP）** 访问时不要设 `COOKIE_SECURE=1`，否则登录 Cookie 会被浏览器丢弃、看起来像「登录不跳转」。上 HTTPS 后再设 `COOKIE_SECURE=1`。
 - API Key、微信 Secret 请勿提交到 Git；使用环境变量或设置页配置（写入当前用户）。
 
 ## 开发说明
