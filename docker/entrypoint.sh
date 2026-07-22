@@ -12,7 +12,7 @@ db_dir="$(dirname "$db_path")"
 mkdir -p "$db_dir"
 
 echo "[entrypoint] Running Prisma migrations..."
-./node_modules/.bin/prisma migrate deploy
+node ./node_modules/prisma/build/index.js migrate deploy
 
 # 迁移以 root 执行，确保 SQLite 文件对 nextjs 用户可写
 if [ -n "$db_dir" ] && [ "$db_dir" != "." ]; then

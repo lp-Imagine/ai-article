@@ -16,6 +16,41 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN npx prisma generate
 RUN npm run build
 
+# Prisma CLI + transitive deps for `migrate deploy` in entrypoint
+FROM builder AS prisma-cli
+WORKDIR /app
+RUN node <<'EOF'
+const fs = require("fs");
+const path = require("path");
+const { execSync } = require("child_process");
+
+function collect(pkg, seen = new Set()) {
+  if (seen.has(pkg)) return seen;
+  seen.add(pkg);
+  const parts = pkg.startsWith("@") ? pkg.split("/") : [pkg];
+  const pkgJson = path.join("node_modules", ...parts, "package.json");
+  if (!fs.existsSync(pkgJson)) return seen;
+  const meta = JSON.parse(fs.readFileSync(pkgJson, "utf8"));
+  for (const dep of Object.keys({
+    ...(meta.dependencies || {}),
+    ...(meta.optionalDependencies || {}),
+  })) {
+    collect(dep, seen);
+  }
+  return seen;
+}
+
+fs.mkdirSync("/prisma-bundle/node_modules", { recursive: true });
+for (const pkg of collect("prisma")) {
+  const parts = pkg.startsWith("@") ? pkg.split("/") : [pkg];
+  const src = path.join("node_modules", ...parts);
+  const dest = path.join("/prisma-bundle/node_modules", ...parts);
+  if (!fs.existsSync(src)) continue;
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  execSync(`cp -r "${src}" "${dest}"`);
+}
+EOF
+
 FROM base AS runner
 WORKDIR /app
 
@@ -34,9 +69,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
-COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
+COPY --from=prisma-cli /prisma-bundle/node_modules/ ./node_modules/
 
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
