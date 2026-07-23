@@ -22,8 +22,11 @@ import { FieldLabel } from "@/components/app-shell";
 import { useToast } from "@/components/toast";
 import { ProgressDialog, type ProgressStep } from "@/components/progress-dialog";
 import {
+  ARTICLE_BACKGROUND_TASKS_CHANGED,
+  ARTICLE_BACKGROUND_TASK_FINISHED,
   clearArticleBackgroundTask,
   cancelArticleBackgroundTask,
+  emitArticleBackgroundTaskFinished,
   getArticleBackgroundTask,
   isArticleBackgroundTaskExpired,
   isOutlineBackgroundTaskLabel,
@@ -33,6 +36,7 @@ import {
   startArticleBackgroundTask,
   reconcileBackgroundTaskAfterRequestFailure,
   waitForGenerationJob,
+  type ArticleBackgroundTaskFinishedDetail,
 } from "@/lib/article-task-tracker";
 
 type PublishRecord = {
@@ -185,15 +189,55 @@ export default function ArticlePage({
 
   const refresh = useCallback(async () => {
     if (!id) return;
-    const res = await fetch(`/api/articles/${id}`, { cache: "no-store" });
+    const res = await fetch(`/api/articles/${id}?t=${Date.now()}`, { cache: "no-store" });
     const json = (await res.json()) as ApiResponse<ArticleRecord>;
     if (json.code === 0 && json.data) {
       setArticle(json.data);
+      if (json.data.selectedOutlineIndex != null) {
+        setActiveOutlineView(json.data.selectedOutlineIndex);
+      }
     } else {
       toast.show({ message: json.message || "文章不存在", variant: "error" });
     }
     setLoading(false);
   }, [id, toast]);
+
+  // 首页/其它页清掉任务时，详情页必须主动拉最新文章，否则弹窗关了内容还是旧的
+  useEffect(() => {
+    if (!id) return;
+
+    const onFinished = (event: Event) => {
+      const detail = (event as CustomEvent<ArticleBackgroundTaskFinishedDetail>).detail;
+      if (!detail || detail.articleId !== id) return;
+      if (abortRef.current) return; // callAction 自己会 refresh
+
+      void (async () => {
+        await refresh();
+        if (!mountedRef.current) return;
+        setBusy(null);
+        if (detail.status === "succeeded") {
+          setProgress((p) =>
+            p.open
+              ? {
+                  ...p,
+                  error: null,
+                  generatedCount: p.totalCount ?? 1,
+                  steps: p.steps.map((s) => ({ ...s, status: "done" as const })),
+                }
+              : p,
+          );
+          window.setTimeout(() => {
+            if (mountedRef.current) setProgress(resetProgressState());
+          }, 800);
+        } else {
+          setProgress(resetProgressState());
+        }
+      })();
+    };
+
+    window.addEventListener(ARTICLE_BACKGROUND_TASK_FINISHED, onFinished);
+    return () => window.removeEventListener(ARTICLE_BACKGROUND_TASK_FINISHED, onFinished);
+  }, [id, refresh, resetProgressState]);
 
   async function fetchPushHistory() {
     try {
@@ -260,98 +304,172 @@ export default function ArticlePage({
   }, []);
 
   useEffect(() => {
-    if (!id || loading || abortRef.current) return;
-
-    const task = getArticleBackgroundTask(id);
-    if (!task) return;
-
-    if (isArticleBackgroundTaskExpired(task)) {
-      clearArticleBackgroundTask(id);
-      return;
-    }
+    if (!id || loading) return;
+    // 当前页已有 callAction 在轮询时，避免双重恢复逻辑抢状态
+    if (abortRef.current) return;
 
     let stopped = false;
     let uiShown = false;
+    let finishing = false;
 
-    const resumeProgressUi = () => {
-      if (uiShown) return;
-      uiShown = true;
-      setProgressKey((key) => key + 1);
-      setProgress({
+    const closeResumeUi = () => {
+      if (!mountedRef.current) return;
+      setBusy(null);
+      setProgress(resetProgressState());
+    };
+
+    const resumeProgressUi = (task: NonNullable<ReturnType<typeof getArticleBackgroundTask>>) => {
+      if (!mountedRef.current) return;
+      if (!uiShown) {
+        uiShown = true;
+        setProgressKey((key) => key + 1);
+        setProgress({
+          open: true,
+          title: task.title,
+          steps: [
+            { label: "准备工作", status: "done" },
+            {
+              label: isOutlineBackgroundTaskLabel(task.label)
+                ? "正在生成大纲方案"
+                : task.label === "生成章节配图"
+                  ? "正在生成配图"
+                  : "调用 AI 生成中",
+              status: "running",
+            },
+            { label: "保存到草稿", status: "pending" },
+          ],
+          generatedCount: 0,
+          totalCount: 1,
+          error: null,
+          startedAt: task.startedAt,
+        });
+      }
+      setBusy((current) => current ?? task.label);
+    };
+
+    const finishSucceeded = async (label: string) => {
+      if (finishing) return;
+      finishing = true;
+      clearArticleBackgroundTask(id);
+      try {
+        await refresh();
+      } catch {
+        // ignore refresh errors; still close UI
+      }
+      if (!mountedRef.current) return;
+      setProgress((p) => ({
+        ...p,
         open: true,
-        title: task.title,
-        steps: [
-          { label: "准备工作", status: "done" },
-          {
-            label: isOutlineBackgroundTaskLabel(task.label)
-              ? "正在生成大纲方案"
-              : task.label === "生成章节配图"
-                ? "正在生成配图"
-                : "调用 AI 生成中",
-            status: "running",
-          },
-          { label: "保存到草稿", status: "pending" },
-        ],
-        generatedCount: 0,
-        totalCount: 1,
+        generatedCount: p.totalCount ?? 1,
         error: null,
-        startedAt: task.startedAt,
+        steps: (p.steps.length
+          ? p.steps
+          : [
+              { label: "准备工作", status: "done" as const },
+              { label: label, status: "done" as const },
+              { label: "保存到草稿", status: "done" as const },
+            ]
+        ).map((s) => ({ ...s, status: "done" as const })),
+      }));
+      setBusy(null);
+      toast.show({
+        title: "后台任务已完成",
+        message: `${label}已完成`,
+        variant: "success",
       });
-      setBusy(task.label);
+      window.setTimeout(() => {
+        if (mountedRef.current) setProgress(resetProgressState());
+      }, 800);
+    };
+
+    const finishFailed = (label: string, message: string) => {
+      if (finishing) return;
+      finishing = true;
+      clearArticleBackgroundTask(id);
+      if (!mountedRef.current) return;
+      setBusy(null);
+      setProgress((p) => ({
+        ...p,
+        open: true,
+        error: message,
+        steps: p.steps.map((s) =>
+          s.status === "running" ? { ...s, status: "error" as const } : s,
+        ),
+      }));
+      toast.show({
+        title: "后台任务失败",
+        message,
+        variant: "error",
+      });
+      window.setTimeout(() => {
+        if (mountedRef.current) setProgress(resetProgressState());
+      }, 2000);
     };
 
     const poll = async () => {
+      if (stopped || finishing || abortRef.current) return;
+
+      const task = getArticleBackgroundTask(id);
+      if (!task) {
+        // 首页等外部已清掉任务：关掉弹窗并补一次刷新（finished 事件可能早于监听）
+        if (uiShown && !finishing) {
+          finishing = true;
+          try {
+            await refresh();
+          } catch {
+            // ignore
+          }
+          closeResumeUi();
+        }
+        return;
+      }
+
+      if (isArticleBackgroundTaskExpired(task)) {
+        clearArticleBackgroundTask(id);
+        closeResumeUi();
+        return;
+      }
+
       try {
-        if (task.jobId) {
-          const { fetchGenerationJob } = await import("@/lib/article-task-tracker");
-          const job = await fetchGenerationJob(task.jobId);
-          if (stopped || !job) return;
-
-          if (job.status === "succeeded") {
-            clearArticleBackgroundTask(id);
-            const res = await fetch(`/api/articles/${id}?t=${Date.now()}`, { cache: "no-store" });
-            const json = (await res.json()) as ApiResponse<ArticleRecord>;
-            if (!mountedRef.current) return;
-            if (json.code === 0 && json.data) setArticle(json.data);
-            setBusy(null);
-            setProgress(resetProgressState());
-            toast.show({
-              title: "后台任务已完成",
-              message: `${task.label}已完成`,
-              variant: "success",
-            });
-            return;
-          }
-
-          if (job.status === "failed" || job.status === "cancelled") {
-            clearArticleBackgroundTask(id);
-            if (!mountedRef.current) return;
-            setBusy(null);
-            setProgress(resetProgressState());
-            toast.show({
-              title: "后台任务失败",
-              message: job.error || `${task.label}失败`,
-              variant: "error",
-            });
-            return;
-          }
-
-          if (mountedRef.current) {
-            resumeProgressUi();
-            setProgress((p) => ({
-              ...p,
-              steps: p.steps.map((s, i) =>
-                i === 1
-                  ? { ...s, status: "running", label: job.stepLabel || s.label }
-                  : s,
-              ),
-            }));
-          }
+        if (!task.jobId) {
+          // jobId 可能稍后由首页 patch 进来，先展示进度并继续等
+          resumeProgressUi(task);
           return;
         }
 
-        // 无 jobId 的旧任务：仅展示进度，完成后由浮标/手动刷新
-        if (mountedRef.current) resumeProgressUi();
+        const { fetchGenerationJob } = await import("@/lib/article-task-tracker");
+        const job = await fetchGenerationJob(task.jobId);
+        if (stopped || finishing || abortRef.current) return;
+        if (!job) return;
+
+        if (job.status === "succeeded") {
+          await finishSucceeded(task.label);
+          return;
+        }
+
+        if (job.status === "failed" || job.status === "cancelled") {
+          finishFailed(task.label, job.error || `${task.label}失败`);
+          return;
+        }
+
+        resumeProgressUi(task);
+        if (!mountedRef.current) return;
+        setProgress((p) => ({
+          ...p,
+          open: true,
+          startedAt: p.startedAt ?? task.startedAt,
+          generatedCount:
+            typeof job.progress === "number"
+              ? Math.round((job.progress / 100) * Math.max(1, p.totalCount ?? 1))
+              : p.generatedCount,
+          steps: p.steps.map((s, i) =>
+            i === 1
+              ? { ...s, status: "running", label: job.stepLabel || s.label }
+              : i === 2 && job.progress >= 85
+                ? { ...s, status: "running" }
+                : s,
+          ),
+        }));
       } catch {
         // ignore transient poll errors
       }
@@ -362,11 +480,17 @@ export default function ArticlePage({
       void poll();
     }, 2000);
 
+    const onTasksChanged = () => {
+      void poll();
+    };
+    window.addEventListener(ARTICLE_BACKGROUND_TASKS_CHANGED, onTasksChanged);
+
     return () => {
       stopped = true;
       clearInterval(timer);
+      window.removeEventListener(ARTICLE_BACKGROUND_TASKS_CHANGED, onTasksChanged);
     };
-  }, [id, loading, busy, toast, resetProgressState]);
+  }, [id, loading, toast, resetProgressState, refresh]);
 
   function cancelCurrent() {
     cancelArticleBackgroundTask(id);
@@ -689,6 +813,10 @@ export default function ArticlePage({
           signal: ctrl.signal,
           onProgress: (snap) => {
             if (!mountedRef.current) return;
+            const terminal =
+              snap.status === "succeeded" ||
+              snap.status === "failed" ||
+              snap.status === "cancelled";
             setProgress((p) => ({
               ...p,
               generatedCount:
@@ -696,6 +824,15 @@ export default function ArticlePage({
                   ? Math.round((snap.progress / 100) * Math.max(1, p.totalCount ?? 1))
                   : p.generatedCount,
               steps: p.steps.map((s, i) => {
+                if (terminal) {
+                  if (snap.status === "succeeded") {
+                    return { ...s, status: "done" as const };
+                  }
+                  if (i === 1 || s.status === "running") {
+                    return { ...s, status: "error" as const };
+                  }
+                  return s;
+                }
                 if (i === 1) {
                   return {
                     ...s,
@@ -733,6 +870,11 @@ export default function ArticlePage({
         }
 
         clearArticleBackgroundTask(id);
+        emitArticleBackgroundTaskFinished({
+          articleId: id,
+          label,
+          status: "succeeded",
+        });
         await refresh();
 
         if (!mountedRef.current) return;

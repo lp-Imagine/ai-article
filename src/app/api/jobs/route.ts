@@ -19,6 +19,18 @@ export async function GET(request: Request) {
     },
     orderBy: { createdAt: "desc" },
     take: 50,
+    select: {
+      id: true,
+      articleId: true,
+      type: true,
+      status: true,
+      progress: true,
+      stepLabel: true,
+      error: true,
+      createdAt: true,
+      startedAt: true,
+      finishedAt: true,
+    },
   });
 
   return NextResponse.json({

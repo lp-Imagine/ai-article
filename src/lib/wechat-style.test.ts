@@ -129,6 +129,19 @@ describe("convertToWechatHtml", () => {
     expect(wechat).not.toMatch(/figcaption/i);
     expect(wechat).toMatch(/<img[^>]+example\.com\/a\.jpg/i);
   });
+
+  it("renders hr as a text-only WeChat-safe divider (no table boxes)", () => {
+    const wechat = convertToWechatHtml("<p>上</p><hr /><h2>下</h2>");
+
+    expect(wechat).not.toMatch(/<hr/i);
+    expect(wechat).not.toMatch(/<table/i);
+    expect(wechat).not.toMatch(/border-bottom/i);
+    expect(wechat).not.toMatch(/position:\s*(absolute|relative)/i);
+    expect(wechat).not.toMatch(/linear-gradient/i);
+    expect(wechat).toContain("✦");
+    expect(wechat).toContain("────────");
+    expect(wechat).toContain("#b9a88c");
+  });
 });
 
 describe("normalizeArticleMarkup", () => {

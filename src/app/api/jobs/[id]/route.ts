@@ -13,6 +13,18 @@ export async function GET(
 
   const job = await db.generationJob.findFirst({
     where: { id, userId: user.id },
+    select: {
+      id: true,
+      articleId: true,
+      type: true,
+      status: true,
+      progress: true,
+      stepLabel: true,
+      error: true,
+      createdAt: true,
+      startedAt: true,
+      finishedAt: true,
+    },
   });
   if (!job) return notFound("任务不存在");
 

@@ -2717,21 +2717,41 @@ textarea::placeholder {
 .mp-preview hr {
   border: none;
   margin: 36px 0;
+  height: 20px;
+  background: none;
   position: relative;
+  overflow: visible;
+}
+
+/* 暖色渐隐细线 + 中心星点（预览）。推送见 wechat-style table 实现 */
+.mp-preview hr::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
   height: 1px;
-  background: linear-gradient(to right, transparent, #d4c9b0 15%, #d4c9b0 85%, transparent);
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    #d9ceb8 18%,
+    #d9ceb8 82%,
+    transparent 100%
+  );
 }
 
 .mp-preview hr::after {
   content: "✦";
   position: absolute;
-  top: -10px;
   left: 50%;
-  transform: translateX(-50%);
+  top: 50%;
+  transform: translate(-50%, -50%);
   background: #ffffff;
-  padding: 0 16px;
-  color: #c2b89e;
-  font-size: 14px;
+  padding: 0 14px;
+  color: #b9a88c;
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.12em;
 }
 
 /* ====== 列表（标题+说明卡片） ====== */

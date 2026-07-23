@@ -8,6 +8,7 @@ import { FieldLabel, PageHeader, SectionCard } from "@/components/app-shell";
 import { useToast } from "@/components/toast";
 import {
   clearArticleBackgroundTask,
+  emitArticleBackgroundTaskFinished,
   getArticleBackgroundTask,
   patchArticleBackgroundTask,
   reconcileBackgroundTaskAfterRequestFailure,
@@ -143,6 +144,11 @@ export default function HomePage() {
         })
         .then(() => {
           clearArticleBackgroundTask(articleId);
+          emitArticleBackgroundTaskFinished({
+            articleId,
+            label: "生成大纲",
+            status: "succeeded",
+          });
           unregisterArticleTaskAbortController(articleId, ctrl);
         })
         .catch(async (err) => {
@@ -157,6 +163,11 @@ export default function HomePage() {
             const outcome = await reconcileBackgroundTaskAfterRequestFailure(task);
             if (outcome === "completed") {
               clearArticleBackgroundTask(articleId);
+              emitArticleBackgroundTaskFinished({
+                articleId,
+                label: "生成大纲",
+                status: "succeeded",
+              });
               return;
             }
             if (outcome === "pending") {
@@ -166,6 +177,12 @@ export default function HomePage() {
 
           clearArticleBackgroundTask(articleId);
           const message = err instanceof Error ? err.message : "生成大纲失败";
+          emitArticleBackgroundTaskFinished({
+            articleId,
+            label: "生成大纲",
+            status: "failed",
+            error: message,
+          });
           toast.show({ title: "生成大纲失败", message, variant: "error", duration: 6000 });
         });
 
@@ -199,7 +216,7 @@ export default function HomePage() {
         <div data-tour="home-create">
         <SectionCard
           title="快速开始"
-          description="填一个主题，先让 AI 给出 2 到 3 个大纲方案，确定方向后再生成正文。"
+          description="填一个主题，先让 AI 按你选的数量给出大纲方案，确定方向后再生成正文。"
           className="home-create-card"
         >
           <form className="home-create-form space-y-6" onSubmit={handleSubmit}>

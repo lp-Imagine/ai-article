@@ -707,12 +707,13 @@ export function convertToWechatHtml(html: string): string {
 
   // ====== 6. strong 加粗（移至末尾再次统一处理，此处跳过）======
 
-  // ====== 7. hr 分隔线 → 带装饰文本的分隔线 ======
+  // ====== 7. hr 分隔线 → 纯文字「线 + ✦ + 线」（不用 table，避免微信画出单元格方框）======
   result = result.replace(/<hr\s*\/?>/gi, () => {
     return (
-      `<section style="text-align:center;margin:36px 0;color:#c2b89e;font-size:14px;line-height:1;">` +
-      `<span style="display:inline-block;width:100%;height:1px;background-color:#d4c9b0;vertical-align:middle;"></span>` +
-      `<span style="display:inline-block;position:relative;top:-10px;background:#fff;padding:0 16px;">✦</span>` +
+      `<section style="margin:36px 0;text-align:center;line-height:1;font-size:0;">` +
+      `<span style="display:inline-block;color:#d4c9b0;font-size:12px;letter-spacing:-2px;line-height:1;vertical-align:middle;">────────</span>` +
+      `<span style="display:inline-block;color:#b9a88c;font-size:11px;line-height:1;vertical-align:middle;padding:0 12px;letter-spacing:0;">✦</span>` +
+      `<span style="display:inline-block;color:#d4c9b0;font-size:12px;letter-spacing:-2px;line-height:1;vertical-align:middle;">────────</span>` +
       `</section>`
     );
   });

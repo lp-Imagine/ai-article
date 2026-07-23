@@ -85,31 +85,56 @@ async function callChat(
     return null;
   }
 
-  const res = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature: 0.7,
-      max_tokens: maxTokens,
-      response_format: jsonMode ? { type: "json_object" } : undefined,
-    }),
-  });
+  const timeoutMs = getLlmTimeoutMs(role);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  if (!res.ok) {
-    const errBody = await res.text();
-    throw new Error(`LLM request failed: ${res.status} ${errBody.slice(0, 200)}`);
+  try {
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature: 0.7,
+        max_tokens: maxTokens,
+        response_format: jsonMode ? { type: "json_object" } : undefined,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const errBody = await res.text();
+      throw new Error(`LLM request failed: ${res.status} ${errBody.slice(0, 200)}`);
+    }
+
+    const json = (await res.json()) as {
+      choices: { message: { content: string } }[];
+    };
+
+    return json.choices[0]?.message?.content ?? "";
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(
+        `LLM 请求超时（${Math.round(timeoutMs / 1000)} 秒）。请检查模型服务/网络后重试；大纲一般应在 1～2 分钟内返回。`,
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
+}
 
-  const json = (await res.json()) as {
-    choices: { message: { content: string } }[];
-  };
-
-  return json.choices[0]?.message?.content ?? "";
+function getLlmTimeoutMs(role: TextRole): number {
+  const raw = Number(process.env.LLM_REQUEST_TIMEOUT_MS ?? "");
+  if (Number.isFinite(raw) && raw > 0) return Math.floor(raw);
+  // 工程长主题 + 多套大纲时，模型常需 2～5 分钟；超时过紧会误杀
+  if (role === "content" || role === "polish" || role === "expand") return 480_000; // 8 分钟
+  if (role === "outline") return 420_000; // 7 分钟
+  return 180_000; // 其它短任务 3 分钟
 }
 
 function safeParse<T>(value: string | null, fallback: T): T {
@@ -159,11 +184,115 @@ function buildDomainAdaptationBlock(): string {
   return (
     `【领域适配（通用，跨行业）】\n` +
     `- **主题决定领域**：写什么由用户输入的主题/关键词决定，不要默认所有文章都是技术文或职场文\n` +
-    `- 技术/编程类：可用代码示例、架构拆解、工程踩坑；术语用 <code> 标注\n` +
-    `- 产品/商业/成长/生活类：用场景、决策过程、具体数字或现象；少堆代码，多讲「为什么这样选」\n` +
-    `- 同一套写作标准适用所有领域：具体、可信、有层次、不夸夸其谈\n` +
+    `- 技术/编程类：以可运行代码、接口约定、边界与踩坑为主；术语用 <code> 标注；少写「意义/趋势」空话\n` +
+    `- 产品/商业类：用决策过程、对比选项、具体数字或结果；少堆术语正确但无用的正确废话\n` +
+    `- 成长/生活/科普类：用可核对的场景、人物动作、前后对比；道理从事实里长出来，不要先贴标签再硬凑例子\n` +
     `- 判断领域时看主题语义，不看账号名称`
   );
+}
+
+/** 从主题/关键词判断是否工程实现向（组件封装、上传、API 等） */
+function isEngineeringTopic(topic: string, keywords?: string | null): boolean {
+  const text = `${topic} ${keywords ?? ""}`.toLowerCase();
+  const signals = [
+    /前端|后端|全栈|工程|封装|组件|hooks?|react|vue|angular|svelte|typescript|javascript|node\.?js/,
+    /上传|下载|分片|断点续传|并发|sdk|api|接口|cli|docker|k8s|数据库|sql|redis/,
+    /代码|源码|实现|重构|架构|中间件|插件|npm|webpack|vite|bundler|css|html/,
+    /component|upload|chunk|resume|typescript|javascript|python|golang|rust|java/,
+  ];
+  return signals.some((re) => re.test(text));
+}
+
+function buildOnTopicBlock(topic: string, keywords?: string | null): string {
+  const kw = parseKeywords(keywords);
+  const kwHint = kw.length > 0 ? `关键词（可自然融入，勿生硬堆砌）：${kw.join("、")}` : "无额外关键词";
+  return `
+【紧扣主题（硬性）】
+- 用户主题是写作边界的圆心：「${topic}」。可以在主题内深挖、举例、对比、拆步骤，**禁止跑到无关赛道**
+- ${kwHint}
+- 允许扩展：同一主题下的前置条件、边界情况、常见误区、可执行下一步——但每段读完应能回答「这和主题有什么关系」
+- 禁止借题发挥：不要用主题当引子，后文滑向成功学、行业趋势、空洞励志或账号人设广告
+- 若某章节写着写着偏了：删掉偏题部分，回到主题的一个具体问题
+`.trim();
+}
+
+function buildEvidenceBlock(engineering: boolean): string {
+  if (engineering) {
+    return `
+【论据与干货（工程向）】
+- 凡主张「该怎么做」，必须落到代码、接口字段、状态、命令或可复现步骤之一
+- 禁止只有「要注意并发 / 要做好封装」这类正确但无法下手的句子；要么给代码/伪代码，要么给检查清单
+- 案例优先写「我当时怎么做的 / 错在哪 / 改完长什么样」，少写「业界普遍认为」
+`.trim();
+  }
+  return `
+【论据与干货（通用）】
+- 凡给出建议、判断、方法，至少配一种支撑：具体案例、前后对比、可核对数字、对话/场景片段、步骤清单
+- 科普/生活/观点文不要求代码；但**不能只有定义和态度**——读者读完要带走能用的东西（怎么判断、怎么试、会踩什么坑）
+- 若某章偏实践（教程、操作、避坑）：必须有可跟随步骤或真实情境，禁止纯概念铺陈
+- 若某章偏认知（观点、科普）：用一个具体现象/故事钉住论点，再讲机制；不要反过来先空讲大词
+`.trim();
+}
+
+function buildQualityArticleBlock(): string {
+  return `
+【向优质文章靠拢（写作标准）】
+优质公众号/专栏常见共性，请按此自检：
+1. **一句主线**：全文只打穿一个核心问题；小节都是主线的分支，不是百科条目拼盘
+2. **先问题后展开**：开篇直接点出读者真正卡的问题或核心结论，再展开概念（需要多少讲多少）；不要用虚构闲聊铺垫
+3. **信息密度**：删掉后不影响理解的句子一律删；同一意思不换词再说一遍
+4. **可感知细节**：时间、数量、报错原文、界面状态、代码行为——比「很重要/很关键」更有说服力
+5. **诚实边界**：写清适用条件与做不到的部分；夸大承诺会立刻像营销稿
+6. **结尾给带走物**：一个可执行动作、一张检查表、或一个判断标准——不要升华成口号
+
+禁止的空洞写法：
+- 只抛概念不下定义也不举例
+- 「本质上是认知问题」「关键在于体系化」却不说具体改哪一步
+- 排比正确废话、假装深刻的对立（旧时代 vs 新时代）却无事实
+- 用「和朋友聊天 / 有人问我 / 上周同事说」这类虚构闲聊当万能开头
+`.trim();
+}
+
+function buildEngineeringOutlineBlock(enabled: boolean): string {
+  if (!enabled) return "";
+  return `
+【工程/封装类主题——大纲硬性要求】
+- 标题若含「实战 / 手册 / 封装 / 手把手 / 从 0 到 1」，章节必须对应**可交付物**（接口、代码片段、目录结构、边界用例），禁止只有概念章节
+- 至少 3 个章节的 summary 要写清「本章会给出什么」：如 Props 设计、分片队列伪代码、错误码表、断点续传时序——不要写「全面介绍XXX」
+- 禁止整篇大纲落成：重要性 → 原理 → 方法论 → 注意事项 → 总结（教科书骨架）
+- 鼓励差异化骨架（可混用，勿套固定句式）：
+  · 先接口后实现（对外 API → 内部状态机 → 边界）
+  · 先翻车后正解（真实坑 → 根因 → 最终实现）
+  · 最小可用切片（先跑通一条路径，再补并发/续传）
+  · 对比选型（原生 / 库 / 自研，各给一段关键代码）
+- 章节标题要像工程师笔记：可含具体名词（\`File\`、\`Blob\`、\`concurrent\`、\`etag\`），少用「赋能认知」「底层逻辑」
+`.trim();
+}
+
+function buildEngineeringContentBlock(enabled: boolean): string {
+  if (!enabled) return "";
+  return `
+【工程/封装类主题——正文硬性要求】
+- **标题承诺必须兑现**：标题/大纲写「实战、手册、封装」，正文必须有可运行或可粘贴的代码；禁止通篇概念与鸡汤
+- **代码量**：全文至少 **2** 个 \`<pre><code>\` 代码块（建议 TypeScript/JS）；至少 1 个展示核心 API 或关键流程（≥8 行）
+- **少说多写**：用代码、类型定义、调用示例代替「首先要理解…」「本质上是…」长段空论
+- 每个涉及实现的 <h2>：先给一段可落地的代码或接口，再用 1-2 段说明「为什么这样写 / 边界」
+- 允许省略完整工程脚手架，但关键逻辑（分片、并发池、重试、进度、取消）必须有代码或清晰伪代码
+- 禁止用「步骤一/二/三」空壳凑字：每一步都要落到函数名、参数或状态字段
+- 若字数与信息密度冲突：**优先信息密度**，宁可略短，也不要注水重复
+`.trim();
+}
+
+function buildAntiAiVoiceBlock(): string {
+  return `
+【去 AI 腔与夸夸其谈（硬性）】
+- 禁止套话：在当今/随着…发展/赋能/抓手/闭环/底层逻辑/降维/颗粒度/对齐/沉淀方法论/打造闭环/深度思考
+- 禁止每个大纲都长成：痛点引入 → 三大误解 → 三步方法论 → 注意事项 → 总结（换词不算创新）
+- 标题禁止批量套用同一公式；「XXX实战手册」最多在全部方案里出现 1 次，且该方案必须可落地
+- 少用抽象形容词（赋能、卓越、全面、系统性）；改用可观察事实
+- 允许不完美与取舍：真实感强于完美教条
+- **禁止「闲聊代入」开篇模板**：如「周一/上周和一个朋友聊天」「同事问我」「有读者留言说最近在XXX上花了很多时间，进展却不大」——再接「方向对但顺序要调整」这类万能转折
+`.trim();
 }
 
 function buildStyleGuide(style: string): string {
@@ -185,9 +314,9 @@ function buildStyleGuide(style: string): string {
     default:
       return (
         `【风格：干货型】\n` +
-        `- 结构清晰，读者扫读即可抓到方法\n` +
-        `- 步骤、清单、对比优先；理论点到为止\n` +
-        `- 每个建议尽量可执行、可验证`
+        `- 结构清晰，扫读能抓到可执行点\n` +
+        `- 步骤、清单、对比、代码优先；概念点到为止\n` +
+        `- 每个建议尽量可验证；技术文用接口/代码作证，非技术文用场景/数字作证`
       );
   }
 }
@@ -379,6 +508,7 @@ export async function generateOutline(input: {
   const audience = input.audience || "公众号读者";
   const wordCount = input.wordCount || 1200;
   const count = Math.min(6, Math.max(2, input.outlineCount ?? 3));
+  const engineering = isEngineeringTopic(input.topic, input.keywords);
 
   // 根据字数决定每个大纲的章节数
   const sectionCount =
@@ -390,49 +520,51 @@ export async function generateOutline(input: {
   const prompt: ChatMessage[] = [
     {
       role: "system",
-      content: `你是一位资深公众号主编，擅长策划高打开率和高完读率的文章。请基于用户输入，生成 ${count} 个互不相同的大纲方案。
+      content: `你是一位资深公众号主编：既懂选题策划，也懂「读者为什么愿意读完」。请基于用户输入生成 ${count} 个**真正不同骨架**的大纲——不是同一篇文章换标题。
 
 ${buildDomainAdaptationBlock()}
 
 ${buildAccountPersonaBlock()}
 
+${buildOnTopicBlock(input.topic, input.keywords)}
+
+${buildQualityArticleBlock()}
+
+${buildEvidenceBlock(engineering)}
+
+${buildAntiAiVoiceBlock()}
+
+${buildEngineeringOutlineBlock(engineering)}
+
 【核心要求】
-- 每个大纲必须有鲜明差异：不同的切入角度、不同的叙事节奏、不同的说服策略
-- 方案之间要有「选 A 还是选 B」的张力，而不是同一个骨架换了几个词
-- 目标读者：${audience}，写作风格：${style}，文章目标：${input.goal?.trim() || "知识分享"}，目标字数：${wordCount} 字
-- 大纲面向真实可信的内容，不做夸大承诺，不用绝对化表述
+- 方案之间要有选题张力（选 A 还是选 B），禁止同一骨架换词
+- 每个方案仍必须服务同一主题「${input.topic}」，差异在切入角与论证路径，不在换赛道
+- 目标读者：${audience}，写作风格：${style}，文章目标：${input.goal?.trim() || "知识分享"}，目标字数：约 ${wordCount} 字
+- 内容真实可信，不做夸大承诺
 
 ${buildStyleGuide(style)}
 
 【标题要求】
-- 每个大纲 title 简洁有力，含核心关键词，不超过 20 字
-- 用具体信息或真实疑问吸引点击，禁止标题党、震惊体、虚假承诺
-- 每个 title 来自不同范式，禁止重复使用同一范式：
-1. 悬念/提问型——如「为什么你做不好XXX」「XXX的真正瓶颈是什么」
-2. 数字清单型——如「XXX的 3 个反直觉真相」「5 个让你效率翻倍的XXX技巧」
-3. 对比/反差型——如「会XXX的人 vs 不会XXX的人，差距在哪里」
-4. 场景代入型——如「如果你也在为XXX焦虑，这篇文章是写给你的」
-5. 方法论/指南型——如「XXX实战手册：从入门到精通」「一份可复制的XXX行动方案」
-6. 观点/态度型——如「我用了 3 年才明白：XXX根本不是你想的那样」
-标题语言要自然、有呼吸感，避免「：」冒号模板句式堆砌。
+- 每个 title ≤ 20 字，含主题关键词；自然口语或笔记感均可
+- 禁止标题党、震惊体；少用「：从入门到精通」冒号模板
+- **不要**硬套「悬念/数字/对比/场景/手册/态度」六种公式；${count} 个标题句式与切入点必须不同
+- 实践向标题必须能对应后文干货（代码/步骤/案例），禁止空喊「实战手册」
 
 【章节要求】
-- 每个大纲的章节标题避免教科书式（「什么是XXX」「XXX的重要性」）
-- 优先：设问句、动作引导、具体场景、反常识判断
-- 章节之间逻辑递进，**各章 summary 不得重叠**——每章只负责一个独立子问题，不写「换个说法的同一观点」
-- sections 每项 summary 用一句话说明「本章新增什么信息」，禁止写「全面介绍XXX」
+- 每个大纲约 ${sectionCount} 个章节；heading 避免「什么是XXX」「XXX的重要性」「总结与展望」
+- 优先：具体问题、可验证动作、案例现场、对比取舍
+- 各章 summary **不得重叠**：写清本章**新增的信息或交付物**（读者读完能带走什么），禁止「全面介绍」
+- 至少一半章节的 summary 应暗示「有案例 / 有步骤 / 有代码或清单」中的一种（按领域选）
+- positioning：15-30 字，说明适合谁、偏认知还是偏动手
 
 【输出格式】
-JSON 数组，每个元素包含：
-- title: 文章标题（简洁有力，含核心关键词，不超过 20 字）
-- positioning: 一句话说明这个方案的定位和适合什么类型的读者（15-30 字）
-- sections: 章节数组，每项 { heading: string, summary: string }
-输出 { "outlines": [...] }`,
+- **必须恰好返回 ${count} 个大纲**（outlines 数组长度 = ${count}），少一个都不合格；禁止只给 2～3 个就收工
+- JSON：{ "outlines": [ { "title", "positioning", "sections": [ { "heading", "summary" } ] } ] }`,
     },
     {
       role: "user",
-      content: JSON.stringify(
-        buildWritingUserPayload({
+      content: JSON.stringify({
+        ...buildWritingUserPayload({
           topic: input.topic,
           style,
           wordCount,
@@ -442,11 +574,16 @@ JSON 数组，每个元素包含：
           outlineCount: count,
           sectionsPerOutline: sectionCount,
         }),
-      ),
+        contentMode: engineering ? "engineering-hands-on" : "general",
+        mustIncludeCodeInArticle: engineering,
+        requiredOutlineCount: count,
+      }),
     },
   ];
 
-  const raw = await callChat(prompt, { jsonMode: true, maxTokens: 2048, role: "outline" });
+  // 6 套 × 多章节时 2048 很容易截断，模型会提前收工只吐 3 个
+  const maxTokens = Math.min(8192, 1600 + count * sectionCount * 220);
+  const raw = await callChat(prompt, { jsonMode: true, maxTokens, role: "outline" });
   const parsed = safeParse<{ outlines?: OutlineOption[] }>(raw, {});
 
   if (parsed.outlines && parsed.outlines.length > 0) {
@@ -461,7 +598,7 @@ JSON 数组，每个元素包含：
     }));
   }
 
-  return buildFallbackOutlines(input.topic, style, audience, wordCount, count);
+  return buildFallbackOutlines(input.topic, style, audience, wordCount, count, engineering);
 }
 
 function buildFallbackOutlines(
@@ -470,12 +607,97 @@ function buildFallbackOutlines(
   audience: string,
   wordCount: number,
   count: number = 3,
+  engineering = false,
 ): OutlineOption[] {
   const sectionCount =
     wordCount <= 1200 ? 3 :
     wordCount <= 2000 ? 4 :
     wordCount <= 3000 ? 5 :
     6;
+
+  if (engineering) {
+    const engOptions: OutlineOption[] = [
+      {
+        index: 0,
+        title: `从 Props 倒推：${topic}怎么封才好用`,
+        positioning: `偏接口设计，适合准备封装组件的同学。`,
+        sections: [
+          { heading: "先定对外契约：value / onChange / 进度与取消", summary: "给出 Props/事件类型草案，明确受控与非受控。" },
+          { heading: "内部状态机：idle → hashing → uploading → done", summary: "用状态枚举约束 UI 与请求时机。" },
+          { heading: "最小上传通路：单文件直传先跑通", summary: "一段可运行的 fetch/XHR 示例，不含分片。" },
+          { heading: "再加分片与并发池", summary: "队列 + 并发上限代码，说明为何不能无脑 Promise.all。" },
+          { heading: "断点与失败重试的边界表", summary: "列出网络中断、419、blob 变更等用例与处理。" },
+          { heading: "文档与示例：三行就能用的 README", summary: "最小用法与进阶配置对照。" },
+        ].slice(0, sectionCount),
+      },
+      {
+        index: 1,
+        title: `${topic}：我被并发打挂浏览器之后`,
+        positioning: `踩坑叙事 + 代码修正，适合有过上传翻车的读者。`,
+        sections: [
+          { heading: "翻车现场：同时拖 20 个大文件发生了什么", summary: "描述卡顿/内存/请求打满，对应现象。" },
+          { heading: "根因：无界并发 + 重复读文件", summary: "指出错误实现片段。" },
+          { heading: "修正：有界队列与切片复用", summary: "给出并发池与 chunk 读取代码。" },
+          { heading: "进度与取消如何接到 UI", summary: "AbortController 与进度聚合示例。" },
+          { heading: "回归清单：我后来每次发版必测这几条", summary: "可勾选的测试条目。" },
+          { heading: "监控：成功率与 P95 耗时怎么埋", summary: "关键上报字段示例。" },
+        ].slice(0, sectionCount),
+      },
+      {
+        index: 2,
+        title: `抄作业：一个能上生产的上传组件骨架`,
+        positioning: `目录 + 关键文件代码，适合直接落地。`,
+        sections: [
+          { heading: "目录怎么拆：hooks / uploader / ui", summary: "给出推荐文件树。" },
+          { heading: "createUploader：核心调度", summary: "调度器伪代码或 TS 实现。" },
+          { heading: "useUpload：对接 React/Vue 的薄封装", summary: "hooks 示例。" },
+          { heading: "服务端协议约定（etag / uploadId）", summary: "请求响应字段表 + 示例 JSON。" },
+          { heading: "还能再抠的性能点", summary: "worker 算 hash、可见即可上传等，各给一行思路与取舍。" },
+          { heading: "发布前检查清单", summary: "类型、 treeshake、peerDeps、changelog。" },
+        ].slice(0, sectionCount),
+      },
+      {
+        index: 3,
+        title: `Vue 与 React 两套写法对照：${topic}`,
+        positioning: `双框架对照，适合技术选型纠结期。`,
+        sections: [
+          { heading: "状态放哪：ref/reactive vs useReducer", summary: "给出两侧最小状态模型代码。" },
+          { heading: "副作用与卸载：取消请求怎么写", summary: "onUnmounted / useEffect cleanup 对照。" },
+          { heading: "可组合封装：composable 与 hook API", summary: "同一组方法签名在两套里的映射。" },
+          { heading: "UI 扩展点：slot 与 render props", summary: "自定义进度条/列表项示例。" },
+          { heading: "我怎么选：团队栈与复杂度决策树", summary: "一张简表帮读者选型。" },
+          { heading: "迁移注意：从 Vue2/Options 过来的坑", summary: "常见误用与改法。" },
+        ].slice(0, sectionCount),
+      },
+      {
+        index: 4,
+        title: `多媒体上传：图压缩、视频封面、音频波形`,
+        positioning: `偏能力扩展，适合要做素材库的产品。`,
+        sections: [
+          { heading: "按 MIME 分流的处理管道", summary: "策略表 + 分发器代码。" },
+          { heading: "图片：预览与 canvas 压缩参数", summary: "可运行压缩片段与体积对比思路。" },
+          { heading: "视频：截帧封面与时长", summary: "video + canvas 示例与兼容性。" },
+          { heading: "音频：简易波形绘制", summary: "Web Audio 关键路径。" },
+          { heading: "主线程别堵死：Worker / idle 调度", summary: "何时搬进 Worker。" },
+          { heading: "组件 API：能力开关怎么设计", summary: "Props 草案。" },
+        ].slice(0, sectionCount),
+      },
+      {
+        index: 5,
+        title: `${topic}工程化：测试、弱网与发版`,
+        positioning: `偏长期维护，适合组件负责人。`,
+        sections: [
+          { heading: "单测：并发池与进度计算", summary: "2～3 个用例骨架。" },
+          { heading: "E2E：假文件与续传路径", summary: "Playwright/Cypress 要点。" },
+          { heading: "弱网：online/offline 与自动暂停", summary: "事件监听示例。" },
+          { heading: "内存：大文件读完要释放什么", summary: "ObjectURL / buffer 注意点。" },
+          { heading: "版本与破坏性变更", summary: "semver 与 changelog 示例。" },
+          { heading: "上线门禁清单", summary: "可打印的检查表。" },
+        ].slice(0, sectionCount),
+      },
+    ];
+    return engOptions.slice(0, count).map((opt, idx) => ({ ...opt, index: idx }));
+  }
 
   const allOptions: OutlineOption[] = [
     {
@@ -486,7 +708,7 @@ function buildFallbackOutlines(
     },
     {
       index: 1,
-      title: `${topic}实战手册：3 个步骤让你少走两年弯路`,
+      title: `把${topic}拆成可执行的三步（附检查标准）`,
       positioning: `更偏方法清单与执行建议。`,
       sections: buildSections(topic, sectionCount, 1),
     },
@@ -510,7 +732,7 @@ function buildFallbackOutlines(
     },
     {
       index: 5,
-      title: `深度长文｜我承认，以前对${topic}的理解太浅了`,
+      title: `我承认，以前对${topic}的理解太浅了`,
       positioning: `深度长文型（约 ${wordCount} 字），适合建立专业人设。`,
       sections: buildSections(topic, sectionCount, 1),
     },
@@ -552,11 +774,15 @@ export async function generateContent(input: {
   const accountBlock = buildAccountPersonaBlock();
   const domainBlock = buildDomainAdaptationBlock();
   const styleGuide = buildStyleGuide(style);
+  const engineering = isEngineeringTopic(
+    input.topic,
+    input.keywords ?? input.outline?.title ?? null,
+  );
 
   const prompt: ChatMessage[] = [
     {
       role: "system",
-      content: `你是一位写了 8 年公众号的资深主笔，读者评价你的文章「像朋友在聊天但每句都有信息量」。请严格基于给定大纲写一篇文章——大纲里的每个章节只写一次，不要另起炉灶重复展开同一主题。
+      content: `你是一位写了 8 年公众号的资深主笔。读者评价你的文章「每段都有信息量，读完能动手或能想明白一件事」。请严格按大纲写——每章只写一次，禁止同义反复凑字。
 
 ${domainBlock}
 
@@ -564,100 +790,73 @@ ${accountBlock}
 
 ${styleGuide}
 
+${buildOnTopicBlock(input.topic, input.keywords)}
+
+${buildQualityArticleBlock()}
+
+${buildEvidenceBlock(engineering)}
+
+${buildAntiAiVoiceBlock()}
+
+${buildEngineeringContentBlock(engineering)}
+
 ${ARTICLE_HTML_FORMAT_RULES}
 
 【标题要求】
-- title 简洁有力，包含 1-2 个核心关键词，不超过 20 字
-- 用具体信息或真实疑问吸引点击，不用夸张承诺、不用「震惊」「必看」「颠覆」
-- 禁止「：」冒号模板句（如「XXX：从入门到精通」）
+- title ≤ 20 字，含核心关键词；不用震惊体；少用「：从入门到精通」
+- 标题承诺与正文一致：写「实战/手册/步骤」就必须有对应干货（代码、步骤或案例）
 
 【写作人格】
-- 第一人称「我」，像朋友分享，结合读者真实场景引发共鸣
-- 观点要有依据（经历、现象、对比），没有依据时不硬编，用「我观察到」「常见情况是」留余地
-- 不做无来源断言，不用绝对化语气
+- 像写技术笔记/专栏：清楚、直接、有判断；第一人称可用，但不要扮演「懂行的朋友拉家常」
+- 没把握时用「常见情况是」「我更倾向」，不要装权威
 
 【开头要求】
-- 禁止「在当今时代」「随着XX发展」「近年来」等模板开头
-- 用具体场景、可核实现象或直击痛点的问题开篇，2-3 句、一屏读完
-- 开头只负责「代入」，不要把后文各章节内容提前讲一遍
+- 禁止「在当今时代」「随着XX发展」「近年来」
+- **禁止闲聊叙事开篇**：不要「和朋友/同事聊天」「他说最近在做XXX却进展不大」「我听完觉得方向对但顺序要调」这类套式
+- 开篇 2-3 句直接进入主题：点明要解决的问题、核心结论，或一个与主题绑定的具体技术现象（报错、卡点、错误实现）
+- 开头只负责立题，不要剧透后文每一章；必须仍在主题范围内
+${engineering ? "- 工程文优先：第一段就落到接口/流程/卡点，不要情感铺垫" : ""}
 
 【逻辑结构】
-- 章节用 <h2>，章节之间用 <hr /> 隔开；**全文最多 2 个 <h3>**，仅在大章节内确实需要分层时使用
-- 每个 <h2> 章节只推进**一个**新论点，写透即收，不重复前面章节已说的结论
-- 每段只表达一层意思，段首点题即可；段间用一句过渡衔接，禁止段段都用「但真正的问题是…」套话
-- 步骤类内容用 <ol>，并列要点用 <ul>，列表项之间不得语义重复
-- 列表项写法见上方「微信排版格式规范」：<li><strong>标题</strong>说明正文</li>（同一行紧接，不要 <br>）
-- **严禁**嵌套 li、li 内套 ul/ol、li 内包 <p>（详见格式规范）
+- 章节用 <h2>，章间 <hr />；全文最多 2 个 <h3>
+- 每章一个新论点；步骤用 <ol>，并列用 <ul>；列表项 <li><strong>标题</strong>说明</li>
+- 叙述以 <p> 为主；mp-tip / mp-warning / blockquote 全篇各 ≤ 2
 
-【HTML 白名单（只能用这些，禁止自创格式）】
-- 允许：\`<p>\` \`<h2>\` \`<h3>\` \`<hr />\` \`<strong>\` \`<code>\` \`<pre><code>\` \`<blockquote>\` \`<ul><li>\` \`<ol><li>\` \`<div class="mp-tip">\` \`<div class="mp-warning">\` \`<div class="mp-summary">\`
-- **禁止**：\`<figure>\` \`<img>\` \`<figcaption>\` — 配图由系统「章节配图」自动插入，正文不要写图片
-- **禁止**：\`<section>\` \`<span style>\` \`<table>\` \`<div>\`（mp-* 除外）及 Markdown 语法
-- 全文组件用量：mp-tip ≤ 2、mp-warning ≤ 2、blockquote ≤ 2；不要每章都堆卡片和列表，以 \`<p>\` 叙述为主
+【HTML 白名单】
+- 允许：p/h2/h3/hr/strong/code/pre+code/blockquote/ul/ol/li、mp-tip/mp-warning/mp-summary
+- 禁止：figure/img/section/table/自创 class、Markdown
 
-【内容层次（全文交替，非每章堆砌）】
-- 案例、数据、正反面观点在**全文**自然分布即可，不要求每个章节都凑齐「道理+案例+数据+反面」
-- 同一案例或同一判断全文最多出现 1 次；后文引用时用「前面提到的…」一句带过，禁止整段重写
-- 需要深度时解释「为什么」，但不要用不同措辞把同一结论说三遍
-- 专业概念首次出现时用生活化语言或 <code> 简短解释
+【内容层次】
+- 案例与判断全文分布即可，不要求每章机械凑齐「道理+案例+数据」
+- 同一案例全文最多 1 次
+- 实践章：先给可跟随的步骤/代码/清单，再补「为什么」
+- 认知章：先钉住一个具体现象，再解释机制；理论不超过该章必要篇幅
+${engineering ? "- 工程章：代码优先，解释为辅；理论段不超过该章篇幅的 40%" : ""}
 
-【段落节奏与轻重点】
-- 长句与短句交替，每段不超过 4 句
-- **重点标注（硬性）**：必须用 HTML \`<strong>\` 标注，禁止 Markdown \`**\` 或纯文本假加粗
-- 每个 \`<p>\` 段落至少 1 处 \`<strong>\`，标注该段核心判断、关键术语或转折结论（2-10 字短语）
-- 全文平均每 150-200 字至少 1 处 \`<strong>\`，让读者扫读时能抓住重点
-- 列表项标题仍用 \`<li><strong>标题</strong>说明正文</li>\` 结构
-- blockquote / mp-tip / mp-warning 全篇各最多 2 次，且必须承载**正文未展开的新信息**，不得把正文原话换个盒子再贴一遍
+【段落节奏】
+- 长短句交替；每段 ≤ 4 句
+- 用 <strong> 标关键判断（禁止 Markdown **）
+- 不要段段「但真正的问题是…」
 
-【结构组件】
-- <blockquote>：非常规但值得单独品味的判断，用 \`<blockquote><p>...</p></blockquote>\`
-- <div class="mp-tip"> / <div class="mp-warning"> / <div class="mp-summary">：结构严格遵循上方「微信排版格式规范」，禁止自创变体
+【反重复 / 反注水】
+- 禁止同义词复读；禁止开头/正文/结尾讲同一故事三遍
+- **禁止为凑字数注水**：目标约 ${wordCount} 字，允许 75%～110%；宁可偏短也不要空话
+- 写完自检：删掉任何离开主题「${input.topic}」仍通顺的段落
 
-【反重复（硬性）】
-- 禁止用同义词改写重复同一观点（如先说「顺序错了」，后又说「关键在于先后」）
-- 禁止开头、正文、总结三处讲同一个故事或同一个例子
-- 禁止每个章节结尾都写「所以最重要的是…」式收束
-- 若某观点已在 tip/warning/blockquote 里完整表达，正文不要再展开一遍
-- 写完后通读：删除**完全重复**的段落即可，不要为压缩篇幅而省略大纲章节应有的论据和案例
+【严禁】
+- 夸夸其谈、绝对化、「赋能/抓手/闭环/底层逻辑/降维/颗粒度」
+- 结尾引流关注点赞
 
-【质量标准】
-- 信息密度：每段都有新信息，避免同义反复，但**章节该展开的要写够**
-- 逻辑连贯：论点→论据→结论，前后不矛盾
-- 真实可信：案例具体，数据谨慎，不虚构权威
-- 读者价值：读完有方法、框架或新视角
-- 可读性：小标题清晰，重点突出
+【代码与术语】
+- 术语、API、命令用 <code>
+- 多行代码必须 <pre><code>...</code></pre>，前后 <hr />
+${engineering ? "- 至少 2 个代码块；关键流程 ≥ 8 行；语言优先 TypeScript/JavaScript" : "- 主题涉及实现/操作时给代码或逐步操作；纯生活/科普可用案例与步骤代替代码，但不可空谈"}
 
-【严禁与慎用】
-- 严禁：夸夸其谈、空洞鸡汤、夸大承诺、无依据断言、「一定要」「必须」「绝对」「100%」
-- 严禁：赋能、抓手、闭环、底层逻辑、降维打击、颗粒度、对齐、倒逼、深挖
-- 严禁：结尾引导关注、点赞、转发
-
-【代码与术语格式】
-- 文中出现的函数名、变量名、类名、命令行、API 名称等专业术语，用 <code> 包裹
-- 多行代码示例（3 行以上），必须用 <pre><code>...</code></pre> 包裹，内部保持原始缩进和换行
-- 代码块前后必须用 <hr /> 与正文明确分隔
-- 示例格式：
-  <p>下面是完整的读取逻辑：</p>
-  <hr />
-  <pre><code>import csv
-  from pathlib import Path
-
-  rows = []
-  with open("data.csv") as f:
-      reader = csv.DictReader(f)
-      for row in reader:
-          rows.append(row)
-  </code></pre>
-  <hr />
-
-【输出格式】
-JSON：{ "title": string, "summary": string, "content": string }
-- title：简洁有力，含核心关键词，不超过 20 字
-- summary：80-120 字，概括读者收获，不重复正文句子
-- content：完整 HTML（不含 <article>、<h1>，不含签名和关注引导）
-- 目标篇幅 **${wordCount} 字**（纯文本，去掉 HTML 标签后统计），允许上下浮动 10%，**不得低于 ${Math.floor(wordCount * 0.85)} 字**
-- 每个 <h2> 章节建议 ${perSection} 字左右，用 <p> 叙述展开，不要把整章压缩成短列表了事
-- 避免重复注水，但**必须写够目标字数**；各章节围绕大纲 summary 充分展开，不复述其他章节结论`,
+【输出】
+JSON：{ "title", "summary", "content" }
+- summary：80-120 字，写清读者能带走什么
+- content：完整 HTML（无 h1、无签名引流）
+- 篇幅参考 ${wordCount} 字（去标签后），建议每章约 ${perSection} 字，**质量与切题优先于凑满字数**`,
     },
     {
       role: "user",
@@ -671,11 +870,14 @@ JSON：{ "title": string, "summary": string, "content": string }
           keywords: input.keywords,
           outline: input.outline,
         }),
+        contentMode: engineering ? "engineering-hands-on" : "general",
+        mustIncludeCodeBlocks: engineering ? 2 : 0,
         writingRequirements: {
           targetWordCount: wordCount,
-          minimumWordCount: Math.floor(wordCount * 0.85),
+          softMinimumWordCount: Math.floor(wordCount * 0.75),
           suggestedWordsPerSection: perSection,
           sectionCount: sections.length,
+          preferDensityOverPadding: true,
         },
       }),
     },
@@ -695,10 +897,10 @@ JSON：{ "title": string, "summary": string, "content": string }
       .replace(/<div class="mp-signature">[\s\S]*?<\/div>/g, "");
     const fixedContent = dedupeRepeatedBlocks(fixCodeBlocks(normalizeCalloutBlocks(safeContent)));
     const plainChars = countPlainTextChars(fixedContent);
-    const minWords = Math.floor(wordCount * 0.85);
+    const minWords = Math.floor(wordCount * 0.75);
     if (plainChars < minWords) {
       console.warn(
-        `[generateContent] 正文字数 ${plainChars} 低于目标 ${wordCount}（下限 ${minWords}），maxTokens=${maxTokens}`,
+        `[generateContent] 正文字数 ${plainChars} 低于参考目标 ${wordCount}（软下限 ${minWords}），maxTokens=${maxTokens}`,
       );
     }
     // 对代码块进行语法高亮（内联样式，兼容微信公众号）
@@ -751,15 +953,15 @@ JSON：{ "title": string, "summary": string, "content": string }
     title: input.outline?.title ?? input.topic,
     summary: `${input.topic}相关的几个实践思路：结合具体场景说明常见误区，并给出可尝试的下一步动作。`,
     content: `
-      <p>上周和一个朋友聊天，他说最近在<strong>${input.topic}</strong>上花了很多时间，进展却不大。我问具体做了什么，他列了几项，我听完觉得：方向大致对，但顺序可能需要调整。</p>
-      <p>这篇文章整理的是我在${input.topic}上实践过的思路，不一定适合所有人，希望帮你少绕一些弯路。</p>
+      <p>做<strong>${input.topic}</strong>时，最常见的问题不是不会写代码，而是模块边界和落地顺序一开始就糊了：先堆功能，再补分片、进度、续传，最后很难收成可复用组件。</p>
+      <p>下面按可落地的顺序拆：先定对外契约，再补内部调度与边界，尽量少返工。</p>
       ${fallbackSections}
       <hr />
       <section>
         <h2>总结</h2>
         <div class="mp-summary">
-          <p>关于${input.topic}，最重要的不是你知道多少，而是你做了多少。把今天看完最有感触的一个点，今天就用一次。别等「准备好了」——你永远不会准备好。</p>
-          <p>真正拉开差距的，从来不是某一天的努力，而是你愿不愿意在还没看到结果的时候，继续把手头的事做好。</p>
+          <p>关于${input.topic}，优先把对外 API、状态机和一条最小上传通路跑通，再叠加分片、并发与续传；顺序反了，后面全是补丁。</p>
+          <p>今天就选一个卡点改：接口、队列或进度，先改清楚一处，再扩到下一处。</p>
         </div>
       </section>
     `.trim(),

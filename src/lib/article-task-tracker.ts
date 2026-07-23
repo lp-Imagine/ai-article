@@ -34,6 +34,23 @@ export function isOutlineBackgroundTaskLabel(label: string) {
 }
 
 export const ARTICLE_BACKGROUND_TASKS_CHANGED = "mp-article-background-tasks-change";
+export const ARTICLE_BACKGROUND_TASK_FINISHED = "mp-article-background-task-finished";
+
+export type ArticleBackgroundTaskFinishedDetail = {
+  articleId: string;
+  label: string;
+  status: "succeeded" | "failed" | "cancelled";
+  error?: string;
+};
+
+export function emitArticleBackgroundTaskFinished(detail: ArticleBackgroundTaskFinishedDetail) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent<ArticleBackgroundTaskFinishedDetail>(ARTICLE_BACKGROUND_TASK_FINISHED, {
+      detail,
+    }),
+  );
+}
 
 const STORAGE_KEY = "mp-article-background-tasks";
 /** 后台任务最长跟踪时间（配图/长文可能持续数分钟） */
@@ -176,6 +193,10 @@ export async function fetchGenerationJob(
   return json.data;
 }
 
+function isTerminalJobStatus(status: GenerationJobSnapshot["status"]) {
+  return status === "succeeded" || status === "failed" || status === "cancelled";
+}
+
 /** 入队后轮询 job，直到成功/失败/取消 */
 export async function waitForGenerationJob(
   jobId: string,
@@ -198,7 +219,7 @@ export async function waitForGenerationJob(
     const job = await fetchGenerationJob(jobId, options?.signal);
     if (job) {
       options?.onProgress?.(job);
-      if (job.status === "succeeded" || job.status === "failed" || job.status === "cancelled") {
+      if (isTerminalJobStatus(job.status)) {
         return job;
       }
     }
@@ -243,8 +264,11 @@ export async function reconcileBackgroundTaskAfterRequestFailure(
 export async function pollArticleBackgroundTasks(options?: {
   onComplete?: (task: ArticleBackgroundTask) => void;
   onFailed?: (task: ArticleBackgroundTask, message: string) => void;
+  /** 跳过这些文章（通常是当前正在查看的详情页，由页面自己刷新） */
+  ignoreArticleIds?: string[];
 }) {
-  const tasks = listArticleBackgroundTasks();
+  const ignore = new Set(options?.ignoreArticleIds ?? []);
+  const tasks = listArticleBackgroundTasks().filter((task) => !ignore.has(task.articleId));
   const now = Date.now();
 
   await Promise.all(
@@ -261,9 +285,20 @@ export async function pollArticleBackgroundTasks(options?: {
         if (!job) return;
         if (job.status === "succeeded") {
           clearArticleBackgroundTask(task.articleId);
+          emitArticleBackgroundTaskFinished({
+            articleId: task.articleId,
+            label: task.label,
+            status: "succeeded",
+          });
           options?.onComplete?.(task);
         } else if (job.status === "failed" || job.status === "cancelled") {
           clearArticleBackgroundTask(task.articleId);
+          emitArticleBackgroundTaskFinished({
+            articleId: task.articleId,
+            label: task.label,
+            status: job.status,
+            error: job.error || "任务失败",
+          });
           options?.onFailed?.(task, job.error || "任务失败");
         }
       } catch {
@@ -283,11 +318,13 @@ export async function syncActiveJobsFromServer() {
     >;
     if (json.code !== 0 || !json.data) return;
 
-    const tasks = readAll();
+    const previous = readAll();
+    const next: Record<string, ArticleBackgroundTask> = {};
+
     for (const job of json.data) {
       const label = job.label || job.type;
-      const existing = tasks[job.articleId];
-      tasks[job.articleId] = {
+      const existing = previous[job.articleId];
+      next[job.articleId] = {
         articleId: job.articleId,
         label,
         title: existing?.title || label,
@@ -298,7 +335,17 @@ export async function syncActiveJobsFromServer() {
         jobId: job.id,
       };
     }
-    writeAll(tasks);
+
+    // 保留仍带 jobId、且不在 active 列表中的本地任务，让轮询去确认 succeeded/failed
+    // 无 jobId 的脏数据直接丢弃，避免弹窗永远停在「进行中」
+    for (const [articleId, task] of Object.entries(previous)) {
+      if (next[articleId]) continue;
+      if (task.jobId && !isArticleBackgroundTaskExpired(task)) {
+        next[articleId] = task;
+      }
+    }
+
+    writeAll(next);
   } catch {
     // ignore
   }

@@ -19,6 +19,12 @@ function articlePath(articleId: string) {
   return `/articles/${articleId}`;
 }
 
+function articleIdFromPath(pathname: string | null): string | null {
+  if (!pathname) return null;
+  const match = pathname.match(/^\/articles\/([^/]+)/);
+  return match?.[1] ?? null;
+}
+
 function taskArticleLabel(task: ArticleBackgroundTask) {
   return task.articleLabel?.trim() || "未命名文章";
 }
@@ -36,10 +42,13 @@ export function BackgroundTaskFloat() {
     if (tasks.length === 0) return;
 
     let stopped = false;
+    const viewingArticleId = articleIdFromPath(pathname);
 
     const poll = async () => {
       if (stopped) return;
       await pollArticleBackgroundTasks({
+        // 当前文章详情页自己负责刷新，避免浮标先清掉任务导致页面不更新
+        ignoreArticleIds: viewingArticleId ? [viewingArticleId] : [],
         onComplete: (task) => {
           toast.show({
             title: "后台任务已完成",
@@ -73,7 +82,7 @@ export function BackgroundTaskFloat() {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [tasks.length, syncTasks, toast]);
+  }, [tasks.length, syncTasks, toast, pathname]);
 
   const visibleTasks = useMemo(
     () => listVisibleArticleBackgroundTasks(pathname),

@@ -42,22 +42,25 @@ export function ProgressDialog({
 }) {
   const [elapsed, setElapsed] = useState(() => elapsedSecondsFrom(startedAt));
 
+  const allDone = steps.every((s) => s.status === "done" || s.status === "error");
+  const hasError = Boolean(error || steps.some((s) => s.status === "error"));
+
   useEffect(() => {
     if (!open) return;
 
     const anchor = startedAt ?? Date.now();
     setElapsed(elapsedSecondsFrom(anchor));
+    if (allDone || hasError) return;
+
     const timer = setInterval(() => {
       setElapsed(elapsedSecondsFrom(anchor));
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [open, startedAt]);
+  }, [open, startedAt, allDone, hasError]);
 
   if (!open) return null;
 
-  const allDone = steps.every((s) => s.status === "done" || s.status === "error");
-  const hasError = Boolean(error || steps.some((s) => s.status === "error"));
   const showImageProgress = totalCount > 1;
   const progressRatio = totalCount > 0 ? generatedCount / totalCount : 0;
   const progressPercent = Math.round(progressRatio * 100);

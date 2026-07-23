@@ -47,8 +47,8 @@ export function isQuotaExempt(role: UserRole): boolean {
   return role === "SUPER_ADMIN";
 }
 
-/** 卡住 running 超过该时间则回收为 failed（毫秒） */
+/** 卡住 running 超过该时间则回收为 failed（毫秒）。默认 20 分钟（需大于最长 LLM 超时） */
 export function getStaleRunningJobMs(): number {
-  const raw = Number(process.env.JOB_STALE_RUNNING_MS ?? String(45 * 60 * 1000));
-  return Number.isFinite(raw) && raw > 0 ? raw : 45 * 60 * 1000;
+  const raw = Number(process.env.JOB_STALE_RUNNING_MS ?? String(20 * 60 * 1000));
+  return Number.isFinite(raw) && raw > 0 ? raw : 20 * 60 * 1000;
 }
