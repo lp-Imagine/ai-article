@@ -918,7 +918,7 @@ export default function ArticlePage({
     setSaving(true);
     try {
       const res = await fetch(`/api/articles/${id}`, {
-        method: "PUT",
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: article.title,

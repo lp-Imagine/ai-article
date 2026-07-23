@@ -31,7 +31,9 @@ function resolveModelForRole(role: TextRole): string {
 
 /** 按任务类型解析模型名、Base URL、API Key（辅助任务可独立配置厂商） */
 export function getLLMCredentialsForRole(role: TextRole = "content") {
-  const primaryBaseUrl = readConfig("AI_BASE_URL", "https://api.openai.com/v1");
+  const primaryBaseUrl = normalizeChatBaseUrl(
+    readConfig("AI_BASE_URL", "https://api.openai.com/v1"),
+  );
   const primaryApiKey = readConfig("AI_API_KEY", "");
   const primaryModel = readConfig("TEXT_MODEL_NAME", "gpt-4o-mini");
 
@@ -49,9 +51,19 @@ export function getLLMCredentialsForRole(role: TextRole = "content") {
 
   return {
     model: auxiliaryModel || primaryModel,
-    baseUrl: auxiliaryBaseUrl || primaryBaseUrl,
+    baseUrl: normalizeChatBaseUrl(auxiliaryBaseUrl || primaryBaseUrl),
     apiKey: auxiliaryApiKey || primaryApiKey,
   };
+}
+
+function normalizeChatBaseUrl(raw: string): string {
+  const base = raw.trim().replace(/\/+$/, "");
+  if (!base) return "https://api.openai.com/v1";
+  // DeepSeek 等常见填成 https://api.deepseek.com，需补 /v1
+  if (/^https?:\/\/api\.deepseek\.com$/i.test(base)) {
+    return `${base}/v1`;
+  }
+  return base;
 }
 
 /** 运行时读取 LLM 配置（非模块常量，确保每次都读最新值） */

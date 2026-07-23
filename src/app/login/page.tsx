@@ -50,6 +50,7 @@ function LoginForm() {
   const [hydrated, setHydrated] = useState(false);
   const [captchaOk, setCaptchaOk] = useState(false);
   const [captchaReset, setCaptchaReset] = useState(0);
+  const credentialsReady = Boolean(username.trim() && password);
 
   useEffect(() => {
     const saved = readRemembered();
@@ -61,8 +62,19 @@ function LoginForm() {
     setHydrated(true);
   }, []);
 
+  useEffect(() => {
+    if (credentialsReady) return;
+    if (!captchaOk) return;
+    setCaptchaOk(false);
+    setCaptchaReset((n) => n + 1);
+  }, [credentialsReady, captchaOk]);
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    if (!credentialsReady) {
+      setError("请先填写用户名和密码");
+      return;
+    }
     if (!captchaOk) {
       setError("请先完成滑块验证");
       return;
@@ -166,11 +178,13 @@ function LoginForm() {
         </span>
       </label>
 
-      <SliderCaptcha
-        verified={captchaOk}
-        onVerifiedChange={setCaptchaOk}
-        resetSignal={captchaReset}
-      />
+      {credentialsReady ? (
+        <SliderCaptcha
+          verified={captchaOk}
+          onVerifiedChange={setCaptchaOk}
+          resetSignal={captchaReset}
+        />
+      ) : null}
 
       {error ? (
         <p className="auth-error" role="alert">
@@ -181,7 +195,7 @@ function LoginForm() {
       <button
         type="submit"
         className="auth-submit"
-        disabled={loading || !username || !password || !captchaOk}
+        disabled={loading || !credentialsReady || !captchaOk}
       >
         {loading ? (
           <span className="auth-submit-loading">

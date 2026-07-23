@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { AuthShell } from "@/components/auth-shell";
 import { SliderCaptcha } from "@/components/slider-captcha";
@@ -15,9 +15,21 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const [captchaOk, setCaptchaOk] = useState(false);
   const [captchaReset, setCaptchaReset] = useState(0);
+  const credentialsReady = username.trim().length >= 3 && password.length >= 6;
+
+  useEffect(() => {
+    if (credentialsReady) return;
+    if (!captchaOk) return;
+    setCaptchaOk(false);
+    setCaptchaReset((n) => n + 1);
+  }, [credentialsReady, captchaOk]);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    if (!credentialsReady) {
+      setError("请先填写符合要求的用户名和密码");
+      return;
+    }
     if (!captchaOk) {
       setError("请先完成滑块验证");
       return;
@@ -120,11 +132,13 @@ export default function RegisterPage() {
           </div>
         </div>
 
-        <SliderCaptcha
-          verified={captchaOk}
-          onVerifiedChange={setCaptchaOk}
-          resetSignal={captchaReset}
-        />
+        {credentialsReady ? (
+          <SliderCaptcha
+            verified={captchaOk}
+            onVerifiedChange={setCaptchaOk}
+            resetSignal={captchaReset}
+          />
+        ) : null}
 
         {error ? (
           <p className="auth-error" role="alert">
@@ -135,9 +149,7 @@ export default function RegisterPage() {
         <button
           type="submit"
           className="auth-submit"
-          disabled={
-            loading || username.trim().length < 3 || password.length < 6 || !captchaOk
-          }
+          disabled={loading || !credentialsReady || !captchaOk}
         >
           {loading ? (
             <span className="auth-submit-loading">

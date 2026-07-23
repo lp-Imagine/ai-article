@@ -83,6 +83,18 @@ export async function PUT(
   }
 }
 
+/** 宝塔等环境常拦截 PUT/DELETE；保存用 POST，删除用 POST ?action=delete */
+export async function POST(
+  request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const url = new URL(request.url);
+  if (url.searchParams.get("action") === "delete") {
+    return DELETE(request, context);
+  }
+  return PUT(request, context);
+}
+
 export async function DELETE(
   _request: Request,
   context: { params: Promise<{ id: string }> },

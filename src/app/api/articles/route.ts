@@ -15,6 +15,12 @@ const createArticleSchema = z.object({
 });
 
 export async function POST(request: Request) {
+  const url = new URL(request.url);
+  // 宝塔等环境常拦截 DELETE；批量删除走 POST ?action=delete
+  if (url.searchParams.get("action") === "delete") {
+    return DELETE(request);
+  }
+
   const user = await requireUser();
   if (user instanceof NextResponse) return user;
 
@@ -113,3 +119,4 @@ export async function DELETE(request: Request) {
     );
   }
 }
+

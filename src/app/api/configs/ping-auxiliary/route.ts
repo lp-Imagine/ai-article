@@ -8,10 +8,10 @@ export async function GET() {
   if (user instanceof NextResponse) return user;
 
   return withAuthUserConfig(user, async () => {
+    const auxiliaryModel = (getEnvValue("AUXILIARY_TEXT_MODEL_NAME") || "").trim();
     const { model, baseUrl, apiKey } = getLLMCredentialsForRole("summary");
-    const primaryModel = getEnvValue("TEXT_MODEL_NAME") || "gpt-4o-mini";
 
-    if (!model || model === primaryModel) {
+    if (!auxiliaryModel) {
       return NextResponse.json({
         code: 0,
         message: "auxiliary not configured",
@@ -19,7 +19,7 @@ export async function GET() {
           configured: false,
           baseUrl,
           model,
-          error: "请填写「文本模型（辅助）」后再验证；留空时辅助任务会使用主模型",
+          error: "请先保存「文本模型（辅助）」后再验证；留空时辅助任务会使用主模型",
         },
       });
     }

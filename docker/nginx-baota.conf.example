@@ -16,6 +16,9 @@ server {
 
     client_max_body_size 20m;
 
+    # 允许 API 使用的方法（宝塔「禁止非常用请求方法」开着时，PUT/DELETE 会返回空响应）
+    # 若面板有「安全」开关拦截 PUT，可关掉该开关，或确保下面未写死只允许 GET/POST。
+
     # 长任务已改为异步入队；轮询接口很快。仍建议拉高超时，避免偶发大响应或同步接口被掐断。
     proxy_connect_timeout 60s;
     proxy_send_timeout 300s;

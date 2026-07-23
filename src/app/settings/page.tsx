@@ -13,16 +13,11 @@ import {
 import clsx from "clsx";
 import { FieldLabel, PageHeader, SectionCard } from "@/components/app-shell";
 import { useToast } from "@/components/toast";
+import { readApiResponse } from "@/lib/api-client";
 
 type AppConfig = {
   key: string;
   value: string;
-};
-
-type ApiResponse<T> = {
-  code: number;
-  message: string;
-  data: T;
 };
 
 type SettingsSection = "ai" | "writing" | "wechat";
@@ -49,13 +44,16 @@ export default function SettingsPage() {
     (async () => {
       try {
         const res = await fetch("/api/configs");
-        const json = (await res.json()) as ApiResponse<Record<string, string>>;
+        const json = await readApiResponse<Record<string, string>>(res);
         if (json.code === 0 && json.data) {
           const list: AppConfig[] = Object.entries(json.data).map(([key, value]) => ({ key, value }));
           setConfigs(list);
         }
-      } catch {
-        toast.show({ message: "加载配置失败", variant: "error" });
+      } catch (err) {
+        toast.show({
+          message: err instanceof Error ? err.message : "加载配置失败",
+          variant: "error",
+        });
       } finally {
         setLoading(false);
       }
@@ -95,11 +93,11 @@ export default function SettingsPage() {
         body[c.key] = c.value;
       }
       const res = await fetch("/api/configs", {
-        method: "PUT",
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const json = (await res.json()) as ApiResponse<unknown>;
+      const json = await readApiResponse<unknown>(res);
       if (json.code !== 0) throw new Error(json.message || "保存失败");
       toast.show({ message: "配置已保存", variant: "success" });
       router.refresh();
@@ -115,14 +113,22 @@ export default function SettingsPage() {
     setTesting(true);
     try {
       const res = await fetch("/api/configs/ping");
-      const json = await res.json() as ApiResponse<{ configured: boolean; baseUrl?: string; model?: string; error?: string }>;
+      const json = await readApiResponse<{
+        configured: boolean;
+        baseUrl?: string;
+        model?: string;
+        error?: string;
+      }>(res);
       if (json.code === 0 && json.data?.configured && !json.data?.error) {
         toast.show({ message: `模型验证通过 ✓ (${json.data.model ?? "ok"})`, variant: "success" });
       } else {
         toast.show({ message: json.data?.error || json.message || "模型验证失败", variant: "error" });
       }
-    } catch {
-      toast.show({ message: "验证请求失败", variant: "error" });
+    } catch (err) {
+      toast.show({
+        message: err instanceof Error ? err.message : "验证请求失败",
+        variant: "error",
+      });
     } finally {
       setTesting(false);
     }
@@ -132,14 +138,22 @@ export default function SettingsPage() {
     setTestingImage(true);
     try {
       const res = await fetch("/api/configs/ping-image");
-      const json = await res.json() as ApiResponse<{ configured: boolean; baseUrl?: string; model?: string; error?: string }>;
+      const json = await readApiResponse<{
+        configured: boolean;
+        baseUrl?: string;
+        model?: string;
+        error?: string;
+      }>(res);
       if (json.code === 0 && json.data?.configured && !json.data?.error) {
         toast.show({ message: `图片模型验证通过 ✓ (${json.data.model ?? "ok"})`, variant: "success" });
       } else {
         toast.show({ message: json.data?.error || json.message || "图片模型验证失败", variant: "error" });
       }
-    } catch {
-      toast.show({ message: "验证请求失败", variant: "error" });
+    } catch (err) {
+      toast.show({
+        message: err instanceof Error ? err.message : "验证请求失败",
+        variant: "error",
+      });
     } finally {
       setTestingImage(false);
     }
@@ -154,13 +168,13 @@ export default function SettingsPage() {
     setTestingAuxiliary(true);
     try {
       const res = await fetch("/api/configs/ping-auxiliary");
-      const json = await res.json() as ApiResponse<{
+      const json = await readApiResponse<{
         configured: boolean;
         baseUrl?: string;
         model?: string;
         error?: string;
         note?: string;
-      }>;
+      }>(res);
       if (json.code === 0 && json.data?.configured && !json.data?.error) {
         toast.show({
           message: `辅助模型验证通过 ✓ (${json.data.model ?? "ok"})`,
@@ -169,8 +183,11 @@ export default function SettingsPage() {
       } else {
         toast.show({ message: json.data?.error || json.message || "辅助模型验证失败", variant: "error" });
       }
-    } catch {
-      toast.show({ message: "验证请求失败", variant: "error" });
+    } catch (err) {
+      toast.show({
+        message: err instanceof Error ? err.message : "验证请求失败",
+        variant: "error",
+      });
     } finally {
       setTestingAuxiliary(false);
     }
@@ -180,14 +197,21 @@ export default function SettingsPage() {
     setTestingWechat(true);
     try {
       const res = await fetch("/api/configs/ping-wechat");
-      const json = await res.json() as ApiResponse<{ configured: boolean; note?: string; error?: string }>;
+      const json = await readApiResponse<{
+        configured: boolean;
+        note?: string;
+        error?: string;
+      }>(res);
       if (json.code === 0 && json.data?.configured && !json.data?.error) {
         toast.show({ message: `微信连通成功 ✓ ${json.data.note ?? ""}`, variant: "success" });
       } else {
         toast.show({ message: json.data?.error || json.message || "微信验证失败", variant: "error" });
       }
-    } catch {
-      toast.show({ message: "验证请求失败", variant: "error" });
+    } catch (err) {
+      toast.show({
+        message: err instanceof Error ? err.message : "验证请求失败",
+        variant: "error",
+      });
     } finally {
       setTestingWechat(false);
     }

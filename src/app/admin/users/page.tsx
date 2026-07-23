@@ -93,7 +93,7 @@ export default function AdminUsersPage() {
     setBusyId(id);
     try {
       const res = await fetch(`/api/admin/users/${id}`, {
-        method: "PATCH",
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
@@ -120,7 +120,7 @@ export default function AdminUsersPage() {
     setPendingDelete(null);
     setBusyId(id);
     try {
-      const res = await fetch(`/api/admin/users/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/admin/users/${id}?action=delete`, { method: "POST" });
       const json = await res.json();
       if (!res.ok || json.code !== 0) {
         throw new Error(json.message || "删除失败");

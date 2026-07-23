@@ -127,7 +127,7 @@ export default function HistoryPage() {
     cancelArticleBackgroundTask(id);
 
     try {
-      const res = await fetch(`/api/articles/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/articles/${id}?action=delete`, { method: "POST" });
       const json = await res.json();
       if (json.code !== 0) {
         throw new Error(json.message || "删除失败");
@@ -156,8 +156,8 @@ export default function HistoryPage() {
     }
 
     try {
-      const res = await fetch("/api/articles", {
-        method: "DELETE",
+      const res = await fetch("/api/articles?action=delete", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids }),
       });

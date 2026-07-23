@@ -109,3 +109,15 @@ export async function DELETE(
   await db.user.delete({ where: { id } });
   return NextResponse.json({ code: 0, message: "ok", data: { id } });
 }
+
+/** 宝塔等环境常拦截 PATCH/DELETE */
+export async function POST(
+  request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const url = new URL(request.url);
+  if (url.searchParams.get("action") === "delete") {
+    return DELETE(request, context);
+  }
+  return PATCH(request, context);
+}
