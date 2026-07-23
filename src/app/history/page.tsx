@@ -13,6 +13,7 @@ import {
 } from "@/lib/article-task-tracker";
 import { useArticleBackgroundTasks } from "@/hooks/use-article-background-tasks";
 import { DEFAULT_PAGE_SIZE, type PaginatedData } from "@/lib/pagination";
+import { clearSessionAndGoLogin, isUnauthorizedResponse } from "@/lib/session-client";
 
 type Article = {
   id: string;
@@ -67,9 +68,13 @@ export default function HistoryPage() {
       const res = await fetch(`/api/articles?page=${targetPage}&limit=${pageSize}`, {
         cache: "no-store",
       });
-      const json = await res.json();
-      if (json.code !== 0 || !json.data) {
-        throw new Error(json.message || "加载失败");
+      const json = await res.json().catch(() => null);
+      if (isUnauthorizedResponse(res, json)) {
+        await clearSessionAndGoLogin("/history");
+        return;
+      }
+      if (!res.ok || !json || json.code !== 0 || !json.data) {
+        throw new Error(json?.message || "加载失败");
       }
       const data = json.data as PaginatedData<Article>;
       setTotal(data.total);

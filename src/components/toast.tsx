@@ -41,6 +41,13 @@ type ToastContextValue = {
   update: (id: string, patch: Partial<ToastInput>) => void;
 };
 
+/** Stable toast API for consumers — excludes `toasts` so show() won't invalidate callbacks. */
+type ToastApi = {
+  show: (toast: ToastInput) => string;
+  dismiss: (id: string) => void;
+  update: (id: string, patch: Partial<ToastInput>) => void;
+};
+
 const ToastContext = createContext<ToastContextValue | null>(null);
 
 const VARIANT_STYLES: Record<ToastVariant, { ring: string; bg: string; icon: string; badge: string }> = {
@@ -213,10 +220,18 @@ function ToastViewport({
   );
 }
 
-export function useToast() {
+export function useToast(): ToastApi {
   const ctx = useContext(ToastContext);
   if (!ctx) {
     throw new Error("useToast must be used inside <ToastProvider>");
   }
-  return ctx;
+  // Intentionally omit `toasts` so callers can safely put this in effect deps.
+  return useMemo(
+    () => ({
+      show: ctx.show,
+      dismiss: ctx.dismiss,
+      update: ctx.update,
+    }),
+    [ctx.show, ctx.dismiss, ctx.update],
+  );
 }

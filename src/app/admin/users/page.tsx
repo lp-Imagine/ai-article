@@ -8,6 +8,7 @@ import { ListPagination } from "@/components/list-pagination";
 import { useToast } from "@/components/toast";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DEFAULT_PAGE_SIZE, type PaginatedData } from "@/lib/pagination";
+import { clearSessionAndGoLogin, isUnauthorizedResponse } from "@/lib/session-client";
 
 type AdminUser = {
   id: string;
@@ -46,13 +47,17 @@ export default function AdminUsersPage() {
         const res = await fetch(`/api/admin/users?page=${targetPage}&limit=${pageSize}`, {
           cache: "no-store",
         });
-        const json = await res.json();
-        if (res.status === 403 || res.status === 401) {
+        const json = await res.json().catch(() => null);
+        if (isUnauthorizedResponse(res, json)) {
+          await clearSessionAndGoLogin("/admin/users");
+          return;
+        }
+        if (res.status === 403 || json?.code === 403) {
           setForbidden(true);
           return;
         }
-        if (json.code !== 0 || !json.data) {
-          throw new Error(json.message || "加载失败");
+        if (!res.ok || !json || json.code !== 0 || !json.data) {
+          throw new Error(json?.message || "加载失败");
         }
         const data = json.data as PaginatedData<AdminUser>;
         setTotal(data.total);

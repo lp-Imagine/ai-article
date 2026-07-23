@@ -8,6 +8,7 @@ import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { BackgroundTaskFloat } from "@/components/background-task-float";
 import { BackgroundTaskSidebarHint } from "@/components/background-task-sidebar-hint";
 import { OnboardingTour } from "@/components/onboarding-tour";
+import { clearSessionAndGoLogin, isUnauthorizedResponse } from "@/lib/session-client";
 
 type MeUser = {
   id: string;
@@ -45,12 +46,17 @@ export function AppShell({ children }: { children: ReactNode }) {
     void (async () => {
       try {
         const res = await fetch("/api/auth/me", { cache: "no-store" });
-        const json = await res.json();
-        if (!cancelled && res.ok && json.code === 0) {
+        const json = await res.json().catch(() => null);
+        if (cancelled) return;
+        if (isUnauthorizedResponse(res, json)) {
+          await clearSessionAndGoLogin(pathname);
+          return;
+        }
+        if (res.ok && json?.code === 0) {
           setMe(json.data);
         }
       } catch {
-        // ignore
+        // ignore transient network errors
       }
     })();
     return () => {
