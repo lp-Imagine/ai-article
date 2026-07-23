@@ -386,6 +386,10 @@ export default function SettingsPage() {
                     </div>
                   </div>
                   <div className="config-fields">
+                    <p className="mb-3 text-xs leading-relaxed text-[var(--muted)]">
+                      Base URL 需支持 OpenAI 兼容的 <code>/images/generations</code>。不要填 DeepSeek
+                      等纯文本地址，否则生成封面会 404。Key 可留空以复用上方文本 Key。
+                    </p>
                     {imageFields.map((f) => (
                       <div key={f.key}>
                         <FieldLabel>{f.label}</FieldLabel>
@@ -429,7 +433,7 @@ export default function SettingsPage() {
           {activeSection === "wechat" && (
             <SectionCard
               title="微信公众号配置"
-              description="配置完成后即可将文章推送到公众号草稿箱。"
+              description="配置完成后即可将文章推送到公众号草稿箱。未配置时推送会直接失败，不会写入假草稿。"
             >
               <div className="config-group mb-5">
                 <div className="config-group-title">

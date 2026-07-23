@@ -99,6 +99,7 @@ const LONG_RUNNING_ACTIONS: Record<string, { title: string; estimatedSeconds: nu
   "生成章节配图": { title: "正在为各章节生成配图", estimatedSeconds: 300 },
   "生成封面图": { title: "正在生成封面图（替换）", estimatedSeconds: 30 },
   "全文润色": { title: "正在润色全文", estimatedSeconds: 20 },
+  "整理格式": { title: "正在整理正文格式（长文分段）", estimatedSeconds: 180 },
   "扩写正文": { title: "正在扩写正文", estimatedSeconds: 15 },
 };
 
@@ -287,6 +288,9 @@ export default function ArticlePage({
     if (hasContent) {
       setMobileStage("content");
       setOutlinePanelOpen(false);
+      if (!hasOutline) {
+        setEditorTab("content");
+      }
     } else if (hasOutline) {
       setMobileStage("outline");
       setOutlinePanelOpen(true);
@@ -1219,7 +1223,7 @@ export default function ArticlePage({
           </div>
           </div>
         </div>
-        {article.wechatDraftId ? (
+        {article.wechatDraftId && !article.wechatDraftId.startsWith("mock_draft_") ? (
           <p className="article-topbar-draft-id">微信草稿 ID：{article.wechatDraftId}</p>
         ) : null}
 
@@ -1249,7 +1253,7 @@ export default function ArticlePage({
           className={`mobile-stage-panel ${mobileStage === "outline" ? "mobile-stage-panel-active" : ""}`}
           data-stage="outline"
         >
-        {outlines.length > 0 && (
+        {outlines.length > 0 ? (
           <section className="outline-panel stage-order-outline">
             <button
               type="button"
@@ -1360,14 +1364,31 @@ export default function ArticlePage({
               </>
             )}
           </section>
-        )}
+        ) : article.content?.trim() ? (
+          <section className="outline-panel stage-order-outline outline-panel-imported">
+            <div className="outline-panel-head">
+              <p className="outline-panel-title inline-flex items-center gap-2">
+                <ListTree size={15} />
+                大纲
+              </p>
+            </div>
+            <p className="outline-imported-hint">
+              本文由导入创建；导入时会自动排队「整理格式」。完成后可继续润色、配图或推送；若未自动整理，可手动点正文工具里的「整理格式」。
+            </p>
+          </section>
+        ) : null}
 
         <div className="mobile-stage-actions">
           <WorkflowButton
             busy={busy}
-            label="重新生成大纲"
+            label={article.content?.trim() && outlines.length === 0 ? "生成大纲" : "重新生成大纲"}
             icon={<RefreshCw size={14} />}
-            onClick={() => callAction(`/api/articles/${id}/generate-outline`, "重新生成大纲")}
+            onClick={() =>
+              callAction(
+                `/api/articles/${id}/generate-outline`,
+                article.content?.trim() && outlines.length === 0 ? "生成大纲" : "重新生成大纲",
+              )
+            }
           />
           <WorkflowButton
             busy={busy}
@@ -1570,6 +1591,12 @@ export default function ArticlePage({
             <ActionChip busy={busy} label="生成摘要" onClick={handleGenerateSummary} disabled={!article.content && !article.topic} />
             <ActionChip busy={busy} label="扩写正文" onClick={() => callAction(`/api/articles/${id}/expand`, "扩写正文")} disabled={!article.content} />
             <ActionChip busy={busy} label="全文润色" onClick={() => callAction(`/api/articles/${id}/polish`, "全文润色")} disabled={!article.content} />
+            <ActionChip
+              busy={busy}
+              label="整理格式"
+              onClick={() => callAction(`/api/articles/${id}/reformat`, "整理格式")}
+              disabled={!article.content}
+            />
             <ActionChip busy={busy} label="章节配图" onClick={() => callAction(`/api/articles/${id}/generate-inline-images`, "生成章节配图")} disabled={!article.content} />
             <ActionChip
               busy={busy}
@@ -1587,7 +1614,7 @@ export default function ArticlePage({
         >
         {(pushResult?.draftId || pushRecords.length > 0) && (
           <div className="space-y-2 stage-order-push">
-            {pushResult && pushResult.draftId ? (
+            {pushResult && pushResult.draftId && !pushResult.draftId.startsWith("mock_draft_") ? (
               <div className="push-inline border-[rgba(5,150,105,0.25)] bg-[var(--success-soft)]">
                 <span className="text-sm font-semibold text-[var(--success)]">✓ 推送成功</span>
                 <a
@@ -1598,6 +1625,13 @@ export default function ArticlePage({
                 >
                   前往微信公众平台 →
                 </a>
+              </div>
+            ) : null}
+            {pushResult?.draftId?.startsWith("mock_draft_") ? (
+              <div className="push-inline border-[rgba(180,83,9,0.25)] bg-[rgba(254,243,199,0.65)]">
+                <span className="text-sm font-semibold text-[var(--warning,#b45309)]">
+                  此前为未配置公众号时的模拟推送，微信后台并无真实草稿
+                </span>
               </div>
             ) : null}
             {pushRecords.length > 0 ? (

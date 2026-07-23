@@ -77,7 +77,7 @@ export default function PushDialog({
           </div>
 
           <div className="rounded-lg border border-[rgba(0,113,227,0.15)] bg-[var(--accent-soft)] p-3 text-xs text-[var(--accent)]">
-            推送后将作为草稿保存到微信公众号后台，不会立即发布。你可以在微信公众平台草稿箱中预览和编辑。
+            推送后将作为草稿保存到微信公众号后台，不会立即发布。请先在「设置 → 微信公众号」配置 App ID / Secret，否则无法推送。
           </div>
         </div>
 

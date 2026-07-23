@@ -98,7 +98,14 @@ export async function POST(
     }
 
     if (!isWechatReady()) {
-      return pushMock(article, id, article.content);
+      return NextResponse.json(
+        {
+          code: 1004,
+          message: "尚未配置微信公众号。请先到「设置 → 微信公众号」填写 App ID 与 App Secret，再推送草稿箱。",
+          data: null,
+        },
+        { status: 400 },
+      );
     }
 
     try {
@@ -184,42 +191,5 @@ export async function POST(
         { status: 500 }
       );
     }
-  });
-}
-
-async function pushMock(
-  article: { id: string; title: string | null; topic: string },
-  id: string,
-  _content: string,
-) {
-  const mockDraftId = `mock_draft_${Date.now()}`;
-  await db.publishRecord.create({
-    data: {
-      articleId: id,
-      channel: "wechat",
-      status: "success",
-      requestPayload: JSON.stringify({ articleId: id }),
-      responsePayload: JSON.stringify({
-        media_id: mockDraftId,
-        note: "WECHAT_APP_ID 未配置，已走 Mock 推送。",
-      }),
-    },
-  });
-
-  const updated = await db.article.update({
-    where: { id },
-    data: {
-      status: "pushed",
-      wechatDraftId: mockDraftId,
-    },
-  });
-
-  return NextResponse.json({
-    code: 0,
-    message: "ok（Mock）",
-    data: {
-      wechatDraftId: updated.wechatDraftId,
-      status: updated.status,
-    },
   });
 }

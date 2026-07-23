@@ -1,21 +1,13 @@
 import { NextResponse } from "next/server";
-import { getEnvValue } from "@/lib/config-bridge";
 import { requireUser, withAuthUserConfig } from "@/lib/api-auth";
+import { getImageEndpointConfig } from "@/lib/image-gen";
 
 export async function GET() {
   const user = await requireUser();
   if (user instanceof NextResponse) return user;
 
   return withAuthUserConfig(user, async () => {
-    const apiKey =
-      getEnvValue("IMAGE_API_KEY") ?? getEnvValue("AI_API_KEY") ?? process.env.AI_API_KEY;
-    const baseUrl =
-      getEnvValue("IMAGE_BASE_URL") ||
-      getEnvValue("AI_BASE_URL") ||
-      process.env.AI_BASE_URL ||
-      "https://dashscope.aliyuncs.com/compatible-mode/v1";
-    const model =
-      getEnvValue("IMAGE_MODEL_NAME") || process.env.IMAGE_MODEL_NAME || "qwen-image-2.0";
+    const { baseUrl, model, apiKey } = getImageEndpointConfig();
 
     if (!apiKey) {
       return NextResponse.json({
@@ -47,6 +39,10 @@ export async function GET() {
 
       if (!res.ok) {
         const body = await res.text();
+        const hint =
+          res.status === 404
+            ? "端点不存在：请确认图片 Base URL 支持 /images/generations（不要填纯文本模型地址）"
+            : undefined;
         return NextResponse.json({
           code: 0,
           message: "ping-image failed",
@@ -55,7 +51,8 @@ export async function GET() {
             baseUrl,
             model,
             httpStatus: res.status,
-            error: body.slice(0, 200),
+            error: body.slice(0, 200) || hint || `HTTP ${res.status}`,
+            hint,
           },
         });
       }

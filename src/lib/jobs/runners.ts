@@ -1,6 +1,6 @@
 import type { GenerationJob, Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
-import { generateContent, generateCoverPrompt, generateOutline, polishContent, expandSection, generateSectionImagePrompt } from "@/lib/ai";
+import { generateContent, generateCoverPrompt, generateOutline, polishContent, reformatArticleHtml, expandSection, generateSectionImagePrompt } from "@/lib/ai";
 import { generateCoverImage, generateSectionImage } from "@/lib/image-gen";
 import { mapWithConcurrency } from "@/lib/map-with-concurrency";
 import { withUserConfig } from "@/lib/config-bridge";
@@ -416,11 +416,22 @@ async function runPolish(job: GenerationJob, update: ProgressUpdater) {
   if (!article) throw new Error("文章不存在");
   if (!article.content) throw new Error("正文为空，先生成正文再润色");
 
-  const payload = (job.payload ?? {}) as { mode?: "更正式" | "更口语" | "更简洁" | "更营销" };
+  const payload = (job.payload ?? {}) as {
+    mode?: "更正式" | "更口语" | "更简洁" | "更营销" | "reformat";
+  };
   const mode = payload.mode ?? "更简洁";
+  const isReformat = mode === "reformat";
 
-  await update(30, "润色中");
-  const content = await polishContent({ content: article.content, mode });
+  await update(30, isReformat ? "整理格式中" : "润色中");
+  const content = isReformat
+    ? await reformatArticleHtml({
+        content: article.content,
+        onProgress: (progress, label) => update(progress, label),
+      })
+    : await polishContent({
+        content: article.content,
+        mode: mode as "更正式" | "更口语" | "更简洁" | "更营销",
+      });
 
   await update(85, "保存");
   await db.articleVersion.create({

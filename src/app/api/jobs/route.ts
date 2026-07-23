@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/api-auth";
-import { JOB_TYPE_LABELS } from "@/lib/jobs/limits";
+import { jobDisplayLabel } from "@/lib/jobs/limits";
 
 export async function GET(request: Request) {
   const user = await requireUser();
@@ -27,6 +27,7 @@ export async function GET(request: Request) {
       progress: true,
       stepLabel: true,
       error: true,
+      payload: true,
       createdAt: true,
       startedAt: true,
       finishedAt: true,
@@ -36,9 +37,9 @@ export async function GET(request: Request) {
   return NextResponse.json({
     code: 0,
     message: "ok",
-    data: jobs.map((job) => ({
+    data: jobs.map(({ payload, ...job }) => ({
       ...job,
-      label: JOB_TYPE_LABELS[job.type],
+      label: jobDisplayLabel(job.type, payload),
     })),
   });
 }

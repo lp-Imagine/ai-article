@@ -51,6 +51,7 @@ export default function HomePage() {
   const router = useRouter();
   const toast = useToast();
   const [loading, setLoading] = useState(false);
+  const [createMode, setCreateMode] = useState<"ai" | "import">("ai");
   const [form, setForm] = useState({
     topic: "",
     keywords: "",
@@ -59,6 +60,11 @@ export default function HomePage() {
     audience: "",
     goal: "知识分享",
     outlineCount: 3,
+  });
+  const [importForm, setImportForm] = useState({
+    title: "",
+    content: "",
+    summary: "",
   });
   const [recent, setRecent] = useState<RecentArticle[]>([]);
   const { runningTaskIds } = useArticleBackgroundTasks();
@@ -71,6 +77,10 @@ export default function HomePage() {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
+  function updateImport<K extends keyof typeof importForm>(key: K, value: (typeof importForm)[K]) {
+    setImportForm((prev) => ({ ...prev, [key]: value }));
+  }
+
   async function fetchRecent() {
     try {
       const res = await fetch("/api/articles?page=1&limit=5", { cache: "no-store" });
@@ -80,6 +90,77 @@ export default function HomePage() {
       }
     } catch {
       // ignore
+    }
+  }
+
+  async function handleImportSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!importForm.title.trim() || !importForm.content.trim() || loading) return;
+    setLoading(true);
+
+    try {
+      // Base64 编码正文，降低宝塔 WAF 对代码片段误拦截导致空响应的概率
+      const contentBase64 =
+        typeof window !== "undefined"
+          ? window.btoa(unescape(encodeURIComponent(importForm.content)))
+          : Buffer.from(importForm.content, "utf8").toString("base64");
+
+      const title = importForm.title.trim();
+      const created = await fetch("/api/articles/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          content: contentBase64,
+          contentEncoding: "base64",
+          summary: importForm.summary.trim() || null,
+          autoReformat: true,
+        }),
+      });
+      const createdJson = await readApiResponse<{
+        id: string;
+        jobId?: string | null;
+        reformatQueued?: boolean;
+        reformatSkippedReason?: string | null;
+      }>(created);
+      if (createdJson.code !== 0 || !createdJson.data?.id) {
+        throw new Error(createdJson.message || "导入失败");
+      }
+
+      const articleId = createdJson.data.id;
+      const jobId = createdJson.data.jobId ?? null;
+
+      if (jobId) {
+        startArticleBackgroundTask({
+          articleId,
+          label: "整理格式",
+          title: "正在整理正文格式",
+          articleLabel: title,
+          startedAt: Date.now(),
+          statusAtStart: "edited",
+          contentLengthAtStart: importForm.content.length,
+          jobId,
+        });
+        toast.show({
+          message: "文章已导入，正在自动整理格式…",
+          variant: "success",
+        });
+      } else {
+        const skip = createdJson.data.reformatSkippedReason;
+        toast.show({
+          message: skip
+            ? `文章已导入（${skip}）。可在编辑页手动点「整理格式」。`
+            : "文章已导入，可继续润色、配图或推送",
+          variant: skip ? "warning" : "success",
+          duration: skip ? 6000 : 4000,
+        });
+      }
+
+      router.push(`/articles/${articleId}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "未知错误";
+      toast.show({ title: "导入失败", message, variant: "error", duration: 6000 });
+      setLoading(false);
     }
   }
 
@@ -199,7 +280,7 @@ export default function HomePage() {
       <PageHeader
         eyebrow="Editorial Workspace"
         title="Draftly · 内容工作台"
-        description="从一个主题出发，到推送到公众号草稿箱。把选题、大纲、正文、配图、检测、发布收进同一条工作流。"
+        description="从一个主题出发，到推送到公众号草稿箱。也可导入已有手写稿，继续润色、配图与推送。"
         className="home-page-header"
       />
 
@@ -214,133 +295,214 @@ export default function HomePage() {
 
       <section className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.65fr)_minmax(280px,1fr)] home-workspace">
         <div data-tour="home-create">
-        <SectionCard
-          title="快速开始"
-          description="填一个主题，先让 AI 按你选的数量给出大纲方案，确定方向后再生成正文。"
-          className="home-create-card"
-        >
-          <form className="home-create-form space-y-6" onSubmit={handleSubmit}>
-            <div>
-              <FieldLabel>主题 / 标题</FieldLabel>
-              <input
-                type="text"
-                value={form.topic}
-                onChange={(e) => update("topic", e.target.value)}
-                placeholder="例如：用 React 做流式 AI 对话界面 / 普通人如何用 AI 提升效率"
-                className="mt-2 w-full px-4 py-3.5 text-base"
-              />
+          <SectionCard
+            title="快速开始"
+            description={
+              createMode === "ai"
+                ? "填一个主题，先让 AI 按你选的数量给出大纲方案，确定方向后再生成正文。"
+                : "粘贴已有标题与正文（纯文本或 Markdown），导入后会自动按公众号规范整理格式，再继续润色、配图与推送。"
+            }
+            className="home-create-card"
+          >
+            <div className="home-create-mode-tabs" role="tablist" aria-label="创作方式">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={createMode === "ai"}
+                className={`home-create-mode-tab${createMode === "ai" ? " home-create-mode-tab-active" : ""}`}
+                onClick={() => setCreateMode("ai")}
+              >
+                AI 创作
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={createMode === "import"}
+                className={`home-create-mode-tab${createMode === "import" ? " home-create-mode-tab-active" : ""}`}
+                onClick={() => setCreateMode("import")}
+              >
+                导入文章
+              </button>
             </div>
 
-            <div>
-              <FieldLabel>关键词</FieldLabel>
-              <input
-                type="text"
-                value={form.keywords}
-                onChange={(e) => update("keywords", e.target.value)}
-                placeholder="可选，多个用逗号分隔"
-                className="mt-2 w-full px-4 py-2.5 text-sm"
-              />
-            </div>
+            {createMode === "ai" ? (
+              <form className="home-create-form space-y-6" onSubmit={handleSubmit}>
+                <div>
+                  <FieldLabel>主题 / 标题</FieldLabel>
+                  <input
+                    type="text"
+                    value={form.topic}
+                    onChange={(e) => update("topic", e.target.value)}
+                    placeholder="例如：用 React 做流式 AI 对话界面 / 普通人如何用 AI 提升效率"
+                    className="mt-2 w-full px-4 py-3.5 text-base"
+                  />
+                </div>
 
-            <div className="field-grid field-grid-2 home-create-primary-grid">
-              <div>
-                <FieldLabel>文章风格</FieldLabel>
-                <select
-                  value={form.style}
-                  onChange={(e) => update("style", e.target.value)}
-                  className="mt-2 w-full px-4 py-2.5 text-sm"
-                >
-                  <option>干货型</option>
-                  <option>观点型</option>
-                  <option>故事型</option>
-                </select>
-              </div>
-              <div>
-                <FieldLabel>目标字数</FieldLabel>
-                <select
-                  value={form.wordCount}
-                  onChange={(e) => update("wordCount", Number(e.target.value))}
-                  className="mt-2 w-full px-4 py-2.5 text-sm"
-                >
-                  <option value={800}>800</option>
-                  <option value={1200}>1,200</option>
-                  <option value={1500}>1,500</option>
-                  <option value={2000}>2,000</option>
-                  <option value={3000}>3,000</option>
-                  <option value={4000}>4,000</option>
-                  <option value={5000}>5,000</option>
-                </select>
-              </div>
-            </div>
+                <div>
+                  <FieldLabel>关键词</FieldLabel>
+                  <input
+                    type="text"
+                    value={form.keywords}
+                    onChange={(e) => update("keywords", e.target.value)}
+                    placeholder="可选，多个用逗号分隔"
+                    className="mt-2 w-full px-4 py-2.5 text-sm"
+                  />
+                </div>
 
-            <input
-              type="checkbox"
-              id="home-create-more-toggle"
-              className="home-create-more-toggle"
-            />
-            <label htmlFor="home-create-more-toggle" className="home-create-more-summary">
-              更多选项
-              <span className="home-create-more-hint">读者 / 目标 / 大纲数</span>
-            </label>
-            <div className="field-grid field-grid-2 home-create-more-grid">
-              <div>
-                <FieldLabel>目标读者</FieldLabel>
+                <div className="field-grid field-grid-2 home-create-primary-grid">
+                  <div>
+                    <FieldLabel>文章风格</FieldLabel>
+                    <select
+                      value={form.style}
+                      onChange={(e) => update("style", e.target.value)}
+                      className="mt-2 w-full px-4 py-2.5 text-sm"
+                    >
+                      <option>干货型</option>
+                      <option>观点型</option>
+                      <option>故事型</option>
+                    </select>
+                  </div>
+                  <div>
+                    <FieldLabel>目标字数</FieldLabel>
+                    <select
+                      value={form.wordCount}
+                      onChange={(e) => update("wordCount", Number(e.target.value))}
+                      className="mt-2 w-full px-4 py-2.5 text-sm"
+                    >
+                      <option value={800}>800</option>
+                      <option value={1200}>1,200</option>
+                      <option value={1500}>1,500</option>
+                      <option value={2000}>2,000</option>
+                      <option value={3000}>3,000</option>
+                      <option value={4000}>4,000</option>
+                      <option value={5000}>5,000</option>
+                    </select>
+                  </div>
+                </div>
+
                 <input
-                  type="text"
-                  value={form.audience}
-                  onChange={(e) => update("audience", e.target.value)}
-                  placeholder="例如：前端开发者 / 职场新人"
-                  className="mt-2 w-full px-4 py-2.5 text-sm"
+                  type="checkbox"
+                  id="home-create-more-toggle"
+                  className="home-create-more-toggle"
                 />
-              </div>
-              <div>
-                <FieldLabel>文章目标</FieldLabel>
-                <select
-                  value={form.goal}
-                  onChange={(e) => update("goal", e.target.value)}
-                  className="mt-2 w-full px-4 py-2.5 text-sm"
-                >
-                  <option>知识分享</option>
-                  <option>涨粉</option>
-                  <option>转化</option>
-                  <option>品牌表达</option>
-                </select>
-              </div>
-              <div>
-                <FieldLabel>大纲方案数</FieldLabel>
-                <select
-                  value={form.outlineCount}
-                  onChange={(e) => update("outlineCount", Number(e.target.value))}
-                  className="mt-2 w-full px-4 py-2.5 text-sm"
-                >
-                  <option value={2}>2 个</option>
-                  <option value={3}>3 个（默认）</option>
-                  <option value={4}>4 个</option>
-                  <option value={5}>5 个</option>
-                  <option value={6}>6 个</option>
-                </select>
-              </div>
-            </div>
+                <label htmlFor="home-create-more-toggle" className="home-create-more-summary">
+                  更多选项
+                  <span className="home-create-more-hint">读者 / 目标 / 大纲数</span>
+                </label>
+                <div className="field-grid field-grid-2 home-create-more-grid">
+                  <div>
+                    <FieldLabel>目标读者</FieldLabel>
+                    <input
+                      type="text"
+                      value={form.audience}
+                      onChange={(e) => update("audience", e.target.value)}
+                      placeholder="例如：前端开发者 / 职场新人"
+                      className="mt-2 w-full px-4 py-2.5 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <FieldLabel>文章目标</FieldLabel>
+                    <select
+                      value={form.goal}
+                      onChange={(e) => update("goal", e.target.value)}
+                      className="mt-2 w-full px-4 py-2.5 text-sm"
+                    >
+                      <option>知识分享</option>
+                      <option>涨粉</option>
+                      <option>转化</option>
+                      <option>品牌表达</option>
+                    </select>
+                  </div>
+                  <div>
+                    <FieldLabel>大纲方案数</FieldLabel>
+                    <select
+                      value={form.outlineCount}
+                      onChange={(e) => update("outlineCount", Number(e.target.value))}
+                      className="mt-2 w-full px-4 py-2.5 text-sm"
+                    >
+                      <option value={2}>2 个</option>
+                      <option value={3}>3 个（默认）</option>
+                      <option value={4}>4 个</option>
+                      <option value={5}>5 个</option>
+                      <option value={6}>6 个</option>
+                    </select>
+                  </div>
+                </div>
 
-            <button
-              type="submit"
-              disabled={loading || !form.topic.trim()}
-              className="home-create-submit w-full btn-primary py-3.5 text-sm"
-            >
-              {loading ? (
-                <span className="inline-flex items-center justify-center gap-2">
-                  <span className="inline-block size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                  生成大纲中...
-                </span>
-              ) : (
-                <span className="inline-flex items-center justify-center gap-2">
-                  生成大纲
-                  <ArrowRight size={16} />
-                </span>
-              )}
-            </button>
-          </form>
-        </SectionCard>
+                <button
+                  type="submit"
+                  disabled={loading || !form.topic.trim()}
+                  className="home-create-submit w-full btn-primary py-3.5 text-sm"
+                >
+                  {loading ? (
+                    <span className="inline-flex items-center justify-center gap-2">
+                      <span className="inline-block size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                      生成大纲中...
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center justify-center gap-2">
+                      生成大纲
+                      <ArrowRight size={16} />
+                    </span>
+                  )}
+                </button>
+              </form>
+            ) : (
+              <form className="home-create-form space-y-6" onSubmit={handleImportSubmit}>
+                <div>
+                  <FieldLabel>标题</FieldLabel>
+                  <input
+                    type="text"
+                    value={importForm.title}
+                    onChange={(e) => updateImport("title", e.target.value)}
+                    placeholder="文章标题"
+                    className="mt-2 w-full px-4 py-3.5 text-base"
+                    maxLength={200}
+                  />
+                </div>
+                <div>
+                  <FieldLabel>正文</FieldLabel>
+                  <textarea
+                    value={importForm.content}
+                    onChange={(e) => updateImport("content", e.target.value)}
+                    placeholder={"粘贴纯文本或 Markdown，例如：\n\n## 小节标题\n\n正文段落，可用 **加粗**。\n\n- 列表项一\n- 列表项二"}
+                    className="mt-2 min-h-[220px] w-full px-4 py-3 text-sm leading-6"
+                    required
+                  />
+                  <p className="mt-2 text-xs text-[var(--muted)]">
+                    支持纯文本、Markdown；若粘贴 HTML 也会尽量识别并清理。
+                  </p>
+                </div>
+                <div>
+                  <FieldLabel>摘要（可选）</FieldLabel>
+                  <textarea
+                    value={importForm.summary}
+                    onChange={(e) => updateImport("summary", e.target.value)}
+                    placeholder="公众号标题下方简介，可稍后在编辑页生成或修改"
+                    className="mt-2 min-h-[80px] w-full px-4 py-3 text-sm leading-6"
+                    maxLength={500}
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={loading || !importForm.title.trim() || !importForm.content.trim()}
+                  className="home-create-submit w-full btn-primary py-3.5 text-sm"
+                >
+                  {loading ? (
+                    <span className="inline-flex items-center justify-center gap-2">
+                      <span className="inline-block size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                      导入中...
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center justify-center gap-2">
+                      导入并整理
+                      <ArrowRight size={16} />
+                    </span>
+                  )}
+                </button>
+              </form>
+            )}
+          </SectionCard>
         </div>
 
         <SectionCard

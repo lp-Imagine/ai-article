@@ -10,8 +10,13 @@ export async function readApiResponse<T>(res: Response): Promise<ApiResponse<T>>
         `请求超时或被网关中断 (HTTP ${res.status})。请确认 Nginx proxy_read_timeout ≥ 300s。`,
       );
     }
+    if (res.status === 500) {
+      throw new Error(
+        `服务器错误 (HTTP 500，空响应)。本地开发请确认 DATABASE_URL 为 postgresql://…，已执行 npm run db:pg 与 npx prisma migrate deploy，并重启 npm run dev。`,
+      );
+    }
     throw new Error(
-      `服务器返回空响应 (HTTP ${res.status || "?"})。若在宝塔部署，请检查是否拦截了 PUT/DELETE；配置保存请使用 POST。`,
+      `服务器返回空响应 (HTTP ${res.status || "?"})。若在宝塔部署：检查是否拦截了 PUT/DELETE，或 WAF 误拦了含代码的请求体；配置保存请用 POST。`,
     );
   }
 

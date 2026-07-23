@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { notFound, requireUser } from "@/lib/api-auth";
-import { JOB_TYPE_LABELS } from "@/lib/jobs/limits";
+import { jobDisplayLabel } from "@/lib/jobs/limits";
 
 export async function GET(
   _request: Request,
@@ -21,6 +21,7 @@ export async function GET(
       progress: true,
       stepLabel: true,
       error: true,
+      payload: true,
       createdAt: true,
       startedAt: true,
       finishedAt: true,
@@ -28,12 +29,13 @@ export async function GET(
   });
   if (!job) return notFound("任务不存在");
 
+  const { payload, ...rest } = job;
   return NextResponse.json({
     code: 0,
     message: "ok",
     data: {
-      ...job,
-      label: JOB_TYPE_LABELS[job.type],
+      ...rest,
+      label: jobDisplayLabel(rest.type, payload),
     },
   });
 }

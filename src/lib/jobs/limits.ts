@@ -9,6 +9,18 @@ export const JOB_TYPE_LABELS: Record<GenerationJobType, string> = {
   expand: "扩写正文",
 };
 
+/** 根据 type + payload 解析对外展示文案（polish + reformat → 整理格式） */
+export function jobDisplayLabel(
+  type: GenerationJobType,
+  payload?: unknown,
+): string {
+  if (type === "polish" && payload && typeof payload === "object" && !Array.isArray(payload)) {
+    const mode = (payload as { mode?: unknown }).mode;
+    if (mode === "reformat") return "整理格式";
+  }
+  return JOB_TYPE_LABELS[type];
+}
+
 export function labelToJobType(label: string): GenerationJobType | null {
   switch (label) {
     case "生成大纲":
@@ -21,6 +33,8 @@ export function labelToJobType(label: string): GenerationJobType | null {
     case "生成章节配图":
       return "inline_images";
     case "全文润色":
+      return "polish";
+    case "整理格式":
       return "polish";
     case "扩写正文":
       return "expand";

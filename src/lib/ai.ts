@@ -3,9 +3,9 @@ import { getEnvValue } from "@/lib/config-bridge";
 import { highlightCodeBlocks } from "@/lib/code-highlight";
 import { normalizeCalloutBlocks } from "@/lib/wechat-style";
 
-type TextRole = "outline" | "content" | "summary" | "titles" | "cover-prompt" | "polish" | "expand" | "section-image";
+type TextRole = "outline" | "content" | "summary" | "titles" | "cover-prompt" | "polish" | "expand" | "section-image" | "reformat";
 
-const PRIMARY_TEXT_ROLES = new Set<TextRole>(["outline", "content", "polish", "expand"]);
+const PRIMARY_TEXT_ROLES = new Set<TextRole>(["outline", "content", "polish", "expand", "reformat"]);
 
 type ChatMessage = {
   role: "system" | "user" | "assistant";
@@ -74,11 +74,12 @@ function getLLMConfig(role: TextRole = "content") {
 
 async function callChat(
   messages: ChatMessage[],
-  opts?: { jsonMode?: boolean; maxTokens?: number; role?: TextRole },
+  opts?: { jsonMode?: boolean; maxTokens?: number; role?: TextRole; temperature?: number },
 ) {
   const jsonMode = opts?.jsonMode ?? true;
   const maxTokens = opts?.maxTokens ?? 2048;
   const role = opts?.role ?? "content";
+  const temperature = opts?.temperature ?? (role === "reformat" ? 0.2 : 0.7);
 
   const { model, baseUrl, apiKey } = getLLMConfig(role);
   if (!apiKey) {
@@ -99,7 +100,7 @@ async function callChat(
       body: JSON.stringify({
         model,
         messages,
-        temperature: 0.7,
+        temperature,
         max_tokens: maxTokens,
         response_format: jsonMode ? { type: "json_object" } : undefined,
       }),
@@ -118,8 +119,27 @@ async function callChat(
     return json.choices[0]?.message?.content ?? "";
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
+      const hint =
+        role === "outline"
+          ? "大纲一般应在数分钟内返回。"
+          : role === "reformat"
+            ? "整理格式需整篇重排，长文可能需数分钟，请稍后重试。"
+            : "请检查模型服务/网络后重试。";
       throw new Error(
-        `LLM 请求超时（${Math.round(timeoutMs / 1000)} 秒）。请检查模型服务/网络后重试；大纲一般应在 1～2 分钟内返回。`,
+        `LLM 请求超时（${Math.round(timeoutMs / 1000)} 秒）。${hint}`,
+      );
+    }
+    if (error instanceof Error && /fetch failed/i.test(error.message)) {
+      const cause =
+        error.cause instanceof Error
+          ? error.cause.message
+          : typeof error.cause === "string"
+            ? error.cause
+            : "";
+      throw new Error(
+        cause
+          ? `LLM 连接失败（fetch failed: ${cause}）。请检查模型服务/网络后重试。`
+          : "LLM 连接失败（fetch failed）。请检查模型服务/网络后重试；长文整理已改为分段请求。",
       );
     }
     throw error;
@@ -132,7 +152,10 @@ function getLlmTimeoutMs(role: TextRole): number {
   const raw = Number(process.env.LLM_REQUEST_TIMEOUT_MS ?? "");
   if (Number.isFinite(raw) && raw > 0) return Math.floor(raw);
   // 工程长主题 + 多套大纲时，模型常需 2～5 分钟；超时过紧会误杀
-  if (role === "content" || role === "polish" || role === "expand") return 480_000; // 8 分钟
+  // reformat 与 polish 同量级：整篇 HTML 输出，不能用短任务超时
+  if (role === "content" || role === "polish" || role === "expand" || role === "reformat") {
+    return 480_000; // 8 分钟
+  }
   if (role === "outline") return 420_000; // 7 分钟
   return 180_000; // 其它短任务 3 分钟
 }
@@ -995,6 +1018,144 @@ ${ARTICLE_HTML_FORMAT_RULES_BRIEF}
     return normalizeCalloutBlocks(parsed.content);
   }
   return normalizeCalloutBlocks(input.content);
+}
+
+/** 单次整理约 1800 字，避免长文一次生成被上游掐断（fetch failed） */
+const REFORMAT_CHUNK_PLAIN_CHARS = 1800;
+
+function splitHtmlForReformat(html: string, maxPlain: number): string[] {
+  const parts = html
+    .split(/(?<=<\/(?:p|h[1-6]|pre|ul|ol|blockquote|div)>)/i)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return [html];
+
+  const chunks: string[] = [];
+  let buf = "";
+  let bufPlain = 0;
+  for (const part of parts) {
+    const pPlain = countPlainTextChars(part) || part.length;
+    if (buf && bufPlain + pPlain > maxPlain) {
+      chunks.push(buf);
+      buf = part;
+      bufPlain = pPlain;
+    } else {
+      buf += (buf ? "\n" : "") + part;
+      bufPlain += pPlain;
+    }
+  }
+  if (buf.trim()) chunks.push(buf);
+  return chunks;
+}
+
+function isTransientLlmError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const msg = error.message.toLowerCase();
+  return (
+    msg.includes("fetch failed") ||
+    msg.includes("llm 请求超时") ||
+    msg.includes("econnreset") ||
+    msg.includes("socket") ||
+    msg.includes("network") ||
+    msg.includes("aborted")
+  );
+}
+
+async function sleep(ms: number) {
+  await new Promise((r) => setTimeout(r, ms));
+}
+
+async function reformatHtmlChunk(content: string, partIndex: number, partTotal: number): Promise<string> {
+  const plainLen = countPlainTextChars(content);
+  const maxTokens = Math.min(4096, Math.max(2048, Math.ceil(plainLen * 2.4) + 512));
+
+  const prompt: ChatMessage[] = [
+    {
+      role: "system",
+      content: `你是公众号排版助手。用户给出的是文章的第 ${partIndex}/${partTotal} 段（可能是纯文本、Markdown 或结构混乱的 HTML）。只整理这一段的排版，输出规范微信 HTML 片段。
+
+${ARTICLE_HTML_FORMAT_RULES_BRIEF}
+
+【硬性约束】
+- 输出 JSON：{ "content": string }，content 为本段 HTML 片段（不要包 html/body）
+- **禁止改写、扩写、删减、润色措辞**：观点、事实、代码、注释、标点尽量原样保留；只改标签与分段结构
+- 识别并包裹代码：\`\`\` 围栏、连续 import/函数体等 → <pre><code class="language-xxx">...</code></pre>
+- 小标题 → <h2>/<h3>；段落 → <p>；步骤/要点 → ol/ul，列表项 <li><strong>短标题</strong>说明</li>
+- Markdown **加粗** → <strong>；禁止输出 Markdown 语法
+- 不要新增原文没有的「总结 / 引流 / 关注」；禁止 figure、img、table、inline style、自创 class`,
+    },
+    {
+      role: "user",
+      content: JSON.stringify({
+        task: "reformat_chunk",
+        part: partIndex,
+        totalParts: partTotal,
+        plainChars: plainLen,
+        content,
+      }),
+    },
+  ];
+
+  const raw = await callChat(prompt, {
+    jsonMode: true,
+    maxTokens,
+    role: "reformat",
+    temperature: 0.15,
+  });
+  if (!raw) {
+    throw new Error(`模型未返回结果（第 ${partIndex}/${partTotal} 段），请稍后重试`);
+  }
+  const parsed = safeParse<{ content?: string }>(raw, {});
+  if (!parsed.content || countPlainTextChars(parsed.content) < Math.min(20, plainLen * 0.25)) {
+    throw new Error(`格式整理失败：第 ${partIndex}/${partTotal} 段输出无效`);
+  }
+  return parsed.content.trim();
+}
+
+/**
+ * 仅整理导入/手写稿格式：按正文生成同一套微信 HTML 规则输出，禁止改写文意。
+ * 长文自动分段请求，避免单次超长 completion 被网关断开。
+ */
+export async function reformatArticleHtml(input: {
+  content: string;
+  onProgress?: (progress: number, label: string) => Promise<void> | void;
+}) {
+  if (!isAiConfigured()) {
+    throw new Error("未配置 AI API Key，无法整理格式");
+  }
+
+  const chunks = splitHtmlForReformat(input.content, REFORMAT_CHUNK_PLAIN_CHARS);
+  const out: string[] = [];
+
+  for (let i = 0; i < chunks.length; i++) {
+    const partIndex = i + 1;
+    const label =
+      chunks.length === 1 ? "整理格式中" : `整理格式 ${partIndex}/${chunks.length}`;
+    const progress = 30 + Math.floor((i / Math.max(chunks.length, 1)) * 50);
+    await input.onProgress?.(progress, label);
+
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        out.push(await reformatHtmlChunk(chunks[i], partIndex, chunks.length));
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (attempt === 0 && isTransientLlmError(error)) {
+          await sleep(1200);
+          continue;
+        }
+        throw error;
+      }
+    }
+    if (lastError) throw lastError;
+  }
+
+  const merged = out.join("\n");
+  return highlightCodeBlocks(
+    dedupeRepeatedBlocks(fixCodeBlocks(normalizeCalloutBlocks(merged))),
+  );
 }
 
 export async function expandSection(input: {
