@@ -1,28 +1,23 @@
 #!/usr/bin/env bash
-# 宝塔 / 自建服务器一键更新部署
+# 宝塔 / 自建服务器一键更新部署（Docker Compose：Postgres + App）
 # 用法：cd /www/ai-article && bash docker/deploy.sh
 #
-# 拉取顺序：git pull(origin) → GitHub zip → 代理 → Gitee 兜底
-#
-# 注意用户名大小写不同：
-#   GitHub：https://github.com/lp-Imagine/ai-article.git
-#   Gitee ：https://gitee.com/lp-imagine/ai-article.git
-#
 # 环境变量：
-#   SKIP_PULL=1          跳过拉代码，只用本地目录重建镜像
-#   GITHUB_OWNER=xxx     GitHub 用户名（默认 lp-Imagine）
-#   GITEE_OWNER=xxx      Gitee 用户名（默认 lp-imagine，全小写）
-#   REPO_ZIP_URL=...     指定单一 zip 地址（最高优先）
-#   GIT_TIMEOUT=30       git pull 超时秒数
-#   CURL_TIMEOUT=60      zip 下载超时秒数
+#   SKIP_PULL=1
+#   COOKIE_SECURE=0|1
+#   PG_DATA_DIR=/www/data/ai-article-pg
+#   POSTGRES_PASSWORD=...
+#   JOB_MAX_CONCURRENT_PER_USER=2
+#   JOB_DAILY_LIMIT=50
+#   JOB_DAILY_LIMIT_ENABLED=1
 
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-/www/ai-article}"
 DATA_DIR="${DATA_DIR:-/www/data/ai-article}"
+PG_DATA_DIR="${PG_DATA_DIR:-/www/data/ai-article-pg}"
 IMAGE_NAME="${IMAGE_NAME:-wechat-ai-writer}"
 CONTAINER_NAME="${CONTAINER_NAME:-ai-article}"
-# GitHub / Gitee 用户名大小写不同，勿混用
 GITHUB_OWNER="${GITHUB_OWNER:-${REPO_OWNER:-lp-Imagine}}"
 GITEE_OWNER="${GITEE_OWNER:-lp-imagine}"
 REPO_NAME="${REPO_NAME:-ai-article}"
@@ -32,7 +27,6 @@ GIT_TIMEOUT="${GIT_TIMEOUT:-30}"
 CURL_TIMEOUT="${CURL_TIMEOUT:-60}"
 SKIP_PULL="${SKIP_PULL:-0}"
 
-# 顺序：自定义 URL → GitHub → GitHub 代理 → Gitee 兜底
 ZIP_URLS=()
 if [ -n "${REPO_ZIP_URL:-}" ]; then
   ZIP_URLS+=("$REPO_ZIP_URL")
@@ -45,7 +39,7 @@ ZIP_URLS+=(
 )
 
 cd "$APP_DIR"
-mkdir -p "$DATA_DIR"
+mkdir -p "$DATA_DIR" "$PG_DATA_DIR"
 
 run_with_timeout() {
   local secs="$1"
@@ -71,7 +65,6 @@ sync_from_zip() {
   fi
   unzip -q "$tmp/repo.zip" -d "$tmp"
   local src
-  # GitHub: ai-article-master；Gitee: ai-article-master 或 ai-article
   src="$(find "$tmp" -maxdepth 1 -type d ! -path "$tmp" | head -1)"
   if [ -z "$src" ]; then
     echo "  zip 解压后未找到源码目录"
@@ -82,6 +75,7 @@ sync_from_zip() {
     --exclude '.git' \
     --exclude 'node_modules' \
     --exclude '.next' \
+    --exclude 'data' \
     "$src"/ "$APP_DIR"/
   rm -rf "$tmp"
   return 0
@@ -90,10 +84,7 @@ sync_from_zip() {
 if [ "$SKIP_PULL" = "1" ]; then
   echo "==> 跳过拉代码（SKIP_PULL=1），使用本地 $APP_DIR"
 else
-  echo "==> 拉取最新代码（超时 ${GIT_TIMEOUT}s / curl ${CURL_TIMEOUT}s）"
-  if command -v git >/dev/null 2>&1 && [ -d .git ]; then
-    echo "  当前 origin: $(git remote get-url origin 2>/dev/null || echo '无')"
-  fi
+  echo "==> 拉取最新代码"
   pulled=0
   if run_with_timeout "$GIT_TIMEOUT" \
     env GIT_TERMINAL_PROMPT=0 git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20 \
@@ -113,40 +104,43 @@ else
   fi
 
   if [ "$pulled" -ne 1 ]; then
-    echo
-    echo "错误：无法拉取代码（GitHub / 代理 / Gitee 均失败）。"
-    echo
-    echo "可选处理："
-    echo "  1) 确认已把仓库同步到 Gitee，且用户名正确："
-    echo "       GITEE_OWNER=你的用户名 bash docker/deploy.sh"
-    echo "  2) 本机上传代码后："
-    echo "       SKIP_PULL=1 bash docker/deploy.sh"
+    echo "错误：无法拉取代码。可用 SKIP_PULL=1 跳过。"
     exit 1
   fi
 fi
 
-echo "==> 构建镜像 $IMAGE_NAME"
-docker build -t "$IMAGE_NAME" .
-
-echo "==> 重启容器 $CONTAINER_NAME"
+# 兼容旧单容器：若还在跑则先停掉
 docker stop "$CONTAINER_NAME" 2>/dev/null || true
 docker rm "$CONTAINER_NAME" 2>/dev/null || true
 
-docker run -d \
-  --name "$CONTAINER_NAME" \
-  --restart unless-stopped \
-  -p 127.0.0.1:3000:3000 \
-  -e DATABASE_URL="file:/data/prod.db" \
-  -e COOKIE_SECURE="${COOKIE_SECURE:-0}" \
-  -v "$DATA_DIR":/data \
-  "$IMAGE_NAME"
+export IMAGE_NAME
+export PG_DATA_DIR
+export COOKIE_SECURE="${COOKIE_SECURE:-0}"
+export POSTGRES_USER="${POSTGRES_USER:-draftly}"
+export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-draftly}"
+export POSTGRES_DB="${POSTGRES_DB:-draftly}"
+export JOB_MAX_CONCURRENT_PER_USER="${JOB_MAX_CONCURRENT_PER_USER:-2}"
+export JOB_DAILY_LIMIT="${JOB_DAILY_LIMIT:-50}"
+export JOB_DAILY_LIMIT_ENABLED="${JOB_DAILY_LIMIT_ENABLED:-1}"
+
+echo "==> Docker Compose 构建并启动（Postgres + App）"
+if docker compose version >/dev/null 2>&1; then
+  docker compose up -d --build
+elif command -v docker-compose >/dev/null 2>&1; then
+  docker-compose up -d --build
+else
+  echo "错误：未找到 docker compose / docker-compose"
+  exit 1
+fi
 
 echo "==> 等待启动"
-sleep 3
-docker ps --filter "name=$CONTAINER_NAME"
+sleep 5
+docker compose ps 2>/dev/null || docker-compose ps
 echo
-docker logs "$CONTAINER_NAME" --tail 20
+docker compose logs app --tail 30 2>/dev/null || docker-compose logs app --tail 30
 echo
 echo "完成。"
-echo "  HTTP：http://你的IP 或 http://你的域名"
-echo "  HTTPS 配好后请用：COOKIE_SECURE=1 bash docker/deploy.sh"
+echo "  HTTP：http://你的IP 或域名"
+echo "  Postgres 数据：$PG_DATA_DIR"
+echo "  若从旧 SQLite 迁数据：见 scripts/migrate-sqlite-to-postgres.ts"
+echo "  HTTPS 后请用：COOKIE_SECURE=1 bash docker/deploy.sh"

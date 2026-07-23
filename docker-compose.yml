@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-draftly}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-draftly}
+      POSTGRES_DB: ${POSTGRES_DB:-draftly}
+    ports:
+      - "${POSTGRES_BIND:-127.0.0.1:5432}:5432"
+    volumes:
+      - ${PG_DATA_DIR:-./data/postgres}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-draftly} -d ${POSTGRES_DB:-draftly}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    image: ${IMAGE_NAME:-wechat-ai-writer}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${APP_BIND:-127.0.0.1:3000}:3000"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-draftly}:${POSTGRES_PASSWORD:-draftly}@db:5432/${POSTGRES_DB:-draftly}
+      COOKIE_SECURE: ${COOKIE_SECURE:-0}
+      SUPER_ADMIN_USERNAME: ${SUPER_ADMIN_USERNAME:-}
+      SUPER_ADMIN_PASSWORD: ${SUPER_ADMIN_PASSWORD:-}
+      SUPER_ADMIN_RESET: ${SUPER_ADMIN_RESET:-}
+      JOB_MAX_CONCURRENT_PER_USER: ${JOB_MAX_CONCURRENT_PER_USER:-2}
+      JOB_DAILY_LIMIT: ${JOB_DAILY_LIMIT:-50}
+      JOB_DAILY_LIMIT_ENABLED: ${JOB_DAILY_LIMIT_ENABLED:-1}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_BASE_URL: ${AI_BASE_URL:-}
+      TEXT_MODEL_NAME: ${TEXT_MODEL_NAME:-}

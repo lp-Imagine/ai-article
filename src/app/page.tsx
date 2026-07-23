@@ -9,10 +9,12 @@ import { useToast } from "@/components/toast";
 import {
   clearArticleBackgroundTask,
   getArticleBackgroundTask,
+  patchArticleBackgroundTask,
   reconcileBackgroundTaskAfterRequestFailure,
   registerArticleTaskAbortController,
   startArticleBackgroundTask,
   unregisterArticleTaskAbortController,
+  waitForGenerationJob,
 } from "@/lib/article-task-tracker";
 import { readApiResponse } from "@/lib/api-client";
 import { useArticleBackgroundTasks } from "@/hooks/use-article-background-tasks";
@@ -125,9 +127,18 @@ export default function HomePage() {
         signal: ctrl.signal,
       })
         .then(async (res) => {
-          const outlineJson = await readApiResponse<unknown>(res);
+          const outlineJson = await readApiResponse<{ jobId?: string }>(res);
           if (outlineJson.code !== 0) {
             throw new Error(outlineJson.message || "生成大纲失败");
+          }
+          const jobId = outlineJson.data?.jobId;
+          if (!jobId) {
+            throw new Error("未返回任务 ID");
+          }
+          patchArticleBackgroundTask(articleId, { jobId });
+          const job = await waitForGenerationJob(jobId, { signal: ctrl.signal });
+          if (job.status === "failed" || job.status === "cancelled") {
+            throw new Error(job.error || "生成大纲失败");
           }
         })
         .then(() => {

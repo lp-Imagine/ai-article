@@ -7,6 +7,8 @@ export type ArticleBackgroundTask = {
   startedAt: number;
   statusAtStart: string;
   contentLengthAtStart: number;
+  /** 服务端 GenerationJob id；有则优先按 job 轮询 */
+  jobId?: string;
 };
 
 export type ArticleTaskSnapshot = {
@@ -14,6 +16,17 @@ export type ArticleTaskSnapshot = {
   content?: string | null;
   outline?: unknown;
   updatedAt?: string;
+};
+
+export type GenerationJobSnapshot = {
+  id: string;
+  articleId: string;
+  type: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  progress: number;
+  stepLabel?: string | null;
+  error?: string | null;
+  label?: string;
 };
 
 export function isOutlineBackgroundTaskLabel(label: string) {
@@ -57,6 +70,17 @@ export function startArticleBackgroundTask(task: ArticleBackgroundTask) {
   writeAll(tasks);
 }
 
+export function patchArticleBackgroundTask(
+  articleId: string,
+  patch: Partial<ArticleBackgroundTask>,
+) {
+  const tasks = readAll();
+  const current = tasks[articleId];
+  if (!current) return;
+  tasks[articleId] = { ...current, ...patch };
+  writeAll(tasks);
+}
+
 export function registerArticleTaskAbortController(articleId: string, controller: AbortController) {
   const existing = taskAbortControllers.get(articleId);
   if (existing && existing !== controller) {
@@ -72,13 +96,16 @@ export function unregisterArticleTaskAbortController(articleId: string, controll
   taskAbortControllers.delete(articleId);
 }
 
-/** 取消后台任务：中断进行中的请求并清除浮标状态 */
+/** 取消后台任务：中断轮询并尽量取消服务端 job */
 export function cancelArticleBackgroundTask(articleId: string): ArticleBackgroundTask | null {
   const task = getArticleBackgroundTask(articleId);
   const controller = taskAbortControllers.get(articleId);
   if (controller) {
     controller.abort();
     taskAbortControllers.delete(articleId);
+  }
+  if (task?.jobId) {
+    void fetch(`/api/jobs/${task.jobId}/cancel`, { method: "POST" }).catch(() => {});
   }
   clearArticleBackgroundTask(articleId);
   return task;
@@ -110,63 +137,9 @@ export function isArticleBackgroundTaskExpired(task: ArticleBackgroundTask, now 
   return now - task.startedAt > TASK_TTL_MS;
 }
 
-function plainTextLengthFromHtml(html: string) {
-  if (typeof document === "undefined") {
-    return html.replace(/<[^>]+>/g, "").replace(/\s+/g, "").length;
-  }
-  const div = document.createElement("div");
-  div.innerHTML = html;
-  return (div.textContent || "").replace(/\s+/g, "").length;
-}
-
-function getInlineImageProgressFromContent(html: string) {
-  let maxCurrent = 0;
-  let maxTotal = 0;
-  for (const match of html.matchAll(/<figure\b[^>]*\sdata-progress="(\d+)\/(\d+)"/gi)) {
-    const current = Number(match[1]) || 0;
-    const total = Number(match[2]) || 0;
-    if (total >= maxTotal) {
-      maxTotal = total;
-      maxCurrent = current;
-    }
-  }
-  return { current: maxCurrent, total: maxTotal };
-}
-
-function isInlineImageGenerationComplete(html: string) {
-  const { current, total } = getInlineImageProgressFromContent(html);
-  return total > 0 && current >= total;
-}
-
-export function isArticleBackgroundTaskComplete(
-  task: ArticleBackgroundTask,
-  article: ArticleTaskSnapshot,
-) {
-  if (isOutlineBackgroundTaskLabel(task.label)) {
-    const outlines = Array.isArray(article.outline) ? article.outline : [];
-    if (outlines.length === 0) return false;
-    if (task.statusAtStart === "draft" && article.status !== "draft") return true;
-    if (article.updatedAt && new Date(article.updatedAt).getTime() >= task.startedAt + 1500) {
-      return true;
-    }
-    return false;
-  }
-
-  if (task.label === "生成章节配图") {
-    return isInlineImageGenerationComplete(article.content ?? "");
-  }
-
-  const contentLen = plainTextLengthFromHtml(article.content ?? "");
-  if (article.status !== task.statusAtStart) return true;
-  if (contentLen > task.contentLengthAtStart + 40) return true;
-  return false;
-}
-
-type ApiResponse<T> = { code: number; data?: T };
+type ApiResponse<T> = { code: number; data?: T; message?: string };
 
 const BACKGROUND_TASK_RECOVERY_POLL_MS = 2000;
-/** 请求中断后先做一轮快速确认，避免在 catch 里阻塞数分钟 */
-const BACKGROUND_TASK_RECOVERY_BURST_MS = 60_000;
 
 export function getBackgroundTaskRecoveryMaxMs(task: ArticleBackgroundTask, now = Date.now()) {
   return Math.max(0, TASK_TTL_MS - (now - task.startedAt));
@@ -190,35 +163,44 @@ function sleep(ms: number, signal?: AbortSignal) {
   });
 }
 
-/** 请求因网关超时等中断后，轮询确认后台任务是否已在服务端完成 */
-export async function waitForArticleBackgroundTaskCompletion(
-  task: ArticleBackgroundTask,
+export async function fetchGenerationJob(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<GenerationJobSnapshot | null> {
+  const res = await fetch(`/api/jobs/${jobId}?t=${Date.now()}`, {
+    cache: "no-store",
+    signal,
+  });
+  const json = (await res.json()) as ApiResponse<GenerationJobSnapshot>;
+  if (json.code !== 0 || !json.data) return null;
+  return json.data;
+}
+
+/** 入队后轮询 job，直到成功/失败/取消 */
+export async function waitForGenerationJob(
+  jobId: string,
   options?: {
     signal?: AbortSignal;
-    maxWaitMs?: number;
     pollIntervalMs?: number;
+    onProgress?: (job: GenerationJobSnapshot) => void;
+    maxWaitMs?: number;
   },
-): Promise<ArticleTaskSnapshot | null> {
-  const maxWaitMs = options?.maxWaitMs ?? getBackgroundTaskRecoveryMaxMs(task);
+): Promise<GenerationJobSnapshot> {
   const pollIntervalMs = options?.pollIntervalMs ?? BACKGROUND_TASK_RECOVERY_POLL_MS;
-  if (maxWaitMs <= 0) return null;
-
+  const maxWaitMs = options?.maxWaitMs ?? TASK_TTL_MS;
   const deadline = Date.now() + maxWaitMs;
 
   while (Date.now() < deadline) {
-    if (options?.signal?.aborted) return null;
+    if (options?.signal?.aborted) {
+      throw new DOMException("The operation was aborted.", "AbortError");
+    }
 
-    try {
-      const res = await fetch(`/api/articles/${task.articleId}?t=${Date.now()}`, {
-        cache: "no-store",
-        signal: options?.signal,
-      });
-      const json = (await res.json()) as ApiResponse<ArticleTaskSnapshot>;
-      if (json.code === 0 && json.data && isArticleBackgroundTaskComplete(task, json.data)) {
-        return json.data;
+    const job = await fetchGenerationJob(jobId, options?.signal);
+    if (job) {
+      options?.onProgress?.(job);
+      if (job.status === "succeeded" || job.status === "failed" || job.status === "cancelled") {
+        return job;
       }
-    } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") return null;
     }
 
     const remaining = deadline - Date.now();
@@ -226,14 +208,13 @@ export async function waitForArticleBackgroundTaskCompletion(
     await sleep(Math.min(pollIntervalMs, remaining), options?.signal);
   }
 
-  return null;
+  throw new Error("等待任务超时，请稍后刷新查看结果");
 }
 
 export type BackgroundTaskReconcileOutcome = "completed" | "pending" | "failed";
 
 /**
- * 请求因网关超时等中断后，轮询确认任务是否已在服务端完成。
- * 若轮询窗口内未完成但任务尚未过期，返回 pending，交由浮标/文章页继续跟踪。
+ * 请求中断后，若已有 jobId 则继续轮询 job；否则回退到文章快照启发式（兼容旧任务）。
  */
 export async function reconcileBackgroundTaskAfterRequestFailure(
   task: ArticleBackgroundTask,
@@ -242,21 +223,26 @@ export async function reconcileBackgroundTaskAfterRequestFailure(
   const remainingTtl = getBackgroundTaskRecoveryMaxMs(task);
   if (remainingTtl <= 0) return "failed";
 
-  const burstWaitMs = Math.min(
-    options?.maxWaitMs ?? BACKGROUND_TASK_RECOVERY_BURST_MS,
-    remainingTtl,
-  );
-  const completed = await waitForArticleBackgroundTaskCompletion(task, {
-    signal: options?.signal,
-    maxWaitMs: burstWaitMs,
-  });
-  if (completed) return "completed";
+  if (task.jobId) {
+    try {
+      const job = await waitForGenerationJob(task.jobId, {
+        signal: options?.signal,
+        maxWaitMs: Math.min(options?.maxWaitMs ?? 60_000, remainingTtl),
+      });
+      if (job.status === "succeeded") return "completed";
+      if (job.status === "failed" || job.status === "cancelled") return "failed";
+    } catch {
+      // fall through
+    }
+    return isArticleBackgroundTaskExpired(task) ? "failed" : "pending";
+  }
 
   return isArticleBackgroundTaskExpired(task) ? "failed" : "pending";
 }
 
 export async function pollArticleBackgroundTasks(options?: {
   onComplete?: (task: ArticleBackgroundTask) => void;
+  onFailed?: (task: ArticleBackgroundTask, message: string) => void;
 }) {
   const tasks = listArticleBackgroundTasks();
   const now = Date.now();
@@ -268,18 +254,52 @@ export async function pollArticleBackgroundTasks(options?: {
         return;
       }
 
-      try {
-        const res = await fetch(`/api/articles/${task.articleId}?t=${now}`, { cache: "no-store" });
-        const json = (await res.json()) as ApiResponse<ArticleTaskSnapshot>;
-        if (json.code !== 0 || !json.data) return;
+      if (!task.jobId) return;
 
-        if (isArticleBackgroundTaskComplete(task, json.data)) {
+      try {
+        const job = await fetchGenerationJob(task.jobId);
+        if (!job) return;
+        if (job.status === "succeeded") {
           clearArticleBackgroundTask(task.articleId);
           options?.onComplete?.(task);
+        } else if (job.status === "failed" || job.status === "cancelled") {
+          clearArticleBackgroundTask(task.articleId);
+          options?.onFailed?.(task, job.error || "任务失败");
         }
       } catch {
         // ignore transient poll errors
       }
     }),
   );
+}
+
+/** 从服务端同步进行中的任务到 sessionStorage（刷新页面后恢复浮标） */
+export async function syncActiveJobsFromServer() {
+  if (typeof window === "undefined") return;
+  try {
+    const res = await fetch("/api/jobs?active=1", { cache: "no-store" });
+    const json = (await res.json()) as ApiResponse<
+      Array<GenerationJobSnapshot & { createdAt?: string }>
+    >;
+    if (json.code !== 0 || !json.data) return;
+
+    const tasks = readAll();
+    for (const job of json.data) {
+      const label = job.label || job.type;
+      const existing = tasks[job.articleId];
+      tasks[job.articleId] = {
+        articleId: job.articleId,
+        label,
+        title: existing?.title || label,
+        articleLabel: existing?.articleLabel,
+        startedAt: existing?.startedAt ?? Date.now(),
+        statusAtStart: existing?.statusAtStart ?? "draft",
+        contentLengthAtStart: existing?.contentLengthAtStart ?? 0,
+        jobId: job.id,
+      };
+    }
+    writeAll(tasks);
+  } catch {
+    // ignore
+  }
 }

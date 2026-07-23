@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -52,6 +52,23 @@ enum UserRole {
   SUPER_ADMIN
 }
 
+enum GenerationJobType {
+  outline
+  content
+  cover
+  inline_images
+  polish
+  expand
+}
+
+enum GenerationJobStatus {
+  queued
+  running
+  succeeded
+  failed
+  cancelled
+}
+
 model User {
   id           String    @id @default(cuid())
   username     String    @unique
@@ -65,6 +82,7 @@ model User {
   articles Article[]
   configs  AppConfig[]
   sessions Session[]
+  jobs     GenerationJob[]
 }
 
 model Session {
@@ -102,11 +120,12 @@ model Article {
   createdAt            DateTime      @default(now())
   updatedAt            DateTime      @updatedAt
 
-  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   images         ImageAsset[]
   publishRecords PublishRecord[]
   riskChecks     RiskCheck[]
   versions       ArticleVersion[]
+  jobs           GenerationJob[]
 
   @@index([userId])
 }
@@ -184,4 +203,28 @@ model AppConfig {
 
   @@unique([userId, configKey])
   @@index([userId])
+}
+
+model GenerationJob {
+  id         String              @id @default(cuid())
+  userId     String
+  articleId  String
+  type       GenerationJobType
+  status     GenerationJobStatus @default(queued)
+  progress   Int                 @default(0)
+  stepLabel  String?
+  error      String?
+  payload    Json?
+  resultJson Json?
+  createdAt  DateTime            @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([articleId, type, status])
+  @@index([status, createdAt])
+  @@index([userId, createdAt])
 }

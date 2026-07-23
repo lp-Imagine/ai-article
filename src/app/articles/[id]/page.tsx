@@ -25,13 +25,14 @@ import {
   clearArticleBackgroundTask,
   cancelArticleBackgroundTask,
   getArticleBackgroundTask,
-  isArticleBackgroundTaskComplete,
   isArticleBackgroundTaskExpired,
   isOutlineBackgroundTaskLabel,
+  patchArticleBackgroundTask,
   registerArticleTaskAbortController,
   unregisterArticleTaskAbortController,
   startArticleBackgroundTask,
   reconcileBackgroundTaskAfterRequestFailure,
+  waitForGenerationJob,
 } from "@/lib/article-task-tracker";
 
 type PublishRecord = {
@@ -301,28 +302,56 @@ export default function ArticlePage({
 
     const poll = async () => {
       try {
-        const res = await fetch(`/api/articles/${id}?t=${Date.now()}`, { cache: "no-store" });
-        const json = (await res.json()) as ApiResponse<ArticleRecord>;
-        if (stopped || json.code !== 0 || !json.data) return;
+        if (task.jobId) {
+          const { fetchGenerationJob } = await import("@/lib/article-task-tracker");
+          const job = await fetchGenerationJob(task.jobId);
+          if (stopped || !job) return;
 
-        if (isArticleBackgroundTaskComplete(task, json.data)) {
-          clearArticleBackgroundTask(id);
-          if (!mountedRef.current) return;
-          setArticle(json.data);
-          setBusy(null);
-          setProgress(resetProgressState());
-          toast.show({
-            title: "后台任务已完成",
-            message: `${task.label}已完成`,
-            variant: "success",
-          });
+          if (job.status === "succeeded") {
+            clearArticleBackgroundTask(id);
+            const res = await fetch(`/api/articles/${id}?t=${Date.now()}`, { cache: "no-store" });
+            const json = (await res.json()) as ApiResponse<ArticleRecord>;
+            if (!mountedRef.current) return;
+            if (json.code === 0 && json.data) setArticle(json.data);
+            setBusy(null);
+            setProgress(resetProgressState());
+            toast.show({
+              title: "后台任务已完成",
+              message: `${task.label}已完成`,
+              variant: "success",
+            });
+            return;
+          }
+
+          if (job.status === "failed" || job.status === "cancelled") {
+            clearArticleBackgroundTask(id);
+            if (!mountedRef.current) return;
+            setBusy(null);
+            setProgress(resetProgressState());
+            toast.show({
+              title: "后台任务失败",
+              message: job.error || `${task.label}失败`,
+              variant: "error",
+            });
+            return;
+          }
+
+          if (mountedRef.current) {
+            resumeProgressUi();
+            setProgress((p) => ({
+              ...p,
+              steps: p.steps.map((s, i) =>
+                i === 1
+                  ? { ...s, status: "running", label: job.stepLabel || s.label }
+                  : s,
+              ),
+            }));
+          }
           return;
         }
 
-        if (mountedRef.current) {
-          resumeProgressUi();
-          setArticle(json.data);
-        }
+        // 无 jobId 的旧任务：仅展示进度，完成后由浮标/手动刷新
+        if (mountedRef.current) resumeProgressUi();
       } catch {
         // ignore transient poll errors
       }
@@ -631,18 +660,9 @@ export default function ArticlePage({
         signal: ctrl.signal,
       });
 
-      if (pollingTimer) { clearInterval(pollingTimer); pollingTimer = undefined; }
-
-      if (isLong) {
-        setProgress((p) => ({
-          ...p,
-          steps: p.steps.map((s, i) =>
-            i === 0 ? { ...s, status: "done" } : i === 1 ? { ...s, status: "done", label: isInlineImages ? `已生成配图` : `${label}完成` } : i === 2 ? { ...s, status: "running" } : s,
-          ),
-        }));
-      }
-
       const json = (await res.json()) as ApiResponse<{
+        jobId?: string;
+        status?: string;
         content?: string;
         images?: Array<{ heading: string; url: string }>;
         total?: number;
@@ -652,6 +672,104 @@ export default function ArticlePage({
         throw new Error(json.message || `${label} 失败`);
       }
 
+      const jobId = json.data?.jobId;
+      if (isLong && jobId) {
+        patchArticleBackgroundTask(id, { jobId });
+
+        if (isLong) {
+          setProgress((p) => ({
+            ...p,
+            steps: p.steps.map((s, i) =>
+              i === 0 ? { ...s, status: "done" } : i === 1 ? { ...s, status: "running" } : s,
+            ),
+          }));
+        }
+
+        const job = await waitForGenerationJob(jobId, {
+          signal: ctrl.signal,
+          onProgress: (snap) => {
+            if (!mountedRef.current) return;
+            setProgress((p) => ({
+              ...p,
+              generatedCount:
+                typeof snap.progress === "number"
+                  ? Math.round((snap.progress / 100) * Math.max(1, p.totalCount ?? 1))
+                  : p.generatedCount,
+              steps: p.steps.map((s, i) => {
+                if (i === 1) {
+                  return {
+                    ...s,
+                    status: "running" as const,
+                    label: snap.stepLabel || s.label,
+                  };
+                }
+                if (i === 2 && snap.progress >= 85) {
+                  return { ...s, status: "running" as const };
+                }
+                return s;
+              }),
+            }));
+
+            if (isInlineImages) {
+              void fetch(`/api/articles/${id}?t=${Date.now()}`, { cache: "no-store" })
+                .then((r) => r.json())
+                .then((pollJson: ApiResponse<ArticleRecord>) => {
+                  if (pollJson.code === 0 && pollJson.data?.content) {
+                    applyInlineImagePollProgress(pollJson.data.content, inlineImagesSessionId);
+                  }
+                })
+                .catch(() => {});
+            }
+          },
+        });
+
+        if (pollingTimer) {
+          clearInterval(pollingTimer);
+          pollingTimer = undefined;
+        }
+
+        if (job.status === "failed" || job.status === "cancelled") {
+          throw new Error(job.error || `${label}失败`);
+        }
+
+        clearArticleBackgroundTask(id);
+        await refresh();
+
+        if (!mountedRef.current) return;
+        setProgress((p) => ({
+          ...p,
+          generatedCount: p.totalCount,
+          steps: p.steps.map((s) => ({ ...s, status: "done" as const })),
+        }));
+
+        if (toastId) toast.dismiss(toastId);
+        actionToastIdRef.current = null;
+        toast.show({ title: "操作成功", message: `${label}完成`, variant: "success" });
+        scheduleProgressClose(progressSessionId, 800);
+        return;
+      }
+
+      // 非异步任务（标题/摘要等）仍走同步响应
+      if (pollingTimer) {
+        clearInterval(pollingTimer);
+        pollingTimer = undefined;
+      }
+
+      if (isLong) {
+        setProgress((p) => ({
+          ...p,
+          steps: p.steps.map((s, i) =>
+            i === 0
+              ? { ...s, status: "done" }
+              : i === 1
+                ? { ...s, status: "done", label: isInlineImages ? `已生成配图` : `${label}完成` }
+                : i === 2
+                  ? { ...s, status: "running" }
+                  : s,
+          ),
+        }));
+      }
+
       await refresh();
 
       if (isLong) {
@@ -659,7 +777,9 @@ export default function ArticlePage({
         if (!mountedRef.current) return;
         setProgress((p) => ({
           ...p,
-          generatedCount: isInlineImages ? (json.data?.total ?? json.data?.images?.length ?? p.totalCount) : p.totalCount,
+          generatedCount: isInlineImages
+            ? (json.data?.total ?? json.data?.images?.length ?? p.totalCount)
+            : p.totalCount,
           steps: p.steps.map((s, i) => (i === 2 ? { ...s, status: "done" } : s)),
         }));
       }

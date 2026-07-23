@@ -8,7 +8,7 @@ export async function readApiResponse<T>(res: Response): Promise<ApiResponse<T>>
 
     if (res.status === 502 || res.status === 504 || res.status === 408) {
       throw new Error(
-        `请求超时或被网关中断 (HTTP ${res.status})。AI 生成通常需要 30–60 秒，请将 Nginx/负载均衡的 proxy_read_timeout 设为 120s 以上后重试。`,
+        `请求超时或被网关中断 (HTTP ${res.status})。长任务应为异步入队；请确认 Nginx proxy_read_timeout ≥ 300s，并刷新页面查看任务是否已在后台完成。`,
       );
     }
 

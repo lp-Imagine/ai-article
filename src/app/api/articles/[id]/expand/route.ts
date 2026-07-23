@@ -1,72 +1,38 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
-import { expandSection } from "@/lib/ai";
-import { findOwnedArticle, requireUser, withAuthUserConfig } from "@/lib/api-auth";
+import { findOwnedArticle, notFound, requireUser } from "@/lib/api-auth";
+import { enqueueGenerationJob, jobAcceptedResponse, jobLimitErrorResponse } from "@/lib/jobs/enqueue";
 
 export async function POST(
   req: Request,
-  context: { params: Promise<{ id: string }> }
+  context: { params: Promise<{ id: string }> },
 ) {
   const user = await requireUser();
   if (user instanceof NextResponse) return user;
   const { id } = await context.params;
 
-  return withAuthUserConfig(user, async () => {
-    const body = (await req.json().catch(() => ({}))) as {
-      instruction?: string;
-    };
+  const article = await findOwnedArticle(id, user.id);
+  if (!article) return notFound("文章不存在");
+  if (!article.content) {
+    return NextResponse.json(
+      { code: 1003, message: "正文为空，先生成正文再扩写", data: null },
+      { status: 400 },
+    );
+  }
 
-    const article = await findOwnedArticle(id, user.id);
-    if (!article) {
-      return NextResponse.json(
-        { code: 404, message: "article not found", data: null },
-        { status: 404 }
-      );
-    }
+  const body = (await req.json().catch(() => ({}))) as { instruction?: string };
 
-    if (!article.content) {
-      return NextResponse.json(
-        { code: 1003, message: "正文为空，先生成正文再扩写", data: null },
-        { status: 400 }
-      );
-    }
-
-    try {
-      const content = await expandSection({
-        content: article.content,
-        instruction: body.instruction,
-      });
-
-      await db.articleVersion.create({
-        data: {
-          articleId: id,
-          versionType: "polished",
-          source: "ai",
-          title: article.title,
-          summary: article.summary,
-          content,
-        },
-      });
-
-      const updated = await db.article.update({
-        where: { id },
-        data: { content, status: "edited" },
-      });
-
-      return NextResponse.json({
-        code: 0,
-        message: "ok",
-        data: updated,
-      });
-    } catch (error) {
-      return NextResponse.json(
-        {
-          code: 1503,
-          message: error instanceof Error ? error.message : "扩写失败",
-          data: null,
-        },
-        { status: 500 }
-      );
-    }
-  });
+  try {
+    const job = await enqueueGenerationJob({
+      user,
+      articleId: id,
+      type: "expand",
+      payload: { instruction: body.instruction },
+    });
+    return jobAcceptedResponse(job, "扩写任务已排队");
+  } catch (error) {
+    return jobLimitErrorResponse(error) ?? NextResponse.json(
+      { code: 1503, message: error instanceof Error ? error.message : "排队失败", data: null },
+      { status: 500 },
+    );
+  }
 }

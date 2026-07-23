@@ -47,6 +47,13 @@ export function BackgroundTaskFloat() {
             variant: "success",
           });
         },
+        onFailed: (task, message) => {
+          toast.show({
+            title: "后台任务失败",
+            message: `${task.label}：${message}`,
+            variant: "error",
+          });
+        },
       });
       if (!stopped) syncTasks();
     };

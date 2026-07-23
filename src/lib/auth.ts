@@ -25,6 +25,12 @@ let bootstrapPromise: Promise<void> | null = null;
 export async function ensureBootstrapAdmin() {
   if (!bootstrapPromise) {
     bootstrapPromise = (async () => {
+      if (typeof db.user?.findFirst !== "function") {
+        throw new Error(
+          "数据库客户端未就绪（user.findFirst 不可用）。请执行 npx prisma generate 并重启服务；确认 DATABASE_URL 为 postgresql://...",
+        );
+      }
+
       const username = (process.env.SUPER_ADMIN_USERNAME || "admin").trim();
       const password = process.env.SUPER_ADMIN_PASSWORD || "admin123";
       const passwordHash = hashPassword(password);
