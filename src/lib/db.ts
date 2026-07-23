@@ -24,7 +24,6 @@ function isClientCurrent(client: PrismaClient | undefined): boolean {
 }
 
 function isBuildPhase() {
-  // next build 收集页面数据时会 import 本模块，此时不一定有真实 DATABASE_URL
   return (
     process.env.NEXT_PHASE === "phase-production-build" ||
     process.env.npm_lifecycle_event === "build"
@@ -53,31 +52,33 @@ function assertDatabaseUrl() {
   }
 }
 
-const existing = globalForPrisma.prisma;
-if (existing && !isClientCurrent(existing)) {
-  void existing.$disconnect().catch(() => {});
-  globalForPrisma.prisma = undefined;
-}
-
 function getDb(): PrismaClient {
   assertDatabaseUrl();
+
   if (isClientCurrent(globalForPrisma.prisma)) {
     return globalForPrisma.prisma!;
   }
-  // 构建阶段无真实库时，用占位 URL 让 Prisma Client 能实例化（不会真正连库）
+
+  if (globalForPrisma.prisma) {
+    void globalForPrisma.prisma.$disconnect().catch(() => {});
+    globalForPrisma.prisma = undefined;
+  }
+
+  // 构建阶段无真实库时，用占位 URL 让 Prisma Client 能实例化
   if (!process.env.DATABASE_URL && isBuildPhase()) {
     process.env.DATABASE_URL =
       "postgresql://build:build@127.0.0.1:5432/build?schema=public";
   }
+
   const client = createPrismaClient();
   if (!isClientCurrent(client)) {
     throw new Error(
       "Prisma Client 缺少 User/GenerationJob。请执行 npx prisma generate 后重启开发服务。",
     );
   }
-  if (process.env.NODE_ENV !== "production") {
-    globalForPrisma.prisma = client;
-  }
+
+  // 生产 / 开发都必须单例；否则每次请求新建 Client 会耗尽 Postgres 连接
+  globalForPrisma.prisma = client;
   return client;
 }
 
