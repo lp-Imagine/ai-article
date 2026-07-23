@@ -81,10 +81,33 @@ sync_from_zip() {
   return 0
 }
 
+reset_git_worktree() {
+  # 部署目录应以远程为准；保留运行时数据与本地密钥
+  if [ ! -d .git ]; then
+    return 0
+  fi
+  echo "==> 对齐 git 工作区（保留 data / .env*）"
+  run_with_timeout "$GIT_TIMEOUT" \
+    env GIT_TERMINAL_PROMPT=0 git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20 \
+    fetch --depth 1 origin "$BRANCH" || true
+  git reset --hard "origin/$BRANCH" 2>/dev/null \
+    || git reset --hard "FETCH_HEAD" 2>/dev/null \
+    || true
+  git clean -fd \
+    -e data \
+    -e .data \
+    -e .env \
+    -e .env.local \
+    -e .env.production \
+    2>/dev/null || true
+}
+
 if [ "$SKIP_PULL" = "1" ]; then
   echo "==> 跳过拉代码（SKIP_PULL=1），使用本地 $APP_DIR"
 else
   echo "==> 拉取最新代码"
+  # 上次 zip 同步常留下脏工作区，先清掉再 pull
+  reset_git_worktree
   pulled=0
   if run_with_timeout "$GIT_TIMEOUT" \
     env GIT_TERMINAL_PROMPT=0 git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20 \
@@ -96,6 +119,7 @@ else
     for url in "${ZIP_URLS[@]}"; do
       if sync_from_zip "$url"; then
         echo "zip 同步成功"
+        reset_git_worktree
         pulled=1
         break
       fi
@@ -107,6 +131,14 @@ else
     echo "错误：无法拉取代码。可用 SKIP_PULL=1 跳过。"
     exit 1
   fi
+fi
+
+# 代码更新后重新 exec 本脚本，避免「旧 deploy.sh 跑到一半被 zip 覆盖」仍走旧逻辑
+if [ "${DEPLOY_REEXEC:-0}" != "1" ]; then
+  export DEPLOY_REEXEC=1
+  export SKIP_PULL=1
+  echo "==> 使用最新 deploy.sh 继续部署"
+  exec bash "$APP_DIR/docker/deploy.sh"
 fi
 
 # 兼容旧单容器：若还在跑则先停掉

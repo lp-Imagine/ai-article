@@ -23,28 +23,35 @@ function isClientCurrent(client: PrismaClient | undefined): boolean {
   );
 }
 
+function isBuildPhase() {
+  // next build 收集页面数据时会 import 本模块，此时不一定有真实 DATABASE_URL
+  return (
+    process.env.NEXT_PHASE === "phase-production-build" ||
+    process.env.npm_lifecycle_event === "build"
+  );
+}
+
 function assertDatabaseUrl() {
   const url = process.env.DATABASE_URL ?? "";
   if (!url) {
+    if (isBuildPhase()) return;
     throw new Error(
-      "DATABASE_URL 未设置。请在 .env.local 配置 postgresql://draftly:draftly@localhost:5432/draftly",
+      "DATABASE_URL 未设置。请配置 postgresql://draftly:draftly@localhost:5432/draftly",
     );
   }
   if (url.startsWith("file:")) {
     throw new Error(
       "项目已改用 PostgreSQL，不能再用 SQLite（file:...）。" +
-        "请把 .env / .env.local 改成 postgresql://draftly:draftly@localhost:5432/draftly，" +
-        "然后执行：docker compose up -d db && npx prisma migrate deploy && npx prisma generate，最后重启 npm run dev。",
+        "请把 .env / .env.local 改成 postgresql://…，然后 migrate + generate 并重启。",
     );
   }
   if (!url.startsWith("postgresql://") && !url.startsWith("postgres://")) {
+    if (isBuildPhase()) return;
     throw new Error(
       `DATABASE_URL 必须以 postgresql:// 开头（当前：${url.slice(0, 24)}…）`,
     );
   }
 }
-
-assertDatabaseUrl();
 
 const existing = globalForPrisma.prisma;
 if (existing && !isClientCurrent(existing)) {
@@ -53,8 +60,14 @@ if (existing && !isClientCurrent(existing)) {
 }
 
 function getDb(): PrismaClient {
+  assertDatabaseUrl();
   if (isClientCurrent(globalForPrisma.prisma)) {
     return globalForPrisma.prisma!;
+  }
+  // 构建阶段无真实库时，用占位 URL 让 Prisma Client 能实例化（不会真正连库）
+  if (!process.env.DATABASE_URL && isBuildPhase()) {
+    process.env.DATABASE_URL =
+      "postgresql://build:build@127.0.0.1:5432/build?schema=public";
   }
   const client = createPrismaClient();
   if (!isClientCurrent(client)) {
@@ -68,4 +81,10 @@ function getDb(): PrismaClient {
   return client;
 }
 
-export const db: PrismaClient = getDb();
+export const db: PrismaClient = new Proxy({} as PrismaClient, {
+  get(_target, prop, receiver) {
+    const client = getDb();
+    const value = Reflect.get(client, prop, receiver);
+    return typeof value === "function" ? value.bind(client) : value;
+  },
+});
