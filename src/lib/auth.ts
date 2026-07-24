@@ -32,7 +32,19 @@ export async function ensureBootstrapAdmin() {
       }
 
       const username = (process.env.SUPER_ADMIN_USERNAME || "admin").trim();
-      const password = process.env.SUPER_ADMIN_PASSWORD || "admin123";
+      const isProd = process.env.NODE_ENV === "production";
+      let password = process.env.SUPER_ADMIN_PASSWORD?.trim();
+      if (!password) {
+        if (isProd) {
+          // 生产禁止使用公开文档里的默认口令；仅在本次创建/重置时生效
+          password = randomBytes(18).toString("base64url");
+          console.warn(
+            `[auth] 未设置 SUPER_ADMIN_PASSWORD，已为超管「${username}」生成随机密码（仅本次启动日志可见一次）。请尽快在环境变量中设置 SUPER_ADMIN_PASSWORD，必要时配合 SUPER_ADMIN_RESET=1 写入数据库。密码：${password}`,
+          );
+        } else {
+          password = "admin123";
+        }
+      }
       const passwordHash = hashPassword(password);
 
       let admin = await db.user.findFirst({

@@ -60,9 +60,13 @@ Compose 会启动 PostgreSQL 与应用。请持久化 Postgres 数据卷，并�
 
 ## 安全提示
 
-- 勿将 API Key、微信 Secret 提交到 Git
-- 生产环境请修改默认超管密码
-- 仅 HTTP 访问时不要开启 `COOKIE_SECURE`
+仓库可公开；下列内容**不要**提交到 Git，也不要发到 Issue / 聊天：
+
+- `.env`、API Key、微信 AppSecret、数据库密码、超管密码
+- 数据库备份 / 导出（含用户与文章）、服务器 SSH 密钥
+
+本地：`cp .env.example .env` 后只改自己的 `.env`（已忽略）。  
+生产：务必设置强 `POSTGRES_PASSWORD` / `SUPER_ADMIN_PASSWORD`；未设超管密码时生产环境会生成随机密码并打一次日志。仅 HTTP 时不要开 `COOKIE_SECURE`；上 HTTPS 后再设 `COOKIE_SECURE=1`。
 
 ## License
 

@@ -23,6 +23,13 @@
 # misc
 .DS_Store
 *.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
 
 # debug
 npm-debug.log*
@@ -30,9 +37,15 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# env & secrets — 仅允许提交 .env.example 占位模板
+.env
+.env.*
 !.env.example
+!.env*.example
+*.env.local
+credentials.json
+secrets.json
+.secrets/
 
 # vercel
 .vercel
@@ -41,10 +54,22 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# prisma
+# prisma / 本地与生产数据（含文章、用户、配置密钥）
 prisma/dev.db
+prisma/*.db
+prisma/*.db-journal
 /data/
 .data/
+**/postgres-data/
+
+# 备份与导出（可能含业务数据）；勿忽略 prisma/migrations
+/backup/
+/backups/
+/*.sql
+/*.sql.gz
+/*.dump
+/data/*.sql
+/data/*.dump
 
 # local IDE / agent docs
 .trae/

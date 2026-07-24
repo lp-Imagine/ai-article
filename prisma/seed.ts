@@ -11,7 +11,18 @@ function hashPassword(password: string): string {
 
 async function main() {
   const username = (process.env.SUPER_ADMIN_USERNAME || "admin").trim();
-  const password = process.env.SUPER_ADMIN_PASSWORD || "admin123";
+  const isProd = process.env.NODE_ENV === "production";
+  let password = process.env.SUPER_ADMIN_PASSWORD?.trim();
+  if (!password) {
+    if (isProd) {
+      password = randomBytes(18).toString("base64url");
+      console.warn(
+        `[seed] 未设置 SUPER_ADMIN_PASSWORD，已生成随机密码（仅本次日志可见）。请尽快改为自有密码。密码：${password}`,
+      );
+    } else {
+      password = "admin123";
+    }
+  }
 
   const passwordHash = hashPassword(password);
 
