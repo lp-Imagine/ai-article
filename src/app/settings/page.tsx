@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
   Bot,
+  Globe,
   Image as ImageIcon,
   MessageSquare,
   PenLine,
@@ -20,12 +21,13 @@ type AppConfig = {
   value: string;
 };
 
-type SettingsSection = "ai" | "writing" | "wechat";
+type SettingsSection = "ai" | "writing" | "wechat" | "blog";
 
 const navSections: { id: SettingsSection; label: string; icon: typeof Bot }[] = [
   { id: "ai", label: "AI 模型", icon: Bot },
   { id: "writing", label: "写作默认", icon: PenLine },
   { id: "wechat", label: "微信公众号", icon: MessageSquare },
+  { id: "blog", label: "博客同步", icon: Globe },
 ];
 
 export default function SettingsPage() {
@@ -38,6 +40,7 @@ export default function SettingsPage() {
   const [testingImage, setTestingImage] = useState(false);
   const [testingAuxiliary, setTestingAuxiliary] = useState(false);
   const [testingWechat, setTestingWechat] = useState(false);
+  const [testingBlog, setTestingBlog] = useState(false);
   const [activeSection, setActiveSection] = useState<SettingsSection>("ai");
 
   useEffect(() => {
@@ -253,6 +256,70 @@ export default function SettingsPage() {
     { key: "wechatAppId", label: "微信公众号 App ID", placeholder: "wx..." },
     { key: "wechatAppSecret", label: "微信公众号 App Secret", placeholder: "", type: "password" },
   ];
+
+  const blogFields = [
+    {
+      key: "blogGithubToken",
+      label: "GitHub Personal Access Token",
+      placeholder: "ghp_xxx 或 github_pat_xxx（需 contents:write + actions:write）",
+      type: "password",
+    },
+    {
+      key: "blogGithubRepo",
+      label: "博客仓库",
+      placeholder: "owner/vuepressblog",
+    },
+    {
+      key: "blogGithubBranch",
+      label: "博客仓库分支",
+      placeholder: "master",
+    },
+    {
+      key: "blogSiteUrl",
+      label: "博客站点 URL",
+      placeholder: "https://lp-imagine.github.io/vuepressblog/",
+    },
+  ];
+
+  const blogConfigured = useMemo(
+    () => Boolean(getValue("blogGithubToken") && getValue("blogGithubRepo")),
+    [configs],
+  );
+
+  async function handleTestBlog() {
+    setTestingBlog(true);
+    try {
+      const res = await fetch("/api/configs/ping-blog");
+      const json = await readApiResponse<{
+        configured: boolean;
+        repo?: string;
+        branch?: string;
+        siteUrl?: string;
+        permissions?: Record<string, boolean>;
+        note?: string;
+        error?: string;
+      }>(res);
+      if (json.code === 0 && json.data?.configured && !json.data?.error) {
+        const perm = json.data.permissions;
+        const note = perm
+          ? ` ✓ 权限：push=${perm.push ? "✓" : "×"}`
+          : "";
+        toast.show({
+          message: `博客连通成功${json.data.note ?? ""}${note}`,
+          variant: "success",
+        });
+      } else {
+        toast.show({ message: json.data?.error || json.message || "博客验证失败", variant: "error" });
+      }
+    } catch (err) {
+      toast.show({
+        message: err instanceof Error ? err.message : "验证请求失败",
+        variant: "error",
+      });
+    } finally {
+      setTestingBlog(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -477,13 +544,67 @@ export default function SettingsPage() {
             </SectionCard>
           )}
 
+          {activeSection === "blog" && (
+            <SectionCard
+              title="博客同步配置"
+              description="将文章同步到 vuepressblog 仓库的对应栏目并触发 GitHub Actions 部署。Token 仅保存在你的账号下，其他人不会看到。"
+            >
+              <div className="config-group mb-5">
+                <div className="config-group-title">
+                  <h3 className="inline-flex items-center gap-2">
+                    <Globe size={15} />
+                    GitHub 接入
+                  </h3>
+                  <span className={clsx("config-status", blogConfigured ? "config-status-ok" : "config-status-empty")}>
+                    {blogConfigured ? "已填写" : "待配置"}
+                  </span>
+                </div>
+                <div className="config-fields">
+                  {blogFields.map((f) => (
+                    <div key={f.key}>
+                      <FieldLabel>{f.label}</FieldLabel>
+                      <input
+                        type={f.type ?? "text"}
+                        value={getValue(f.key)}
+                        onChange={(e) => setValue(f.key, e.target.value)}
+                        placeholder={f.placeholder}
+                        className="mt-2 w-full px-4 py-2.5 text-sm"
+                      />
+                      {f.key === "blogGithubToken" && getValue(f.key) === "********" ? (
+                        <p className="mt-1 text-xs text-[var(--muted)]">
+                          已配置 Token（出于安全，前端不回显原值）。如需更换请直接覆盖输入框。
+                        </p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="info-banner">
+                <Globe size={18} className="info-banner-icon" />
+                <p>
+                  Token 在 GitHub 「Settings → Developer settings → Personal access tokens」生成，
+                  至少勾选 <code>contents:write</code> 与 <code>actions:write</code>。保存后点下方「验证博客连通」可一键测试访问权限。
+                </p>
+              </div>
+
+              <div className="mt-5 flex justify-end border-t border-[var(--line)] pt-5">
+                <button onClick={handleTestBlog} disabled={testingBlog} className="btn-secondary text-sm">
+                  {testingBlog ? "验证中..." : "验证博客连通"}
+                </button>
+              </div>
+            </SectionCard>
+          )}
+
           <div className="settings-footer">
             <p className="settings-footer-hint">
               {activeSection === "ai"
                 ? "修改后记得保存；各模型可在上方区块内单独验证连通性。"
                 : activeSection === "wechat"
                   ? "修改配置后记得保存。微信凭证可在上方卡片内验证连通性。"
-                  : "修改配置后记得保存。"}
+                  : activeSection === "blog"
+                    ? "修改配置后记得保存。博客仓库与 Token 可在上方卡片内验证连通性。"
+                    : "修改配置后记得保存。"}
             </p>
             <button onClick={handleSave} disabled={saving} className="btn-primary text-sm settings-footer-save">
               {saving ? (

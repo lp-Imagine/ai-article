@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/api-auth";
+import { isSecretKey } from "@/lib/config-bridge";
+
+/** 当 SecretKey 已配置但不在前端回显原值时使用；前端保存时会跳过该键。 */
+export const SECRET_PLACEHOLDER = "********";
 
 export async function GET() {
   const user = await requireUser();
@@ -14,7 +18,11 @@ export async function GET() {
 
     const map: Record<string, string> = {};
     for (const cfg of configs) {
-      map[cfg.configKey] = cfg.configValue;
+      // SecretKey 不回显原值；用占位符表示「已配置但请重新输入以更新」。
+      // 前端识别到 SECRET_PLACEHOLDER 时会在保存时跳过该键，避免覆盖已有 token。
+      map[cfg.configKey] = isSecretKey(cfg.configKey)
+        ? SECRET_PLACEHOLDER
+        : cfg.configValue;
     }
 
     return NextResponse.json({
@@ -49,6 +57,8 @@ async function saveConfigs(req: Request) {
 
     for (const [key, value] of Object.entries(body)) {
       if (typeof value !== "string") continue;
+      // 占位符表示前端没有改这个 secret，跳过以免覆盖数据库原值
+      if (value === SECRET_PLACEHOLDER) continue;
       await db.appConfig.upsert({
         where: {
           userId_configKey: { userId: user.id, configKey: key },

@@ -4,7 +4,8 @@ import { db } from "@/lib/db";
 type SecretKey =
   | "AI_API_KEY"
   | "AUXILIARY_AI_API_KEY"
-  | "WECHAT_APP_SECRET";
+  | "WECHAT_APP_SECRET"
+  | "BLOG_GITHUB_TOKEN";
 
 const ENV_KEY_MAP: Record<string, string> = {
   aiApiKey: "AI_API_KEY",
@@ -20,6 +21,10 @@ const ENV_KEY_MAP: Record<string, string> = {
   imageBaseUrl: "IMAGE_BASE_URL",
   accountPersona: "ACCOUNT_PERSONA",
   defaultStyle: "DEFAULT_STYLE",
+  blogGithubToken: "BLOG_GITHUB_TOKEN",
+  blogGithubRepo: "BLOG_GITHUB_REPO",
+  blogGithubBranch: "BLOG_GITHUB_BRANCH",
+  blogSiteUrl: "BLOG_SITE_URL",
 };
 
 const configStore = new AsyncLocalStorage<Record<string, string>>();
@@ -56,7 +61,12 @@ export function getEnvValue(key: string): string | undefined {
 }
 
 export function isSecretKey(envKey: string): envKey is SecretKey {
-  return envKey === "AI_API_KEY" || envKey === "AUXILIARY_AI_API_KEY" || envKey === "WECHAT_APP_SECRET";
+  return (
+    envKey === "AI_API_KEY" ||
+    envKey === "AUXILIARY_AI_API_KEY" ||
+    envKey === "WECHAT_APP_SECRET" ||
+    envKey === "BLOG_GITHUB_TOKEN"
+  );
 }
 
 export { ENV_KEY_MAP };
