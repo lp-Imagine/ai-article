@@ -14,10 +14,13 @@ import {
   Save,
   Send,
   Shield,
+  Upload,
 } from "lucide-react";
 import PreviewDialog from "@/components/preview-dialog";
 import PushDialog from "@/components/push-dialog";
+import BlogSyncDialog from "@/components/blog-sync-dialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import type { BlogSection } from "@/lib/blog-sync-constants";
 import { FieldLabel } from "@/components/app-shell";
 import { useToast } from "@/components/toast";
 import { ProgressDialog, type ProgressStep } from "@/components/progress-dialog";
@@ -68,6 +71,7 @@ type ArticleRecord = {
   wechatDraftId: string | null;
   style: string | null;
   wordCount: number | null;
+  keywords?: string | null;
 };
 
 type ApiResponse<T> = { code: number; message: string; data: T };
@@ -115,8 +119,12 @@ export default function ArticlePage({
   const [busy, setBusy] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [pushDialogOpen, setPushDialogOpen] = useState(false);
+  const [blogSyncDialogOpen, setBlogSyncDialogOpen] = useState(false);
   const [pushResult, setPushResult] = useState<{ draftId: string; status: string } | null>(null);
+  const [blogSyncResult, setBlogSyncResult] = useState<{ path: string; url: string } | null>(null);
   const [pushRecords, setPushRecords] = useState<PublishRecord[]>([]);
+  // 服务器是否配置了 BLOG_GITHUB_TOKEN。未配置时不向任何账号展示「同步到博客」入口。
+  const [blogSyncConfigured, setBlogSyncConfigured] = useState(false);
   const [editorTab, setEditorTab] = useState<"meta" | "content">("meta");
   const [activeOutlineView, setActiveOutlineView] = useState(0);
   const [outlinePanelOpen, setOutlinePanelOpen] = useState(true);
@@ -278,6 +286,21 @@ export default function ArticlePage({
       setActiveOutlineView(article.selectedOutlineIndex);
     }
   }, [article?.selectedOutlineIndex]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/configs/blog-sync")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (cancelled) return;
+        const configured = Boolean(json && json.code === 0 && json.data && json.data.configured);
+        setBlogSyncConfigured(configured);
+      })
+      .catch(() => {
+        if (!cancelled) setBlogSyncConfigured(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   // 移动端按文章进度进入对应 Tab；有正文时大纲默认收起（仅初始化一次）
   useEffect(() => {
@@ -1034,6 +1057,46 @@ export default function ArticlePage({
     fetchPushHistory();
   }
 
+  async function handleBlogSyncConfirm(payload: {
+    section: BlogSection;
+    group: string;
+    tags: string[];
+    draft: boolean;
+  }) {
+    if (busy) {
+      toast.show({ message: `请先等待「${busy}」完成`, variant: "warning" });
+      return;
+    }
+    setBlogSyncDialogOpen(false);
+    if (article) {
+      await saveArticle({ silent: true });
+    }
+    setBusy("同步到博客");
+    setBlogSyncResult(null);
+    try {
+      const res = await fetch(`/api/articles/${id}/sync-blog`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = (await res.json()) as ApiResponse<{ path: string; url: string }>;
+      if (json.code !== 0 || !json.data) {
+        toast.show({ message: json.message || "同步失败", variant: "error" });
+        return;
+      }
+      setBlogSyncResult(json.data);
+      toast.show({ message: "已同步到博客，正在触发部署", variant: "success" });
+    } catch (err) {
+      toast.show({
+        message: err instanceof Error ? err.message : "同步失败",
+        variant: "error",
+      });
+    } finally {
+      setBusy(null);
+      fetchPushHistory();
+    }
+  }
+
   async function selectOutline(outlineIndex: number) {
     if (busy) return;
     setBusy("选择大纲");
@@ -1219,6 +1282,24 @@ export default function ArticlePage({
                   推送草稿箱
                 </span>
               </button>
+              {blogSyncConfigured ? (
+
+                <button
+                type="button"
+                onClick={() => {
+                  setBlogSyncResult(null);
+                  setBlogSyncDialogOpen(true);
+                }}
+                disabled={busy !== null || !article.content}
+                className="btn-secondary text-sm article-topbar-publish-btn"
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <Upload size={14} />
+                  {busy === "同步到博客" ? "同步中..." : "同步到博客"}
+                </span>
+              </button>
+
+              ) : null}
             </div>
           </div>
           </div>
@@ -1612,7 +1693,7 @@ export default function ArticlePage({
           className={`mobile-stage-panel ${mobileStage === "publish" ? "mobile-stage-panel-active" : ""}`}
           data-stage="publish"
         >
-        {(pushResult?.draftId || pushRecords.length > 0) && (
+        {(pushResult?.draftId || blogSyncResult || pushRecords.length > 0) && (
           <div className="space-y-2 stage-order-push">
             {pushResult && pushResult.draftId && !pushResult.draftId.startsWith("mock_draft_") ? (
               <div className="push-inline border-[rgba(5,150,105,0.25)] bg-[var(--success-soft)]">
@@ -1634,10 +1715,23 @@ export default function ArticlePage({
                 </span>
               </div>
             ) : null}
+            {blogSyncResult && blogSyncConfigured ? (
+              <div className="push-inline border-[rgba(5,150,105,0.25)] bg-[var(--success-soft)]">
+                <span className="text-sm font-semibold text-[var(--success)]">✓ 已同步到博客</span>
+                <a
+                  href={blogSyncResult.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-[var(--accent)] hover:underline"
+                >
+                  打开文章 →
+                </a>
+              </div>
+            ) : null}
             {pushRecords.length > 0 ? (
               <details className="push-inline">
                 <summary className="cursor-pointer text-sm font-medium">
-                  推送历史 · {pushRecords.length} 条
+                  发布历史 · {pushRecords.length} 条
                 </summary>
                 <div className="mt-3 w-full space-y-2">
                   {pushRecords.map((r) => (
@@ -1645,6 +1739,9 @@ export default function ArticlePage({
                       <div className="flex items-center gap-2">
                         <span className={`badge ${r.status === "success" ? "badge-success" : "badge-danger"}`}>
                           {r.status === "success" ? "成功" : "失败"}
+                        </span>
+                        <span className="badge badge-muted">
+                          {r.channel === "blog" ? "博客" : "微信"}
                         </span>
                         <span className="text-[var(--muted)]">
                           {new Date(r.createdAt).toLocaleString("zh-CN", {
@@ -1736,7 +1833,18 @@ export default function ArticlePage({
         targetWords={article.wordCount}
       />
 
-      {!pushDialogOpen && !previewOpen && !progress.open && !cancelConfirmOpen ? (
+      <BlogSyncDialog
+        open={blogSyncDialogOpen}
+        onClose={() => setBlogSyncDialogOpen(false)}
+        onConfirm={handleBlogSyncConfirm}
+        busy={busy !== null}
+        title={article.title ?? article.topic}
+        summary={article.summary}
+        coverImageUrl={article.coverImageUrl}
+        defaultTags={article.keywords ?? ""}
+      />
+
+      {!pushDialogOpen && !blogSyncDialogOpen && !previewOpen && !progress.open && !cancelConfirmOpen ? (
       <div className="mobile-editor-dock">
         <button
           type="button"
