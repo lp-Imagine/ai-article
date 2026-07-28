@@ -15,6 +15,18 @@ function decodeEntities(text: string): string {
     .replace(/&#39;/gi, "'");
 }
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function escapeAttr(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+
 function stripTags(html: string): string {
   return decodeEntities(html.replace(/<[^>]+>/g, "")).trim();
 }
@@ -242,7 +254,19 @@ function convertAll(
           const src = img.match(/src=["']([^"']+)["']/i)?.[1] ?? "";
           const alt = img.match(/alt=["']([^"']*)["']/i)?.[1] ?? "image";
           const next = src && rewriteSrc ? rewriteSrc(src) ?? src : src;
-          if (next) out.push(`![${alt}](${next})`);
+          if (next) {
+            const captionMatch = inner.match(
+              /<figcaption(?:\s[^>]*)?>([\s\S]*?)<\/figcaption>/i,
+            );
+            const caption = captionMatch ? stripTags(captionMatch[1]).trim() : "";
+            if (caption) {
+              out.push(
+                `<figure class="inline-figure"><img src="${next}" alt="${escapeAttr(alt)}" /><figcaption>${escapeHtml(caption)}</figcaption></figure>`,
+              );
+            } else {
+              out.push(`![${alt}](${next})`);
+            }
+          }
         }
       }
     }

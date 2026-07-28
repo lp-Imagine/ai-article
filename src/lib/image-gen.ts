@@ -1,7 +1,24 @@
 import { getEnvValue } from "@/lib/config-bridge";
+import {
+  fetchWithTimeout,
+  isRetryableHttpStatus,
+  isTransientNetworkError,
+  withRetry,
+} from "@/lib/retry";
 
 const DEFAULT_IMAGE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
 const DEFAULT_IMAGE_MODEL = "qwen-image-2.0";
+const DEFAULT_IMAGE_TIMEOUT_MS = 180_000;
+
+/** HTTP 状态可重试时打上标记，供 withRetry 判定 */
+class RetryableImageError extends Error {
+  readonly retryable = true;
+}
+
+function getImageTimeoutMs(): number {
+  const raw = Number(process.env.IMAGE_REQUEST_TIMEOUT_MS ?? "");
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_IMAGE_TIMEOUT_MS;
+}
 
 function readConfig(key: string, fallback: string): string {
   const value = getEnvValue(key) ?? process.env[key];
@@ -38,45 +55,82 @@ function formatImageHttpError(status: number, body: string, baseUrl: string, mod
   return `image generation failed: ${status}${snippet ? ` ${snippet}` : ""}。${hint}`;
 }
 
+/** 调用图片接口：带超时与瞬时错误重试，避免请求挂死拖垮整个任务 */
+async function requestImageUrl(prompt: string, label: string): Promise<string> {
+  const { baseUrl, model, apiKey } = getImageEndpointConfig();
+  const timeoutMs = getImageTimeoutMs();
+
+  return withRetry(
+    async () => {
+      const res = await fetchWithTimeout(
+        `${baseUrl}/images/generations`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            prompt,
+            n: 1,
+            size: "2560x1440",
+            watermark: false,
+          }),
+        },
+        timeoutMs,
+        label,
+      );
+
+      if (!res.ok) {
+        const body = await res.text();
+        const message = formatImageHttpError(res.status, body, baseUrl, model).replace(
+          "image generation failed",
+          label,
+        );
+        // 限流/网关抖动值得重试；404、401 等配置类错误立即失败
+        throw isRetryableHttpStatus(res.status)
+          ? new RetryableImageError(message)
+          : new Error(message);
+      }
+
+      const json = (await res.json()) as { data: { url: string }[] };
+      const url = json.data[0]?.url ?? "";
+      if (!url) throw new RetryableImageError(`${label}：接口未返回图片地址`);
+      return url;
+    },
+    {
+      attempts: 3,
+      baseDelayMs: 1500,
+      shouldRetry: (error) =>
+        error instanceof RetryableImageError || isTransientNetworkError(error),
+      onRetry: (error, attempt) =>
+        console.warn(
+          `[image-gen] ${label} attempt ${attempt + 1} failed, retrying:`,
+          error instanceof Error ? error.message : error,
+        ),
+    },
+  );
+}
+
 export async function generateCoverImage(
   prompt: string,
 ): Promise<{ url: string; source: "ai" | "placeholder" }> {
-  const { baseUrl, model, apiKey } = getImageEndpointConfig();
+  const { apiKey } = getImageEndpointConfig();
 
   if (!apiKey) {
     return {
-      url: `https://placehold.co/1200x630/${encodeURIComponent("F6F1E8")}/${encodeURIComponent("121212")}?text=${encodeURIComponent(prompt.slice(0, 24))}`,
+      url: `https://placehold.co/1200x630/${encodeURIComponent("0A0F1F")}/${encodeURIComponent("8AB4F8")}?text=${encodeURIComponent(prompt.slice(0, 24))}`,
       source: "placeholder",
     };
   }
 
-  const res = await fetch(`${baseUrl}/images/generations`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      prompt,
-      n: 1,
-      size: "2560x1440",
-      watermark: false,
-    }),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(formatImageHttpError(res.status, err, baseUrl, model));
-  }
-
-  const json = (await res.json()) as { data: { url: string }[] };
-  return { url: json.data[0]?.url ?? "", source: "ai" };
+  return { url: await requestImageUrl(prompt, "image generation failed"), source: "ai" };
 }
 
 export async function downloadToBuffer(url: string): Promise<Buffer | null> {
   if (!url || url.startsWith("https://placehold.co")) return null;
-  const res = await fetch(url);
+  const res = await fetchWithTimeout(url, {}, getImageTimeoutMs(), "图片下载");
   if (!res.ok) return null;
   const arrayBuffer = await res.arrayBuffer();
   return Buffer.from(arrayBuffer);
@@ -86,40 +140,14 @@ export async function downloadToBuffer(url: string): Promise<Buffer | null> {
 export async function generateSectionImage(
   prompt: string,
 ): Promise<{ url: string; source: "ai" | "placeholder" }> {
-  const { baseUrl, model, apiKey } = getImageEndpointConfig();
+  const { apiKey } = getImageEndpointConfig();
 
   if (!apiKey) {
     return {
-      url: `https://placehold.co/1920x1920/${encodeURIComponent("F6F1E8")}/${encodeURIComponent("121212")}?text=${encodeURIComponent(prompt.slice(0, 24))}`,
+      url: `https://placehold.co/1920x1920/${encodeURIComponent("0A0F1F")}/${encodeURIComponent("8AB4F8")}?text=${encodeURIComponent(prompt.slice(0, 24))}`,
       source: "placeholder",
     };
   }
 
-  const res = await fetch(`${baseUrl}/images/generations`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      prompt,
-      n: 1,
-      size: "2560x1440",
-      watermark: false,
-    }),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(
-      formatImageHttpError(res.status, err, baseUrl, model).replace(
-        "image generation failed",
-        "section image failed",
-      ),
-    );
-  }
-
-  const json = (await res.json()) as { data: { url: string }[] };
-  return { url: json.data[0]?.url ?? "", source: "ai" };
+  return { url: await requestImageUrl(prompt, "section image failed"), source: "ai" };
 }

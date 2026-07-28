@@ -2,10 +2,30 @@ import type { OutlineOption } from "@/types/article";
 import { getEnvValue } from "@/lib/config-bridge";
 import { highlightCodeBlocks } from "@/lib/code-highlight";
 import { normalizeCalloutBlocks } from "@/lib/wechat-style";
+import { mapWithConcurrency } from "@/lib/map-with-concurrency";
+import { analyzeContentQuality } from "@/lib/content-quality";
+import { isTransientNetworkError, withRetry } from "@/lib/retry";
 
-type TextRole = "outline" | "content" | "summary" | "titles" | "cover-prompt" | "polish" | "expand" | "section-image" | "reformat";
+type TextRole =
+  | "outline"
+  | "content"
+  | "summary"
+  | "titles"
+  | "cover-prompt"
+  | "polish"
+  | "expand"
+  | "section-image"
+  | "reformat"
+  | "refine";
 
-const PRIMARY_TEXT_ROLES = new Set<TextRole>(["outline", "content", "polish", "expand", "reformat"]);
+const PRIMARY_TEXT_ROLES = new Set<TextRole>([
+  "outline",
+  "content",
+  "polish",
+  "expand",
+  "reformat",
+  "refine",
+]);
 
 type ChatMessage = {
   role: "system" | "user" | "assistant";
@@ -72,9 +92,57 @@ function getLLMConfig(role: TextRole = "content") {
   return { model, baseUrl, apiKey };
 }
 
+async function sleep(ms: number) {
+  await new Promise((r) => setTimeout(r, ms));
+}
+
+const isTransientLlmError = isTransientNetworkError;
+
+function normalizeLlmError(error: unknown, role: TextRole, timeoutMs: number): Error {
+  if (!(error instanceof Error)) return new Error("LLM 请求失败");
+  if (error.name === "AbortError") {
+    const hint =
+      role === "outline"
+        ? "大纲一般应在数分钟内返回。"
+        : role === "reformat"
+          ? "整理格式需整篇重排，长文可能需数分钟，请稍后重试。"
+          : "请检查模型服务/网络后重试。";
+    return new Error(`LLM 请求超时（${Math.round(timeoutMs / 1000)} 秒）。${hint}`);
+  }
+  if (/fetch failed/i.test(error.message)) {
+    const cause =
+      error.cause instanceof Error
+        ? error.cause.message
+        : typeof error.cause === "string"
+          ? error.cause
+          : "";
+    return new Error(
+      cause
+        ? `LLM 连接失败（fetch failed: ${cause}）。请检查模型服务/网络后重试。`
+        : "LLM 连接失败（fetch failed）。请检查模型服务/网络后重试；长文已改为分段生成。",
+    );
+  }
+  if (/^terminated$/i.test(error.message.trim()) || /terminated/i.test(error.message)) {
+    return new Error(
+      "LLM 连接被上游中断（terminated）。常见于代理/网关约 60 秒超时；系统已改用按章节分段生成，请重试。",
+    );
+  }
+  return error;
+}
+
+/** 在途请求数，用于判断上游是否被并发拖慢 */
+let llmInFlight = 0;
+
 async function callChat(
   messages: ChatMessage[],
-  opts?: { jsonMode?: boolean; maxTokens?: number; role?: TextRole; temperature?: number },
+  opts?: {
+    jsonMode?: boolean;
+    maxTokens?: number;
+    role?: TextRole;
+    temperature?: number;
+    /** 调用方自带重试循环时传 1，避免与内层重试相乘 */
+    retries?: number;
+  },
 ) {
   const jsonMode = opts?.jsonMode ?? true;
   const maxTokens = opts?.maxTokens ?? 2048;
@@ -87,65 +155,70 @@ async function callChat(
   }
 
   const timeoutMs = getLlmTimeoutMs(role);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const maxAttempts = opts?.retries ?? (role === "content" || role === "refine" ? 3 : 2);
+  let lastError: Error | null = null;
 
-  try {
-    const res = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature,
-        max_tokens: maxTokens,
-        response_format: jsonMode ? { type: "json_object" } : undefined,
-      }),
-      signal: controller.signal,
-    });
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const startedAt = Date.now();
+    llmInFlight += 1;
+    const inFlightAtStart = llmInFlight;
 
-    if (!res.ok) {
-      const errBody = await res.text();
-      throw new Error(`LLM request failed: ${res.status} ${errBody.slice(0, 200)}`);
-    }
+    try {
+      const res = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature,
+          max_tokens: maxTokens,
+          response_format: jsonMode ? { type: "json_object" } : undefined,
+        }),
+        signal: controller.signal,
+      });
 
-    const json = (await res.json()) as {
-      choices: { message: { content: string } }[];
-    };
+      if (!res.ok) {
+        const errBody = await res.text();
+        throw new Error(`LLM request failed: ${res.status} ${errBody.slice(0, 200)}`);
+      }
 
-    return json.choices[0]?.message?.content ?? "";
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      const hint =
-        role === "outline"
-          ? "大纲一般应在数分钟内返回。"
-          : role === "reformat"
-            ? "整理格式需整篇重排，长文可能需数分钟，请稍后重试。"
-            : "请检查模型服务/网络后重试。";
-      throw new Error(
-        `LLM 请求超时（${Math.round(timeoutMs / 1000)} 秒）。${hint}`,
+      const json = (await res.json()) as {
+        choices: { message: { content: string } }[];
+        usage?: { completion_tokens?: number };
+      };
+
+      const seconds = (Date.now() - startedAt) / 1000;
+      const outTokens = json.usage?.completion_tokens ?? 0;
+      console.log(
+        `[llm] role=${role} ${seconds.toFixed(1)}s inflight=${inFlightAtStart} ` +
+          `out=${outTokens}tok${outTokens ? ` ${(outTokens / seconds).toFixed(1)}tok/s` : ""} cap=${maxTokens}`,
       );
-    }
-    if (error instanceof Error && /fetch failed/i.test(error.message)) {
-      const cause =
-        error.cause instanceof Error
-          ? error.cause.message
-          : typeof error.cause === "string"
-            ? error.cause
-            : "";
-      throw new Error(
-        cause
-          ? `LLM 连接失败（fetch failed: ${cause}）。请检查模型服务/网络后重试。`
-          : "LLM 连接失败（fetch failed）。请检查模型服务/网络后重试；长文整理已改为分段请求。",
+
+      return json.choices[0]?.message?.content ?? "";
+    } catch (error) {
+      const normalized = normalizeLlmError(error, role, timeoutMs);
+      console.warn(
+        `[llm] role=${role} FAILED after ${((Date.now() - startedAt) / 1000).toFixed(1)}s ` +
+          `inflight=${inFlightAtStart}: ${normalized.message.slice(0, 120)}`,
       );
+      lastError = normalized;
+      if (attempt < maxAttempts - 1 && isTransientLlmError(normalized)) {
+        await sleep(1200 * (attempt + 1));
+        continue;
+      }
+      throw normalized;
+    } finally {
+      llmInFlight -= 1;
+      clearTimeout(timer);
     }
-    throw error;
-  } finally {
-    clearTimeout(timer);
   }
+
+  throw lastError ?? new Error("LLM 请求失败");
 }
 
 function getLlmTimeoutMs(role: TextRole): number {
@@ -153,7 +226,13 @@ function getLlmTimeoutMs(role: TextRole): number {
   if (Number.isFinite(raw) && raw > 0) return Math.floor(raw);
   // 工程长主题 + 多套大纲时，模型常需 2～5 分钟；超时过紧会误杀
   // reformat 与 polish 同量级：整篇 HTML 输出，不能用短任务超时
-  if (role === "content" || role === "polish" || role === "expand" || role === "reformat") {
+  if (
+    role === "content" ||
+    role === "polish" ||
+    role === "expand" ||
+    role === "reformat" ||
+    role === "refine"
+  ) {
     return 480_000; // 8 分钟
   }
   if (role === "outline") return 420_000; // 7 分钟
@@ -267,12 +346,35 @@ function buildQualityArticleBlock(): string {
 4. **可感知细节**：时间、数量、报错原文、界面状态、代码行为——比「很重要/很关键」更有说服力
 5. **诚实边界**：写清适用条件与做不到的部分；夸大承诺会立刻像营销稿
 6. **结尾给带走物**：一个可执行动作、一张检查表、或一个判断标准——不要升华成口号
+7. **创作度**：切入角、案例选择、判断要像「为本题现写」，不要像批量模板填空
 
 禁止的空洞写法：
 - 只抛概念不下定义也不举例
 - 「本质上是认知问题」「关键在于体系化」却不说具体改哪一步
 - 排比正确废话、假装深刻的对立（旧时代 vs 新时代）却无事实
 - 用「和朋友聊天 / 有人问我 / 上周同事说」这类虚构闲聊当万能开头
+- 段段正确但无法下手的「建议」（要重视、要体系化、要持续迭代）
+`.trim();
+}
+
+/** 对齐微信对低创作度 / 低质 AIGC 的治理口径 */
+function buildWechatPlatformValueBlock(): string {
+  return `
+【微信公众号内容价值（硬性，平台合规）】
+平台会限流「低创作度」内容：高度同质化、搬运抄袭、内容空洞、低质 AIGC。
+你必须写出「信息含量高、有阅读价值、有创作度」的稿：
+
+1. **信息增量**：每段至少贡献一件新信息（事实、步骤、判断依据、边界、反例）；删掉后读者应少懂一件事
+2. **创作度**：独特切入角 + 可核对判断；禁用「定义→重要性→方法论→注意事项→总结」百科骨架
+3. **可核对**：优先可观察细节（场景、数字、报错原文、前后对比）；不写无法证伪的正确废话
+4. **反同质化**：开篇、章节顺序、案例选择要服务「这一篇主题」，禁止万能模板换词
+5. **反空洞 AIGC**：禁止排比鸡汤、无主体的「我们需要…」、段段正确但无用的建议
+6. **诚实**：不确定就标明；不编造数据、论文、权威背书或虚假对话
+
+段落自检（任一项为否 → 重写该段）：
+- 读者读完能否多知道/会做一件具体事？
+- 把主题换成别的标题，这段是否还通顺？（通顺=空泛）
+- 是否像随处可见的 AI 水文？（是 → 换成案例/步骤/代码）
 `.trim();
 }
 
@@ -309,12 +411,14 @@ function buildEngineeringContentBlock(enabled: boolean): string {
 function buildAntiAiVoiceBlock(): string {
   return `
 【去 AI 腔与夸夸其谈（硬性）】
-- 禁止套话：在当今/随着…发展/赋能/抓手/闭环/底层逻辑/降维/颗粒度/对齐/沉淀方法论/打造闭环/深度思考
+- 禁止套话：在当今/随着…发展/赋能/抓手/闭环/底层逻辑/降维/颗粒度/对齐/沉淀方法论/打造闭环/深度思考/认知升级/众所周知/毋庸置疑/值得注意的是
 - 禁止每个大纲都长成：痛点引入 → 三大误解 → 三步方法论 → 注意事项 → 总结（换词不算创新）
 - 标题禁止批量套用同一公式；「XXX实战手册」最多在全部方案里出现 1 次，且该方案必须可落地
 - 少用抽象形容词（赋能、卓越、全面、系统性）；改用可观察事实
 - 允许不完美与取舍：真实感强于完美教条
 - **禁止「闲聊代入」开篇模板**：如「周一/上周和一个朋友聊天」「同事问我」「有读者留言说最近在XXX上花了很多时间，进展却不大」——再接「方向对但顺序要调整」这类万能转折
+- 禁止段首机械排比（「首先要明白」「其次需要注意」「最后别忘了」连用）；节奏要像人写的笔记
+- 同一句式开头不得连续出现 3 次以上
 `.trim();
 }
 
@@ -518,6 +622,40 @@ function buildSections(topic: string, sectionCount: number = 3, variant: number 
   return selected.slice(0, Math.min(sectionCount, selected.length));
 }
 
+/** 拆分并发生成时，为每套方案指定不同切入角，替代「同一次调用里互相错开」 */
+const OUTLINE_ANGLES = [
+  "问题现场切入：从一个具体的翻车/卡住场景开始，再一步步给出正解",
+  "对比选型：在 2-3 个可选做法之间做取舍，给出判断标准与适用边界",
+  "最小可用切片：从零搭一个能跑起来的最小版本，再逐步加码",
+  "清单式手册：给可直接照做的步骤清单、参数与踩坑边界",
+  "认知纠偏：先钉住一个常见误解，用事实和例子逐条拆解",
+  "复盘式：按时间线讲一次完整实践，突出关键决策点与代价",
+];
+
+function getOutlineConcurrency(count: number): number {
+  const raw = Number(process.env.OUTLINE_CONCURRENCY ?? "");
+  const configured = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 3;
+  return Math.max(1, Math.min(configured, count));
+}
+
+function normalizeOutlineOption(
+  opt: OutlineOption,
+  idx: number,
+  topic: string,
+  style: string,
+  wordCount: number,
+): OutlineOption {
+  return {
+    index: idx,
+    title: opt.title ?? `${topic}：方案 ${idx + 1}`,
+    positioning: opt.positioning ?? `${style}向，约 ${wordCount} 字。`,
+    sections: (opt.sections ?? []).map((s) => ({
+      heading: s.heading ?? "未命名章节",
+      summary: s.summary ?? "",
+    })),
+  };
+}
+
 export async function generateOutline(input: {
   topic: string;
   style?: string | null;
@@ -540,10 +678,71 @@ export async function generateOutline(input: {
     wordCount <= 3000 ? 5 :
     6;
 
-  const prompt: ChatMessage[] = [
+  // 一次吐 N 套 × 多章节的长响应最容易被上游 ~60s 网关掐断，默认拆成每套一个请求并发
+  if ((process.env.OUTLINE_GENERATION_MODE ?? "parallel") !== "monolithic") {
+    const parallel = await generateOutlinesInParallel({
+      ...input,
+      style,
+      audience,
+      wordCount,
+      count,
+      sectionCount,
+      engineering,
+    });
+    if (parallel.length > 0) return parallel;
+    return buildFallbackOutlines(input.topic, style, audience, wordCount, count, engineering);
+  }
+
+  const prompt = buildOutlinePrompt({
+    ...input,
+    style,
+    audience,
+    wordCount,
+    count,
+    sectionCount,
+    engineering,
+    angle: null,
+  });
+
+  const maxTokens = Math.min(8192, 1600 + count * sectionCount * 220);
+  const raw = await callChat(prompt, { jsonMode: true, maxTokens, role: "outline" });
+  const parsed = safeParse<{ outlines?: OutlineOption[] }>(raw, {});
+
+  if (parsed.outlines && parsed.outlines.length > 0) {
+    return parsed.outlines
+      .slice(0, count)
+      .map((opt, idx) => normalizeOutlineOption(opt, idx, input.topic, style, wordCount));
+  }
+
+  return buildFallbackOutlines(input.topic, style, audience, wordCount, count, engineering);
+}
+
+type OutlinePromptInput = {
+  topic: string;
+  style: string;
+  audience: string;
+  wordCount: number;
+  goal?: string | null;
+  keywords?: string | null;
+  count: number;
+  sectionCount: number;
+  engineering: boolean;
+  /** 非空时表示本次只生成一套方案，并锁定该切入角 */
+  angle: string | null;
+};
+
+function buildOutlinePrompt(input: OutlinePromptInput): ChatMessage[] {
+  const { topic, style, audience, wordCount, count, sectionCount, engineering, angle } = input;
+  const single = angle !== null;
+
+  return [
     {
       role: "system",
-      content: `你是一位资深公众号主编：既懂选题策划，也懂「读者为什么愿意读完」。请基于用户输入生成 ${count} 个**真正不同骨架**的大纲——不是同一篇文章换标题。
+      content: `你是一位资深公众号主编：既懂选题策划，也懂「读者为什么愿意读完」。${
+        single
+          ? `请基于用户输入生成 **1 个**大纲，并严格采用指定切入角。`
+          : `请基于用户输入生成 ${count} 个**真正不同骨架**的大纲——不是同一篇文章换标题。`
+      }
 
 ${buildDomainAdaptationBlock()}
 
@@ -553,6 +752,8 @@ ${buildOnTopicBlock(input.topic, input.keywords)}
 
 ${buildQualityArticleBlock()}
 
+${buildWechatPlatformValueBlock()}
+
 ${buildEvidenceBlock(engineering)}
 
 ${buildAntiAiVoiceBlock()}
@@ -560,17 +761,22 @@ ${buildAntiAiVoiceBlock()}
 ${buildEngineeringOutlineBlock(engineering)}
 
 【核心要求】
-- 方案之间要有选题张力（选 A 还是选 B），禁止同一骨架换词
-- 每个方案仍必须服务同一主题「${input.topic}」，差异在切入角与论证路径，不在换赛道
+${
+  single
+    ? `- **本方案必须采用这个切入角**：${angle}\n- 切入角决定骨架：标题、章节顺序都要体现它，不要写成通用百科目录`
+    : `- 方案之间要有选题张力（选 A 还是选 B），禁止同一骨架换词`
+}
+- 必须服务同一主题「${topic}」，差异在切入角与论证路径，不在换赛道
 - 目标读者：${audience}，写作风格：${style}，文章目标：${input.goal?.trim() || "知识分享"}，目标字数：约 ${wordCount} 字
-- 内容真实可信，不做夸大承诺
+- 内容真实可信，不做夸大承诺；宁可信息密度高略短，也不做空洞长文
+- positioning 要写清「这篇独特价值是什么」（读者为什么读这篇而不是百科）
 
 ${buildStyleGuide(style)}
 
 【标题要求】
-- 每个 title ≤ 20 字，含主题关键词；自然口语或笔记感均可
+- title ≤ 20 字，含主题关键词；自然口语或笔记感均可
 - 禁止标题党、震惊体；少用「：从入门到精通」冒号模板
-- **不要**硬套「悬念/数字/对比/场景/手册/态度」六种公式；${count} 个标题句式与切入点必须不同
+- **不要**硬套「悬念/数字/对比/场景/手册/态度」六种公式${single ? "" : `；${count} 个标题句式与切入点必须不同`}
 - 实践向标题必须能对应后文干货（代码/步骤/案例），禁止空喊「实战手册」
 
 【章节要求】
@@ -581,47 +787,67 @@ ${buildStyleGuide(style)}
 - positioning：15-30 字，说明适合谁、偏认知还是偏动手
 
 【输出格式】
-- **必须恰好返回 ${count} 个大纲**（outlines 数组长度 = ${count}），少一个都不合格；禁止只给 2～3 个就收工
+${
+  single
+    ? "- outlines 数组长度必须为 1"
+    : `- **必须恰好返回 ${count} 个大纲**（outlines 数组长度 = ${count}），少一个都不合格；禁止只给 2～3 个就收工`
+}
 - JSON：{ "outlines": [ { "title", "positioning", "sections": [ { "heading", "summary" } ] } ] }`,
     },
     {
       role: "user",
       content: JSON.stringify({
         ...buildWritingUserPayload({
-          topic: input.topic,
+          topic,
           style,
           wordCount,
           audience,
           goal: input.goal,
           keywords: input.keywords,
-          outlineCount: count,
+          outlineCount: single ? 1 : count,
           sectionsPerOutline: sectionCount,
         }),
         contentMode: engineering ? "engineering-hands-on" : "general",
         mustIncludeCodeInArticle: engineering,
-        requiredOutlineCount: count,
+        requiredOutlineCount: single ? 1 : count,
+        ...(single ? { requiredAngle: angle } : {}),
       }),
     },
   ];
+}
 
-  // 6 套 × 多章节时 2048 很容易截断，模型会提前收工只吐 3 个
-  const maxTokens = Math.min(8192, 1600 + count * sectionCount * 220);
-  const raw = await callChat(prompt, { jsonMode: true, maxTokens, role: "outline" });
-  const parsed = safeParse<{ outlines?: OutlineOption[] }>(raw, {});
+/** 每套方案一个短请求并发生成：单次响应更小，几乎不会撞上网关超时 */
+async function generateOutlinesInParallel(
+  input: Omit<OutlinePromptInput, "angle">,
+): Promise<OutlineOption[]> {
+  const { topic, style, audience, wordCount, count, sectionCount } = input;
+  const maxTokens = Math.min(4096, 1200 + sectionCount * 260);
 
-  if (parsed.outlines && parsed.outlines.length > 0) {
-    return parsed.outlines.slice(0, count).map((opt, idx) => ({
-      index: idx,
-      title: opt.title ?? `${input.topic}：方案 ${idx + 1}`,
-      positioning: opt.positioning ?? `${style}向，约 ${wordCount} 字。`,
-      sections: (opt.sections ?? []).map((s) => ({
-        heading: s.heading ?? "未命名章节",
-        summary: s.summary ?? "",
-      })),
-    }));
-  }
+  const results = await mapWithConcurrency(
+    Array.from({ length: count }, (_, i) => i),
+    getOutlineConcurrency(count),
+    async (i) => {
+      try {
+        const raw = await callChat(
+          buildOutlinePrompt({ ...input, angle: OUTLINE_ANGLES[i % OUTLINE_ANGLES.length] }),
+          { jsonMode: true, maxTokens, role: "outline" },
+        );
+        const parsed = safeParse<{ outlines?: OutlineOption[] }>(raw, {});
+        const first = parsed.outlines?.[0];
+        return first && (first.sections?.length ?? 0) > 0 ? first : null;
+      } catch (error) {
+        console.error(
+          `[generateOutline] scheme ${i + 1}/${count} failed:`,
+          error instanceof Error ? error.message : error,
+        );
+        return null;
+      }
+    },
+  );
 
-  return buildFallbackOutlines(input.topic, style, audience, wordCount, count, engineering);
+  return results
+    .filter((opt): opt is OutlineOption => opt !== null)
+    .map((opt, idx) => normalizeOutlineOption(opt, idx, topic, style, wordCount));
 }
 
 function buildFallbackOutlines(
@@ -764,36 +990,372 @@ function buildFallbackOutlines(
   return allOptions.slice(0, count).map((opt, idx) => ({ ...opt, index: idx }));
 }
 
-function padText(text: string, targetLength: number, sectionTitle: string): string {
-  if (text.length >= targetLength) return text;
-  const blocks = [
-    `这里需要更多具体细节。你可以想象读者是一位 ${sectionTitle} 方向的新手，先告诉他常见的认知误区。`,
-    `举一个真实场景：如果今天就要动手做 ${sectionTitle}，第一步会卡在哪里。把这一步拆细，再给一个最低成本的解决方案。`,
-    `再补一段经验：很多人在 ${sectionTitle} 上半途而废，并不是因为方法不对，而是缺少一个可持续的反馈机制。`,
-    `给一个可以立刻执行的小练习：例如用 15 分钟尝试一种新做法，并把结果记下来，下周对比。`,
-    `总结一下本小节的核心动作：识别问题 → 拆解步骤 → 设定反馈 → 持续优化。`,
-    `如果你愿意，可以把你现在的真实做法告诉我，我会根据你的实际情况再帮你优化一版。`,
-  ];
-  let extended = text;
-  while (extended.length < targetLength) {
-    extended += "\n\n" + blocks[extended.length % blocks.length];
-  }
-  return extended;
+export type ContentProgressCallback = (
+  stepLabel: string,
+  stepIndex: number,
+  stepTotal: number,
+) => void | Promise<void>;
+
+function buildContentSystemPromptCore(input: {
+  topic: string;
+  style: string;
+  wordCount: number;
+  perSection: number;
+  engineering: boolean;
+  keywords?: string | null;
+  accountBlock: string;
+  domainBlock: string;
+  styleGuide: string;
+  sectional?: boolean;
+}): string {
+  const { topic, style, wordCount, perSection, engineering, accountBlock, domainBlock, styleGuide, sectional } =
+    input;
+  return `你是一位写了 8 年公众号的资深主笔。读者评价你的文章「每段都有信息量，读完能动手或能想明白一件事」。${sectional ? "本次只写指定片段，不要写其他章节。" : "请严格按大纲写——每章只写一次，禁止同义反复凑字。"}
+
+${domainBlock}
+
+${accountBlock}
+
+${styleGuide}
+
+${buildOnTopicBlock(topic, input.keywords)}
+
+${buildQualityArticleBlock()}
+
+${buildWechatPlatformValueBlock()}
+
+${buildEvidenceBlock(engineering)}
+
+${buildAntiAiVoiceBlock()}
+
+${buildEngineeringContentBlock(engineering)}
+
+${ARTICLE_HTML_FORMAT_RULES_BRIEF}
+
+【写作人格】清楚、直接、有判断；没把握时用「常见情况是」，不要装权威。
+【开头】禁止闲聊叙事开篇；${engineering ? "工程文先落到接口/流程/卡点。" : ""}
+【结构】章节用 <h2>，章间 <hr />；列表项 <li><strong>标题</strong>说明</li>
+【反注水】目标约 ${wordCount} 字全文${sectional ? `，本章约 ${perSection} 字` : ""}；宁可偏短也不要空话
+【严禁】赋能/抓手/闭环/认知升级/编造数据/结尾引流`;
 }
 
-export async function generateContent(input: {
+function finalizeGeneratedContent(
+  content: string,
+  fallbackTitle: string,
+  fallbackSummary: string,
+): { title: string; summary: string; content: string; missingSections: string[] } {
+  const safeContent = content
+    .replace(/<h1[^>]*>[\s\S]*?<\/h1>/g, "")
+    .replace(/<div class="mp-signature">[\s\S]*?<\/div>/g, "");
+  const fixedContent = dedupeRepeatedBlocks(fixCodeBlocks(normalizeCalloutBlocks(safeContent)));
+  const highlightedContent = highlightCodeBlocks(fixedContent);
+  return {
+    title: fallbackTitle,
+    summary: fallbackSummary,
+    content: highlightedContent,
+    missingSections: [],
+  };
+}
+
+function extractHtmlFromLlmJson(
+  parsed: Record<string, unknown>,
+  keys: string[],
+): string {
+  for (const key of keys) {
+    const val = parsed[key];
+    if (typeof val === "string" && val.trim().length > 0) {
+      return val.trim();
+    }
+  }
+  return "";
+}
+
+/** 从模型的非 JSON 回复里取出正文 HTML（去掉 markdown 代码围栏与前后解释） */
+function extractHtmlFromPlainReply(raw: string): string {
+  const fenced = raw.match(/```(?:html)?\s*([\s\S]*?)```/i);
+  const body = (fenced ? fenced[1] : raw).trim();
+  const firstTag = body.search(/<(h2|p|ul|ol|pre|blockquote|div)\b/i);
+  return firstTag > 0 ? body.slice(firstTag).trim() : body;
+}
+
+const SECTION_ATTEMPTS = 3;
+
+async function generateContentSectionHtml(input: {
+  systemCore: string;
   topic: string;
-  outline?: OutlineOption | null;
-  style?: string | null;
-  wordCount?: number | null;
-  audience?: string | null;
-  goal?: string | null;
-  keywords?: string | null;
-}) {
+  title: string;
+  style: string;
+  section: { heading: string; summary: string };
+  sectionIndex: number;
+  sectionTotal: number;
+  previousHeadings: string[];
+  perSection: number;
+  engineering: boolean;
+  isLastSummary: boolean;
+}): Promise<string> {
+  const { section } = input;
+  const maxTokens = Math.min(
+    4096,
+    Math.max(2048, Math.ceil(input.perSection * 2.4) + 600),
+  );
+  let lastError = "模型未返回有效内容";
+
+  for (let attempt = 0; attempt < SECTION_ATTEMPTS; attempt++) {
+    // 最后一次改用纯 HTML 输出：JSON 模式偶发返回空字段/截断
+    const plainMode = attempt === SECTION_ATTEMPTS - 1;
+
+    try {
+      const sectionRaw = await callChat(
+        [
+          {
+            role: "system",
+            content: `${input.systemCore}
+
+【本次任务：单章正文】
+${
+  plainMode
+    ? "直接输出本章 HTML 片段，不要 JSON、不要 markdown 围栏、不要任何解释文字"
+    : '输出 JSON：{ "sectionHtml": string }\n- **必须**返回非空 sectionHtml 字段（不要用 content/html 等其它键名）'
+}
+- 只写本章：${section.heading}
+- 必须以 <h2>${section.heading}</h2> 开头
+- 本章目标：${section.summary}
+- 本章约 ${input.perSection} 字（去标签）；禁止重复其他章节内容
+${input.isLastSummary ? '- 最后一章可用 <div class="mp-summary"><p>...</p></div>' : ""}`,
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              topic: input.topic,
+              title: input.title,
+              style: input.style,
+              sectionIndex: input.sectionIndex,
+              sectionTotal: input.sectionTotal,
+              section,
+              previousHeadings: input.previousHeadings,
+              suggestedWords: input.perSection,
+              engineering: input.engineering,
+            }),
+          },
+        ],
+        // 本函数自带 3 次尝试，内层不再重试，否则最坏会变成 9 次串起来的长等待
+        { jsonMode: !plainMode, maxTokens, role: "content", temperature: 0.65, retries: 1 },
+      );
+
+      if (!sectionRaw) {
+        lastError = "模型未返回内容（请检查 API Key）";
+      } else {
+        const html = plainMode
+          ? extractHtmlFromPlainReply(sectionRaw)
+          : extractHtmlFromLlmJson(safeParse<Record<string, unknown>>(sectionRaw, {}), [
+              "sectionHtml",
+              "content",
+              "html",
+              "section",
+            ]);
+
+        if (html.length >= 60) return html;
+
+        lastError = `输出过短或字段缺失（${html.length} 字）`;
+        console.warn(
+          `[generateContentBySections] section ${input.sectionIndex} attempt ${attempt + 1} short output`,
+          sectionRaw.slice(0, 200),
+        );
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : "章节生成失败";
+      if (!isTransientLlmError(error) && attempt < SECTION_ATTEMPTS - 1) {
+        // 非网络类错误（如鉴权、配额）重试无意义
+        throw error;
+      }
+      if (attempt === SECTION_ATTEMPTS - 1) throw error;
+    }
+
+    await sleep(800 * (attempt + 1));
+  }
+
+  throw new Error(`章节「${section.heading}」生成失败：${lastError}`);
+}
+
+function getSectionConcurrency(sectionCount: number): number {
+  const raw = Number(process.env.CONTENT_SECTION_CONCURRENCY ?? "");
+  const configured = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 3;
+  return Math.max(1, Math.min(configured, sectionCount));
+}
+
+async function generateContentBySections(
+  input: {
+    topic: string;
+    outline: OutlineOption;
+    style?: string | null;
+    wordCount?: number | null;
+    audience?: string | null;
+    goal?: string | null;
+    keywords?: string | null;
+  },
+  onProgress?: ContentProgressCallback,
+) {
   const style = input.style || "干货型";
   const wordCount = input.wordCount ?? 1200;
-  const sections = input.outline?.sections ?? buildSections(input.topic);
+  const sections = input.outline.sections ?? [];
   const perSection = Math.max(280, Math.floor(wordCount / Math.max(sections.length, 1)));
+  const engineering = isEngineeringTopic(input.topic, input.keywords ?? input.outline.title ?? null);
+  const accountBlock = buildAccountPersonaBlock();
+  const domainBlock = buildDomainAdaptationBlock();
+  const styleGuide = buildStyleGuide(style);
+  const systemCore = buildContentSystemPromptCore({
+    topic: input.topic,
+    style,
+    wordCount,
+    perSection,
+    engineering,
+    keywords: input.keywords,
+    accountBlock,
+    domainBlock,
+    styleGuide,
+    sectional: true,
+  });
+
+  const totalSteps = 1 + sections.length;
+  let step = 0;
+  const report = async (label: string) => {
+    await onProgress?.(label, step, totalSteps);
+    step += 1;
+  };
+
+  await report("生成标题与开篇（0/" + sections.length + " 章）");
+  const metaRaw = await callChat(
+    [
+      {
+        role: "system",
+        content: `${systemCore}
+
+【本次任务：标题 + 摘要 + 开篇】
+输出 JSON：{ "title": string, "summary": string, "openingHtml": string }
+- title ≤ 20 字；summary 80-120 字
+- openingHtml：开篇 2-4 段 <p>（直接点题），**不要** <h2>，不要写正文章节`,
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          ...buildWritingUserPayload({
+            topic: input.topic,
+            style,
+            wordCount,
+            audience: input.audience,
+            goal: input.goal,
+            keywords: input.keywords,
+            outline: input.outline,
+          }),
+          task: "meta",
+        }),
+      },
+    ],
+    { jsonMode: true, maxTokens: 1200, role: "content", temperature: 0.65 },
+  );
+  const meta = safeParse<Record<string, unknown>>(metaRaw, {});
+  const title =
+    (typeof meta.title === "string" && meta.title) ||
+    input.outline.title ||
+    input.topic;
+  const summary =
+    (typeof meta.summary === "string" && meta.summary) ||
+    `围绕「${input.topic}」的一篇${style}稿，读完能带走可执行要点。`;
+  const openingHtml =
+    extractHtmlFromLlmJson(meta, ["openingHtml", "opening", "content"]) || "";
+
+  // 各章互不依赖（上下文只用大纲标题），并发生成把串行的 N×30s 压成 N/并发数
+  const allHeadings = sections.map((s) => s.heading);
+  let doneCount = 0;
+  const failedHeadings: string[] = [];
+
+  const sectionParts = await mapWithConcurrency(
+    sections,
+    getSectionConcurrency(sections.length),
+    async (section, i) => {
+      try {
+        return await generateContentSectionHtml({
+          systemCore,
+          topic: input.topic,
+          title,
+          style,
+          section,
+          sectionIndex: i + 1,
+          sectionTotal: sections.length,
+          previousHeadings: allHeadings.filter((_, idx) => idx !== i),
+          perSection,
+          engineering,
+          isLastSummary:
+            i === sections.length - 1 && /总结|收尾|带走/.test(section.heading),
+        });
+      } catch (error) {
+        console.error(
+          `[generateContentBySections] section ${i + 1} failed:`,
+          error instanceof Error ? error.message : error,
+        );
+        failedHeadings.push(section.heading);
+        return "";
+      } finally {
+        doneCount += 1;
+        await report(`生成章节 ${doneCount}/${sections.length}`);
+      }
+    },
+  );
+
+  // 少量章节失败时保留其余成果，避免整篇几分钟的生成被一章拖垮
+  if (failedHeadings.length > 0 && failedHeadings.length * 2 >= sections.length) {
+    throw new Error(
+      `正文生成失败：${failedHeadings.length}/${sections.length} 个章节未生成成功，请重试`,
+    );
+  }
+
+  const content = [openingHtml, ...sectionParts].filter(Boolean).join("\n<hr />\n");
+  if (countPlainTextChars(content) < 200) {
+    throw new Error("正文生成失败：分段合并后内容过短，请重试");
+  }
+
+  return {
+    ...finalizeGeneratedContent(content, title, summary),
+    missingSections: failedHeadings,
+  };
+}
+
+export async function generateContent(
+  input: {
+    topic: string;
+    outline?: OutlineOption | null;
+    style?: string | null;
+    wordCount?: number | null;
+    audience?: string | null;
+    goal?: string | null;
+    keywords?: string | null;
+  },
+  opts?: { onProgress?: ContentProgressCallback },
+) {
+  const sections = input.outline?.sections ?? buildSections(input.topic);
+  const wordCount = input.wordCount ?? 1200;
+  const perSection = Math.max(280, Math.floor(wordCount / Math.max(sections.length, 1)));
+
+  // 整篇一次生成易被上游 ~60s 网关掐断（terminated）；有大纲时默认按章分段
+  const preferSectional =
+    Boolean(input.outline?.sections?.length) &&
+    (process.env.CONTENT_GENERATION_MODE ?? "sectional") !== "monolithic";
+  if (preferSectional && input.outline) {
+    return generateContentBySections(
+      {
+        topic: input.topic,
+        outline: input.outline,
+        style: input.style,
+        wordCount: input.wordCount,
+        audience: input.audience,
+        goal: input.goal,
+        keywords: input.keywords,
+      },
+      opts?.onProgress,
+    );
+  }
+
+  const style = input.style || "干货型";
   const accountBlock = buildAccountPersonaBlock();
   const domainBlock = buildDomainAdaptationBlock();
   const styleGuide = buildStyleGuide(style);
@@ -817,6 +1379,8 @@ ${buildOnTopicBlock(input.topic, input.keywords)}
 
 ${buildQualityArticleBlock()}
 
+${buildWechatPlatformValueBlock()}
+
 ${buildEvidenceBlock(engineering)}
 
 ${buildAntiAiVoiceBlock()}
@@ -832,9 +1396,10 @@ ${ARTICLE_HTML_FORMAT_RULES}
 【写作人格】
 - 像写技术笔记/专栏：清楚、直接、有判断；第一人称可用，但不要扮演「懂行的朋友拉家常」
 - 没把握时用「常见情况是」「我更倾向」，不要装权威
+- 允许写取舍与做不到的部分——这比完美教条更有创作度
 
 【开头要求】
-- 禁止「在当今时代」「随着XX发展」「近年来」
+- 禁止「在当今时代」「随着XX发展」「近年来」「众所周知」
 - **禁止闲聊叙事开篇**：不要「和朋友/同事聊天」「他说最近在做XXX却进展不大」「我听完觉得方向对但顺序要调」这类套式
 - 开篇 2-3 句直接进入主题：点明要解决的问题、核心结论，或一个与主题绑定的具体技术现象（报错、卡点、错误实现）
 - 开头只负责立题，不要剧透后文每一章；必须仍在主题范围内
@@ -861,14 +1426,16 @@ ${engineering ? "- 工程章：代码优先，解释为辅；理论段不超过�
 - 用 <strong> 标关键判断（禁止 Markdown **）
 - 不要段段「但真正的问题是…」
 
-【反重复 / 反注水】
+【反重复 / 反注水 / 反低质 AIGC】
 - 禁止同义词复读；禁止开头/正文/结尾讲同一故事三遍
 - **禁止为凑字数注水**：目标约 ${wordCount} 字，允许 75%～110%；宁可偏短也不要空话
 - 写完自检：删掉任何离开主题「${input.topic}」仍通顺的段落
+- 写完再自检：若整段换成其他主题标题仍成立，必须重写为带细节的段落
 
 【严禁】
-- 夸夸其谈、绝对化、「赋能/抓手/闭环/底层逻辑/降维/颗粒度」
+- 夸夸其谈、绝对化、「赋能/抓手/闭环/底层逻辑/降维/颗粒度/认知升级」
 - 结尾引流关注点赞
+- 编造对话、数据、论文或「某大厂内部」传闻
 
 【代码与术语】
 - 术语、API、命令用 <code>
@@ -877,7 +1444,7 @@ ${engineering ? "- 至少 2 个代码块；关键流程 ≥ 8 行；语言优先
 
 【输出】
 JSON：{ "title", "summary", "content" }
-- summary：80-120 字，写清读者能带走什么
+- summary：80-120 字，写清读者能带走什么（一个动作/判断标准/清单）
 - content：完整 HTML（无 h1、无签名引流）
 - 篇幅参考 ${wordCount} 字（去标签后），建议每章约 ${perSection} 字，**质量与切题优先于凑满字数**`,
     },
@@ -895,19 +1462,26 @@ JSON：{ "title", "summary", "content" }
         }),
         contentMode: engineering ? "engineering-hands-on" : "general",
         mustIncludeCodeBlocks: engineering ? 2 : 0,
+        platformCompliance: "wechat-high-value-anti-low-aigc",
         writingRequirements: {
           targetWordCount: wordCount,
           softMinimumWordCount: Math.floor(wordCount * 0.75),
           suggestedWordsPerSection: perSection,
           sectionCount: sections.length,
           preferDensityOverPadding: true,
+          requireInformationGainPerParagraph: true,
         },
       }),
     },
   ];
 
   const maxTokens = computeContentMaxTokens(wordCount);
-  const raw = await callChat(prompt, { jsonMode: true, maxTokens, role: "content" });
+  const raw = await callChat(prompt, {
+    jsonMode: true,
+    maxTokens,
+    role: "content",
+    temperature: 0.65,
+  });
   const parsed = safeParse<{ title?: string; summary?: string; content?: string }>(
     raw,
     {},
@@ -926,98 +1500,304 @@ JSON：{ "title", "summary", "content" }
         `[generateContent] 正文字数 ${plainChars} 低于参考目标 ${wordCount}（软下限 ${minWords}），maxTokens=${maxTokens}`,
       );
     }
-    // 对代码块进行语法高亮（内联样式，兼容微信公众号）
-    const highlightedContent = highlightCodeBlocks(fixedContent);
-    return {
-      title: parsed.title ?? input.outline?.title ?? input.topic,
-      summary:
-        parsed.summary ??
-        `围绕"${input.topic}"生成的一篇${style}公众号草稿。`,
-      content: highlightedContent,
-    };
+    return finalizeGeneratedContent(
+      fixedContent,
+      parsed.title ?? input.outline?.title ?? input.topic,
+      parsed.summary ?? `围绕"${input.topic}"生成的一篇${style}公众号草稿。`,
+    );
   }
 
-  const fallbackSections = sections
-    .map((section) => {
-      const detail = padText(
-        `先讲一个真实场景：有一天我在做${section.heading}相关的事情时，突然意识到之前的方法有个根本性的问题。大多数人（包括以前的我）对${section.heading}的理解只停留在表面。但实际上，真正有效的做法和你想的完全不一样。
+  // 不再用注水模板凑稿（低质 AIGC）；让任务失败以便重试
+  if (!isAiConfigured()) {
+    throw new Error("正文生成失败：未配置 AI_API_KEY，请先在设置中配置模型");
+  }
+  throw new Error(
+    "正文生成失败：模型返回内容过短或无效。请换模型/重试，或检查大纲是否过于空泛",
+  );
+}
 
-下面我会拆成几个具体步骤来说。每一步都附带一个我亲身验证过的检查标准。
+/** 按 <h2> 切成可独立精炼的片段（片段 0 为开篇） */
+export function splitContentIntoRefineBlocks(html: string): string[] {
+  const positions: number[] = [];
+  const h2 = /<h2\b/gi;
+  let match: RegExpExecArray | null;
+  while ((match = h2.exec(html)) !== null) positions.push(match.index);
+  if (positions.length === 0) return [html];
 
-第一步，先问自己一个问题：我当前在${section.heading}上最大的瓶颈是什么？把答案写下来，你会发现自己对这件事的认知远比想象中模糊。
+  const blocks: string[] = [];
+  const opening = html.slice(0, positions[0]).trim();
+  if (opening) blocks.push(opening);
+  for (let i = 0; i < positions.length; i++) {
+    const end = i + 1 < positions.length ? positions[i + 1] : html.length;
+    const block = html.slice(positions[i], end).trim();
+    if (block) blocks.push(block);
+  }
+  return blocks;
+}
 
-第二步，找到那个「最小可行动作」。不是列 20 条计划，而是只做一件事——那件如果不做，其他事都白费的事。
+/** 章节间的 <hr /> 分隔符由代码维护，避免模型改写片段时丢失 */
+const TRAILING_HR = /(?:\s*<hr\s*\/?>)+\s*$/i;
 
-第三步，给自己设一个反馈点。${section.heading}最怕的不是做得慢，而是做了很久才发现方向错了。`,
-        perSection * 3,
-        section.heading,
-      );
-      const paragraphs = detail
-        .split(/\n+/)
-        .map((para) => para.trim())
-        .filter(Boolean)
-        .map((para) => {
-          if (para.startsWith("<blockquote>")) return para;
-          if (para.startsWith("<p>")) return para;
-          return `<p>${para}</p>`;
-        });
-      const hook = `<p><strong>说一个你可能没意识到的点：</strong>${section.heading}这件事，大多数人从一开始就搞错了顺序。</p>`;
-      return `
-        <section>
-          <h2>${section.heading}</h2>
-          ${hook}
-          ${paragraphs.join("\n          ")}
-        </section>
-      `.trim();
-    })
-    .join("\n<hr />\n");
+/**
+ * 把整篇 HTML 按 <h2> 拆块并发处理再合并。
+ * 单块失败由 fn 自行回退原文；整体缩水过多时由调用方决定是否放弃。
+ */
+async function processHtmlBlocksInParallel(
+  content: string,
+  fn: (blockHtml: string, index: number) => Promise<{ content: string; changed: boolean }>,
+): Promise<{ merged: string; changed: boolean; blockCount: number }> {
+  const blocks = splitContentIntoRefineBlocks(content);
+
+  const results = await mapWithConcurrency(
+    blocks,
+    getSectionConcurrency(blocks.length),
+    async (block, i) => {
+      const hadTrailingHr = TRAILING_HR.test(block);
+      const result = await fn(block.replace(TRAILING_HR, ""), i);
+      return {
+        ...result,
+        content: hadTrailingHr
+          ? `${result.content.replace(TRAILING_HR, "")}\n<hr />`
+          : result.content,
+      };
+    },
+  );
 
   return {
-    title: input.outline?.title ?? input.topic,
-    summary: `${input.topic}相关的几个实践思路：结合具体场景说明常见误区，并给出可尝试的下一步动作。`,
-    content: `
-      <p>做<strong>${input.topic}</strong>时，最常见的问题不是不会写代码，而是模块边界和落地顺序一开始就糊了：先堆功能，再补分片、进度、续传，最后很难收成可复用组件。</p>
-      <p>下面按可落地的顺序拆：先定对外契约，再补内部调度与边界，尽量少返工。</p>
-      ${fallbackSections}
-      <hr />
-      <section>
-        <h2>总结</h2>
-        <div class="mp-summary">
-          <p>关于${input.topic}，优先把对外 API、状态机和一条最小上传通路跑通，再叠加分片、并发与续传；顺序反了，后面全是补丁。</p>
-          <p>今天就选一个卡点改：接口、队列或进度，先改清楚一处，再扩到下一处。</p>
-        </div>
-      </section>
-    `.trim(),
+    merged: results.map((r) => r.content).join("\n"),
+    changed: results.some((r) => r.changed),
+    blockCount: blocks.length,
   };
+}
+
+function getRefineMinScore(): number {
+  const raw = Number(process.env.CONTENT_REFINE_MIN_SCORE ?? "");
+  return Number.isFinite(raw) ? raw : 78;
+}
+
+function buildRefineSystemPrompt(topic: string, scope: "whole" | "block"): string {
+  return `你是公众号终审编辑，专治「低创作度 / 空洞 / 低质 AIGC」。把用户稿件精炼成信息密度更高、更有阅读价值的版本。
+
+${ARTICLE_HTML_FORMAT_RULES_BRIEF}
+
+${buildWechatPlatformValueBlock()}
+
+${buildAntiAiVoiceBlock()}
+
+【精炼动作（必须执行）】
+1. 删除套话、正确废话、同义反复；合并重复段落
+2. 空泛判断 → 改成具体场景 / 步骤 / 对比 / 代码或边界条件（不编造精确数据）
+3. 开篇若是闲聊模板，改成直接点题
+4. 保留原有 HTML 结构与代码块；可微调 <strong> 标注关键判断
+5. 保持主题「${topic}」与标题承诺；不改成另一篇文章
+6. 字数允许略减（到原文的 85%～105%），**宁短勿水**
+7. 结尾只留可带走动作/清单/判断标准，不要口号升华
+
+【输出】
+${
+  scope === "whole"
+    ? 'JSON：{ "content": string, "summary"?: string }\n- content：精炼后的完整 HTML\n- summary：可选，80-120 字，若原摘要空泛则重写'
+    : 'JSON：{ "content": string }\n- content：只返回本片段精炼后的 HTML，保留原有 <h2> 标题文字\n- 不要补写其他章节，不要加导语或过渡到下一章的句子'
+}`;
+}
+
+/** 单块精炼；任何异常/异常输出都回退原文 */
+async function refineHtmlBlock(input: {
+  topic: string;
+  title?: string | null;
+  style?: string | null;
+  html: string;
+  wantSummary: boolean;
+  summary?: string | null;
+}): Promise<{ content: string; summary?: string; refined: boolean }> {
+  const plainLen = countPlainTextChars(input.html);
+  const maxTokens = Math.min(8192, Math.max(1024, Math.ceil(plainLen * 2.2) + 600));
+
+  try {
+    const raw = await callChat(
+      [
+        {
+          role: "system",
+          content: buildRefineSystemPrompt(input.topic, input.wantSummary ? "whole" : "block"),
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            topic: input.topic,
+            title: input.title ?? "",
+            style: input.style || "干货型",
+            ...(input.wantSummary ? { summary: input.summary ?? "" } : {}),
+            content: input.html,
+            goal: "raise-information-density-and-originality",
+          }),
+        },
+      ],
+      { jsonMode: true, maxTokens, role: "refine", temperature: 0.35 },
+    );
+
+    const parsed = safeParse<{ content?: string; summary?: string }>(raw, {});
+    const refinedPlain = parsed.content ? countPlainTextChars(parsed.content) : 0;
+    // 防模型把片段砍成残稿
+    if (!parsed.content || refinedPlain < plainLen * 0.55) {
+      return { content: input.html, refined: false };
+    }
+    return {
+      content: parsed.content,
+      summary: parsed.summary?.trim() || undefined,
+      refined: true,
+    };
+  } catch (error) {
+    console.error("[refineContentQuality] block failed:", error);
+    return { content: input.html, refined: false };
+  }
+}
+
+/**
+ * 生成后精炼：提高信息密度、去套话、强化创作度（微信反低质 AIGC）
+ * 质量启发式已达标时直接跳过；否则按 <h2> 分块并行精炼。
+ * 失败时返回原文，不阻断主流程。
+ */
+export async function refineContentQuality(input: {
+  topic: string;
+  title?: string | null;
+  summary?: string | null;
+  content: string;
+  style?: string | null;
+}): Promise<{ content: string; summary?: string; refined: boolean; skipped?: boolean }> {
+  if (!isAiConfigured()) {
+    return { content: input.content, refined: false };
+  }
+  const plainLen = countPlainTextChars(input.content);
+  if (plainLen < 400) {
+    return { content: input.content, refined: false };
+  }
+
+  // 初稿已达标就不再花一轮整篇改写的时间
+  const preCheck = analyzeContentQuality({
+    title: input.title,
+    summary: input.summary,
+    content: input.content,
+  });
+  if (preCheck.score >= getRefineMinScore()) {
+    return { content: input.content, refined: false, skipped: true };
+  }
+
+  const blocks = splitContentIntoRefineBlocks(input.content);
+  const normalize = (html: string) =>
+    highlightCodeBlocks(dedupeRepeatedBlocks(fixCodeBlocks(normalizeCalloutBlocks(html))));
+
+  if (blocks.length < 2) {
+    const single = await refineHtmlBlock({
+      topic: input.topic,
+      title: input.title,
+      style: input.style,
+      html: input.content,
+      wantSummary: true,
+      summary: input.summary,
+    });
+    return single.refined
+      ? { ...single, content: normalize(single.content) }
+      : { content: input.content, refined: false };
+  }
+
+  let newSummary: string | undefined;
+  const { merged, changed } = await processHtmlBlocksInParallel(input.content, async (html, i) => {
+    const result = await refineHtmlBlock({
+      topic: input.topic,
+      title: input.title,
+      style: input.style,
+      html,
+      wantSummary: i === 0,
+      summary: input.summary,
+    });
+    if (i === 0 && result.summary) newSummary = result.summary;
+    return { content: result.content, changed: result.refined };
+  });
+
+  if (!changed) {
+    return { content: input.content, refined: false };
+  }
+
+  const normalized = normalize(merged);
+  if (countPlainTextChars(normalized) < plainLen * 0.55) {
+    console.warn(`[refineContentQuality] 精炼后过短，保留原文（原 ${plainLen} 字）`);
+    return { content: input.content, refined: false };
+  }
+
+  return { content: normalized, summary: newSummary, refined: true };
+}
+
+function buildPolishSystemPrompt(mode: string, scope: "whole" | "block"): string {
+  return `你是公众号润色助手。把用户给的 HTML ${scope === "whole" ? "文章" : "片段"}润色成「${mode}」风格。要求保留 HTML 结构，输出 JSON：{ "content": string }。
+
+${ARTICLE_HTML_FORMAT_RULES_BRIEF}
+
+${buildWechatPlatformValueBlock()}
+
+【润色原则】
+- 提升信息密度，**合并或删除重复段落**，同一观点只保留表达最清晰的一处
+- 去掉 AI 套话与空洞过渡句，换成具体细节；不编造数据来源
+- 保留并适当补充 \`<strong>\` 重点标注：每段至少 1 处，标注核心判断或关键术语（2-10 字），禁止删除已有 strong 却不补回
+- 润色时不得改变 mp-tip / mp-warning / mp-summary 的固定结构（见上方格式规范）
+- 案例不够具体时补充细节，但不可虚构数据来源
+- 禁止绝对化表述、空洞鸡汤、夸大承诺、无依据断言
+- 「更营销」也只强调真实价值，不用震惊体或虚假宣传
+- 「更简洁」优先删水，不要靠压缩把干货删没${
+    scope === "block"
+      ? "\n- 只返回本片段，保留原有 <h2> 标题文字；不要补写其他章节或过渡句"
+      : ""
+  }`;
+}
+
+/** 润色单块；失败或产出异常时回退原片段，不牵连整篇 */
+async function polishHtmlBlock(
+  html: string,
+  mode: string,
+  scope: "whole" | "block",
+): Promise<{ content: string; changed: boolean }> {
+  const plainLen = countPlainTextChars(html);
+  const maxTokens = Math.min(8192, Math.max(1024, Math.ceil(plainLen * 2.2) + 512));
+
+  try {
+    const raw = await callChat(
+      [
+        { role: "system", content: buildPolishSystemPrompt(mode, scope) },
+        { role: "user", content: html },
+      ],
+      { jsonMode: true, maxTokens, role: "polish", temperature: 0.45 },
+    );
+    const parsed = safeParse<{ content?: string }>(raw, {});
+    if (!parsed.content || countPlainTextChars(parsed.content) < plainLen * 0.5) {
+      return { content: html, changed: false };
+    }
+    return { content: parsed.content, changed: true };
+  } catch (error) {
+    console.error("[polishContent] block failed:", error);
+    return { content: html, changed: false };
+  }
 }
 
 export async function polishContent(input: {
   content: string;
   mode: "更正式" | "更口语" | "更简洁" | "更营销";
 }) {
-  const prompt: ChatMessage[] = [
-    {
-      role: "system",
-      content: `你是公众号润色助手。把用户给的 HTML 文章润色成「${input.mode}」风格。要求保留 HTML 结构，输出 JSON：{ "content": string }。
+  const plainLen = countPlainTextChars(input.content);
 
-${ARTICLE_HTML_FORMAT_RULES_BRIEF}
-
-【润色原则】
-- 提升信息密度，**合并或删除重复段落**，同一观点只保留表达最清晰的一处
-- 保留并适当补充 \`<strong>\` 重点标注：每段至少 1 处，标注核心判断或关键术语（2-10 字），禁止删除已有 strong 却不补回
-- 润色时不得改变 mp-tip / mp-warning / mp-summary 的固定结构（见上方格式规范）
-- 案例不够具体时补充细节，但不可虚构数据来源
-- 禁止绝对化表述、空洞鸡汤、夸大承诺、无依据断言
-- 「更营销」也只强调真实价值，不用震惊体或虚假宣传`,
-    },
-    { role: "user", content: input.content },
-  ];
-  const raw = await callChat(prompt, { jsonMode: true, maxTokens: 2048, role: "polish" });
-  const parsed = safeParse<{ content?: string }>(raw, {});
-  if (parsed.content && parsed.content.length > 200) {
-    return normalizeCalloutBlocks(parsed.content);
+  // 整篇一次润色的响应长度与正文生成同量级，长文同样会撞上游网关超时
+  const blocks = splitContentIntoRefineBlocks(input.content);
+  if (blocks.length < 2 || plainLen < 1500) {
+    const single = await polishHtmlBlock(input.content, input.mode, "whole");
+    return normalizeCalloutBlocks(single.changed ? single.content : input.content);
   }
-  return normalizeCalloutBlocks(input.content);
+
+  const { merged, changed } = await processHtmlBlocksInParallel(input.content, (html) =>
+    polishHtmlBlock(html, input.mode, "block"),
+  );
+
+  if (!changed || countPlainTextChars(merged) < plainLen * 0.5) {
+    return normalizeCalloutBlocks(input.content);
+  }
+  return normalizeCalloutBlocks(merged);
 }
 
 /** 单次整理约 1800 字，避免长文一次生成被上游掐断（fetch failed） */
@@ -1046,23 +1826,6 @@ function splitHtmlForReformat(html: string, maxPlain: number): string[] {
   }
   if (buf.trim()) chunks.push(buf);
   return chunks;
-}
-
-function isTransientLlmError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  const msg = error.message.toLowerCase();
-  return (
-    msg.includes("fetch failed") ||
-    msg.includes("llm 请求超时") ||
-    msg.includes("econnreset") ||
-    msg.includes("socket") ||
-    msg.includes("network") ||
-    msg.includes("aborted")
-  );
-}
-
-async function sleep(ms: number) {
-  await new Promise((r) => setTimeout(r, ms));
 }
 
 async function reformatHtmlChunk(content: string, partIndex: number, partTotal: number): Promise<string> {
@@ -1125,32 +1888,23 @@ export async function reformatArticleHtml(input: {
   }
 
   const chunks = splitHtmlForReformat(input.content, REFORMAT_CHUNK_PLAIN_CHARS);
-  const out: string[] = [];
+  let done = 0;
 
-  for (let i = 0; i < chunks.length; i++) {
-    const partIndex = i + 1;
-    const label =
-      chunks.length === 1 ? "整理格式中" : `整理格式 ${partIndex}/${chunks.length}`;
-    const progress = 30 + Math.floor((i / Math.max(chunks.length, 1)) * 50);
-    await input.onProgress?.(progress, label);
-
-    let lastError: unknown;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        out.push(await reformatHtmlChunk(chunks[i], partIndex, chunks.length));
-        lastError = null;
-        break;
-      } catch (error) {
-        lastError = error;
-        if (attempt === 0 && isTransientLlmError(error)) {
-          await sleep(1200);
-          continue;
-        }
-        throw error;
-      }
-    }
-    if (lastError) throw lastError;
-  }
+  // 各块互不依赖，并发处理；进度按完成数上报
+  const out = await mapWithConcurrency(
+    chunks,
+    getSectionConcurrency(chunks.length),
+    async (chunk, i) => {
+      const result = await withRetry(
+        () => reformatHtmlChunk(chunk, i + 1, chunks.length),
+        { attempts: 3, baseDelayMs: 1200 },
+      );
+      done += 1;
+      const label = chunks.length === 1 ? "整理格式中" : `整理格式 ${done}/${chunks.length}`;
+      await input.onProgress?.(30 + Math.floor((done / chunks.length) * 50), label);
+      return result;
+    },
+  );
 
   const merged = out.join("\n");
   return highlightCodeBlocks(
@@ -1158,56 +1912,86 @@ export async function reformatArticleHtml(input: {
   );
 }
 
-export async function expandSection(input: {
-  content: string;
-  instruction?: string;
-}) {
-  const originalPlain = countPlainTextChars(input.content);
-  const maxTokens = Math.min(
-    8192,
-    Math.max(4096, Math.ceil(input.content.length / 2) + 1600),
-  );
-
-  const prompt: ChatMessage[] = [
-    {
-      role: "system",
-      content:
-        `你是公众号扩写助手。把用户给出的整篇 HTML 正文扩写得更充实，然后输出完整 HTML。
+function buildExpandSystemPrompt(scope: "whole" | "block"): string {
+  return `你是公众号扩写助手。把用户给出的${scope === "whole" ? "整篇 HTML 正文" : "HTML 片段"}扩写得更充实，然后输出${scope === "whole" ? "完整 HTML" : "该片段的 HTML"}。
 
 ${ARTICLE_HTML_FORMAT_RULES_BRIEF}
 
 【扩写要求】
-- 输出 JSON：{ "content": string }，content 必须是扩写后的**完整正文 HTML**（不是增量片段）
-- 在各章节内部补充具体案例、步骤、对比或细节，保持原有结构与风格
-- 禁止只在文末追加一段；禁止重复粘贴「总结核心动作 / 小练习」等模板套话
+- 输出 JSON：{ "content": string }，content 必须是扩写后的**${scope === "whole" ? "完整正文" : "完整片段"} HTML**（不是增量片段）
+- 在${scope === "whole" ? "各章节" : "本章"}内部补充具体案例、步骤、对比或细节，保持原有结构与风格
+- 禁止只在末尾追加一段；禁止重复粘贴「总结核心动作 / 小练习」等模板套话
 - 禁止把原文原样复制后再拼接一遍
-- 扩写要有实质信息，不注水、不鸡汤；有判断处可自然用 <strong> 标注 2-8 字核心词
+- 扩写要有实质信息增量，不注水、不鸡汤、不堆 AI 套话；有判断处可自然用 <strong> 标注 2-8 字核心词
+- 每补一段都要能通过：删掉后读者是否少懂一件具体事
 - 禁止绝对化表述和无依据断言；不得引入格式规范以外的 HTML 结构
-- 扩写后正文字数应明显多于原文`,
-    },
-    {
-      role: "user",
-      content: JSON.stringify({
-        content: input.content,
-        instruction: input.instruction ?? "补具体例子和执行步骤",
-        originalPlainChars: originalPlain,
-      }),
-    },
-  ];
+- 扩写后字数应明显多于原文，但宁可少扩也不要空话${
+    scope === "block" ? "\n- 只返回本片段，保留原有 <h2> 标题文字；不要补写其他章节" : ""
+  }
 
-  const raw = await callChat(prompt, { jsonMode: true, maxTokens, role: "expand" });
-  if (!raw) {
+${buildWechatPlatformValueBlock()}`;
+}
+
+/** 扩写单块；失败或没变长时回退原片段 */
+async function expandHtmlBlock(
+  html: string,
+  instruction: string,
+  scope: "whole" | "block",
+): Promise<{ content: string; changed: boolean }> {
+  const originalPlain = countPlainTextChars(html);
+  const maxTokens = Math.min(8192, Math.max(1536, Math.ceil(html.length / 2) + 1600));
+
+  try {
+    const raw = await callChat(
+      [
+        { role: "system", content: buildExpandSystemPrompt(scope) },
+        {
+          role: "user",
+          content: JSON.stringify({ content: html, instruction, originalPlainChars: originalPlain }),
+        },
+      ],
+      { jsonMode: true, maxTokens, role: "expand" },
+    );
+    const parsed = safeParse<{ content?: string }>(raw, {});
+    if (!parsed.content || countPlainTextChars(parsed.content) <= originalPlain) {
+      return { content: html, changed: false };
+    }
+    return { content: parsed.content, changed: true };
+  } catch (error) {
+    console.error("[expandSection] block failed:", error);
+    return { content: html, changed: false };
+  }
+}
+
+export async function expandSection(input: {
+  content: string;
+  instruction?: string;
+}) {
+  if (!isAiConfigured()) {
     throw new Error("未配置 AI API Key，无法扩写");
   }
 
-  const parsed = safeParse<{ content?: string }>(raw, {});
-  if (!parsed.content || parsed.content.length < 200) {
-    throw new Error("扩写失败：模型未返回有效正文，请重试");
+  const originalPlain = countPlainTextChars(input.content);
+  const instruction = input.instruction ?? "补具体例子和执行步骤";
+  const blocks = splitContentIntoRefineBlocks(input.content);
+
+  // 扩写的输出必然比输入更长，整篇一次做最容易超时，长文按章并发
+  const { merged, changed } =
+    blocks.length < 2
+      ? await expandHtmlBlock(input.content, instruction, "whole").then((r) => ({
+          merged: r.content,
+          changed: r.changed,
+        }))
+      : await processHtmlBlocksInParallel(input.content, (html) =>
+          expandHtmlBlock(html, instruction, "block"),
+        );
+
+  if (!changed) {
+    throw new Error("扩写失败：正文几乎没有变长，请重试");
   }
 
-  const expanded = normalizeCalloutBlocks(parsed.content);
-  const expandedPlain = countPlainTextChars(expanded);
-  if (expandedPlain <= originalPlain + 40) {
+  const expanded = normalizeCalloutBlocks(merged);
+  if (countPlainTextChars(expanded) <= originalPlain + 40) {
     throw new Error("扩写失败：正文几乎没有变长，请重试");
   }
 
@@ -1338,41 +2122,41 @@ CRITICAL: This model ONLY understands natural language. YOU MUST:
 - No faces or people in the image`;
 
 const IMAGE_STYLE_ANCHOR =
-  "Hand-drawn sticker-style educational illustration. Soft macaron color palette. Clean cream/off-white textured paper background. Friendly hand-drawn lines — slightly imperfect, warm, illustrative (children's textbook + modern infographic). Never corporate photorealism.";
+  "Premium internet-tech editorial illustration. Deep navy-to-black gradient background with a subtle dark-mode UI feel. Glassmorphism cards with frosted translucent panels, thin luminous borders, and soft cyan/blue glow. Refined geometric line work, faint circuit traces and data-flow lines, micro grid texture. High-end SaaS / developer-tool aesthetic — sleek, modern, premium, never childish. Cinematic rim lighting, depth of field, subtle particle dust. Never flat cartoon, never hand-drawn doodle, never pastel macaron.";
 
 const SECTION_LAYOUT_VARIANTS = [
-  "HORIZONTAL FLOW: 3-4 rounded sticker cards in a left-to-right row, connected by curved dashed arrows",
-  "2x2 GRID: four cards in a balanced grid with subtle connecting dotted lines",
-  "CENTRAL HUB: one larger center card with 3 smaller satellite cards around it, linked by thin paths",
-  "VERTICAL TIMELINE: cards stacked top-to-bottom along a winding path with step numbers in circles",
-  "TWO-COLUMN CONTRAST: left vs right comparison — two tall cards facing each other with a vs/arrow divider",
-  "PROCESS FUNNEL: cards arranged in a gentle funnel or pyramid showing progression",
-  "RADIAL SPOKES: keyword cards placed around a central icon like a mind-map (no photoreal faces)",
-  "LAYERED STACK: 3 cards slightly offset like sticky notes layered on each other with paperclip doodle",
-  "JOURNEY MAP: cards placed along a simple winding road/path illustration across the canvas",
-  "TOOLBOX SCENE: cards emerging from an open sketch-style toolbox or folder illustration",
+  "HORIZONTAL FLOW: 3-4 frosted glass cards in a left-to-right row, connected by glowing data-flow lines",
+  "2x2 GRID: four glass cards in a balanced grid with subtle luminous connecting lines",
+  "CENTRAL HUB: one larger hero glass card with 3 smaller satellite cards around it, linked by thin light beams",
+  "VERTICAL TIMELINE: glass cards stacked top-to-bottom along a vertical light trail with step numbers in glowing circles",
+  "TWO-COLUMN CONTRAST: left vs right comparison — two tall glass panels facing each other with a vs/arrow divider",
+  "PROCESS FUNNEL: glass cards arranged in a gentle funnel or pyramid showing progression",
+  "RADIAL SPOKES: keyword cards placed around a central holographic icon like a mind-map (no photoreal faces)",
+  "LAYERED STACK: 3 glass cards slightly offset in 3D depth with soft shadows and depth-of-field",
+  "JOURNEY MAP: glass cards placed along a winding light path across the canvas",
+  "TOOLBOX SCENE: glass cards emerging from a sleek floating dashboard / dock panel",
 ] as const;
 
 const SECTION_METAPHOR_VARIANTS = [
-  "blueprint / technical sketch grid faintly in background",
-  "floating geometric shapes (circles, triangles) as secondary decoration",
-  "stationery doodles: paper clips, washi tape strips, pencil shavings",
-  "tiny plant sprout and leaf motifs for growth metaphor",
-  "cloud and lightning doodles for performance/speed metaphor",
-  "puzzle piece connectors between cards",
-  "magnifying glass and checklist icons near labels",
-  "bridge or link chain connecting two concepts",
-  "compass or map pin for navigation/direction metaphor",
-  "gear and circuit-line doodles for engineering topics",
+  "faint blueprint grid and circuit traces in background",
+  "floating geometric shapes (hexagons, triangles) with soft glow as secondary decoration",
+  "data packet particles and connection nodes drifting between cards",
+  "subtle node-link network mesh as ambient decoration",
+  "light beams and lens flares for performance/speed metaphor",
+  "puzzle-piece connectors with luminous edges between cards",
+  "magnifying glass and checklist icons with cyan glow near labels",
+  "bridge or link chain of glowing nodes connecting two concepts",
+  "compass or map pin with holographic ring for navigation/direction metaphor",
+  "gear and circuit-line doodles with subtle bloom for engineering topics",
 ] as const;
 
 const SECTION_ACCENT_COLORS = [
-  "pastel mint green as dominant accent",
-  "soft sky blue as dominant accent",
-  "peach coral as dominant accent",
-  "lavender lilac as dominant accent",
-  "soft lemon yellow as dominant accent",
-  "dusty rose pink as dominant accent",
+  "electric cyan as dominant accent",
+  "deep sapphire blue as dominant accent",
+  "violet indigo as dominant accent",
+  "emerald teal as dominant accent",
+  "warm gold as dominant accent",
+  "magenta pink as dominant accent",
 ] as const;
 
 function pickSectionVisualVariant(sectionIndex: number) {
@@ -1409,14 +2193,14 @@ DIVERSITY (mandatory — vary composition and decorative elements):
 - Each section image must look different from a generic "row of cards" template
 - Use the assigned layoutVariant exactly — do not fall back to a default horizontal row unless that IS the assigned layout
 - Use the assigned visualMetaphor and accentColor to differentiate mood and decoration
-- Vary card shapes subtly when fitting: rounded rects, tags, bookmarks, speech bubbles, hexagons
-- Vary decorative doodles: stars, sparkles, arrows, ribbons, plus badges, dots — don't repeat the same set every time
+- Vary card shapes subtly when fitting: rounded glass rects, tags, hexagons, holo-panels, chips
+- Vary decorative elements: stars, sparkles, arrows, light beams, particle dust, plus badges, nodes — don't repeat the same set every time
 - Pick icons that match the section topic (code brackets, database cylinder, form checkbox, clock, shield, etc.) — not generic lightbulb every time
 
 CONTENT:
 - Do NOT just render the section heading as the main text
 - Extract 3-5 concrete keywords, methods, tools, or concepts from sectionContent (2-6 Chinese characters each)
-- Place each keyword inside its own card/sticker with a small hand-drawn icon
+- Place each keyword inside its own glass card / chip with a small luminous icon
 - Do NOT mention aspect ratios or pixel dimensions
 
 Output JSON: { "prompt": string }`,
@@ -1442,7 +2226,7 @@ Output JSON: { "prompt": string }`,
 
   const cleanHeading = sectionHeading.replace(/[——\-–—:：]/g, " ").replace(/[^\w\u4e00-\u9fa5 ]/g, "").trim().slice(0, 40);
   return reinforceSectionPrompt(
-    `${IMAGE_STYLE_ANCHOR} Illustration about ${cleanHeading}. ${variant.layout}. ${variant.metaphor}. ${variant.accentColor}. Chinese keyword labels inside hand-drawn sticker cards.`,
+    `${IMAGE_STYLE_ANCHOR} Illustration about ${cleanHeading}. ${variant.layout}. ${variant.metaphor}. ${variant.accentColor}. Chinese keyword labels inside frosted glass cards.`,
     variant,
   );
 }
@@ -1453,11 +2237,11 @@ function reinforceSectionPrompt(
 ): string {
   const lower = prompt.toLowerCase();
   const hints: string[] = [];
-  if (!/macaron|hand-drawn|sticker|cream/i.test(prompt)) {
+  if (!/glass|navy|cyan|premium|tech|circuit|gradient/i.test(prompt)) {
     hints.push(IMAGE_STYLE_ANCHOR);
   }
   if (!/chinese|中文|汉字/i.test(lower)) {
-    hints.push("Chinese keyword labels (2-6 characters) inside each card.");
+    hints.push("Chinese keyword labels (2-6 characters) inside each glass card.");
   }
   if (!/layout|grid|timeline|hub|funnel|map|toolbox|radial|stack/i.test(lower)) {
     hints.push(variant.layout);
@@ -1574,10 +2358,10 @@ STYLE ANCHOR (fixed):
 ${IMAGE_STYLE_ANCHOR}
 
 LAYOUT (pick ONE that fits the topic — vary composition, keep style):
-- LOWER ARC: 3-4 sticker cards arranged in a gentle arc across the lower third
-- DIAGONAL CASCADE: cards staggered diagonally from lower-left to lower-right
-- CENTER CLUSTER: one hero card with 2-3 smaller cards grouped below it
-- SPLIT BAND: cards sitting on a hand-drawn colored band/strip across the lower area
+- LOWER ARC: 3-4 frosted glass cards arranged in a gentle arc across the lower third
+- DIAGONAL CASCADE: glass cards staggered diagonally from lower-left to lower-right
+- CENTER CLUSTER: one hero glass card with 2-3 smaller glass cards grouped below it
+- SPLIT BAND: glass cards sitting on a luminous colored band/strip across the lower area
 
 KEYWORD RULES (critical):
 - Output 3-4 Chinese keywords, each EXACTLY 2-6 characters — short labels only (e.g. 前端、Agent、Prompt)
@@ -1589,7 +2373,7 @@ KEYWORD RULES (critical):
 TEXT PLACEMENT (absolute — image models often ignore this, so be extreme):
 - The UPPER HALF of the image must be completely blank of ALL text — no Chinese, no English, no topic, no title, no tags
 - ESPECIALLY forbid text in the top-left corner, top-right corner, and top-center
-- The ONLY Chinese text in the whole image is the short keywords INSIDE the lower sticker cards
+- The ONLY Chinese text in the whole image is the short keywords INSIDE the lower glass cards
 - Never paint articleTopic / articleTitle / summary as a header or corner watermark
 - Do not write words like "title", "topic", or the raw topic string anywhere on the canvas
 
@@ -1623,8 +2407,8 @@ In "prompt": describe visuals in English; when mentioning card labels, list ONLY
 
   return reinforceCoverPrompt(
     `${IMAGE_STYLE_ANCHOR} WeChat article cover about ${domainHint}. ` +
-      `Lower third only: 3-4 macaron sticker cards labeled exactly ${keywords.map((k) => `"${k}"`).join(", ")}. ` +
-      `Topic-relevant hand-drawn icons (code brackets, agent nodes, workflow arrows — not food/travel). ` +
+      `Lower third only: 3-4 frosted glass cards labeled exactly ${keywords.map((k) => `"${k}"`).join(", ")}. ` +
+      `Topic-relevant luminous icons (code brackets, agent nodes, workflow arrows — not food/travel). ` +
       `Upper half completely empty of text. No corner labels. No floating titles.`,
     keywords,
     topic,
@@ -1651,8 +2435,8 @@ function reinforceCoverPrompt(
 
   const hints = [
     "UPPER HALF of the image: absolutely no text of any kind (no Chinese, no English, no logos).",
-    "No text in top-left corner, top-right corner, or top-center — leave blank cream background only.",
-    `The ONLY Chinese text allowed anywhere in the image: ${keywords.map((k) => `「${k}」`).join("、")} — each written once, only inside lower sticker cards.`,
+    "No text in top-left corner, top-right corner, or top-center — leave the dark navy gradient background only.",
+    `The ONLY Chinese text allowed anywhere in the image: ${keywords.map((k) => `「${k}」`).join("、")} — each written once, only inside lower frosted glass cards.`,
     "Do not print the article topic or title as a separate header, watermark, or corner tag.",
     "Card labels must be short (2-6 Chinese characters). Never put long sentences on cards.",
   ];

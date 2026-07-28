@@ -1,8 +1,19 @@
 import type { GenerationJob, Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
-import { generateContent, generateCoverPrompt, generateOutline, polishContent, reformatArticleHtml, expandSection, generateSectionImagePrompt } from "@/lib/ai";
+import {
+  generateContent,
+  generateCoverPrompt,
+  generateOutline,
+  polishContent,
+  reformatArticleHtml,
+  expandSection,
+  generateSectionImagePrompt,
+  refineContentQuality,
+} from "@/lib/ai";
+import { analyzeContentQuality } from "@/lib/content-quality";
 import { generateCoverImage, generateSectionImage } from "@/lib/image-gen";
 import { mapWithConcurrency } from "@/lib/map-with-concurrency";
+import { withRetry } from "@/lib/retry";
 import { withUserConfig } from "@/lib/config-bridge";
 
 type OutlineRecord = {
@@ -107,20 +118,28 @@ async function runContent(job: GenerationJob, update: ProgressUpdater) {
   if (!selectedOutline) throw new Error("所选大纲不存在，请重新选择");
 
   await update(15, "生成正文");
-  const generated = await generateContent({
-    topic: article.topic,
-    outline: selectedOutline,
-    style: article.style,
-    wordCount: article.wordCount,
-    audience: article.audience,
-    goal: article.goal,
-    keywords: article.keywords,
-  });
+  let generated = await generateContent(
+    {
+      topic: article.topic,
+      outline: selectedOutline,
+      style: article.style,
+      wordCount: article.wordCount,
+      audience: article.audience,
+      goal: article.goal,
+      keywords: article.keywords,
+    },
+    {
+      onProgress: async (stepLabel, stepIndex, stepTotal) => {
+        const progress = 15 + Math.floor(((stepIndex + 1) / Math.max(stepTotal, 1)) * 45);
+        await update(progress, stepLabel);
+      },
+    },
+  );
 
-  let coverImageUrl: string | null = null;
-  let coverWarning: string | null = null;
-  try {
-    await update(70, "生成封面图");
+  await update(65, "精炼正文 + 生成封面图");
+
+  // 封面只依赖标题/摘要/内容梗概，与精炼互不影响，并行省掉一整轮等待
+  const coverTask = (async () => {
     const keyPoints = (selectedOutline.sections ?? []).slice(0, 3).map((s) => s.heading);
     const coverPrompt = await generateCoverPrompt(article.topic, article.style, {
       title: generated.title,
@@ -129,7 +148,6 @@ async function runContent(job: GenerationJob, update: ProgressUpdater) {
       contentExcerpt: generated.content,
     });
     const cover = await generateCoverImage(coverPrompt);
-    coverImageUrl = cover.url;
     await db.imageAsset.create({
       data: {
         articleId: article.id,
@@ -139,8 +157,51 @@ async function runContent(job: GenerationJob, update: ProgressUpdater) {
         prompt: coverPrompt,
       },
     });
-  } catch (err) {
-    coverWarning = err instanceof Error ? err.message : "封面图生成失败";
+    return cover.url;
+  })();
+
+  // 生成后精炼关：去套话、提信息密度，降低微信「低质 AIGC」风险
+  const [refined, coverResult] = await Promise.all([
+    refineContentQuality({
+      topic: article.topic,
+      title: generated.title,
+      summary: generated.summary,
+      content: generated.content,
+      style: article.style,
+    }),
+    coverTask.then(
+      (url) => ({ url, error: null as string | null }),
+      (err: unknown) => ({
+        url: null,
+        error: err instanceof Error ? err.message : "封面图生成失败",
+      }),
+    ),
+  ]);
+
+  if (refined.refined) {
+    generated = {
+      ...generated,
+      content: refined.content,
+      summary: refined.summary ?? generated.summary,
+    };
+  } else if (!refined.skipped) {
+    // 精炼未改写时，若启发式仍偏低也继续用初稿，但记入日志便于排查
+    const preCheck = analyzeContentQuality({
+      title: generated.title,
+      summary: generated.summary,
+      content: generated.content,
+    });
+    if (preCheck.score < 70) {
+      console.warn(
+        `[job:content] quality score low (${preCheck.score}):`,
+        preCheck.issues.map((i) => i.code).join(","),
+      );
+    }
+  }
+
+  const coverImageUrl = coverResult.url;
+  const coverWarning = coverResult.error;
+  if (coverWarning) {
     console.error("[job:content] cover failed:", coverWarning);
   }
 
@@ -172,6 +233,14 @@ async function runContent(job: GenerationJob, update: ProgressUpdater) {
     articleId: updated.id,
     coverImageUrl: updated.coverImageUrl,
     coverWarning,
+    ...(generated.missingSections.length > 0
+      ? { contentWarning: `以下章节生成失败，已跳过：${generated.missingSections.join("、")}` }
+      : {}),
+    qualityScore: analyzeContentQuality({
+      title: generated.title,
+      summary: generated.summary,
+      content: generated.content,
+    }).score,
   };
 }
 
@@ -222,7 +291,10 @@ async function runCover(job: GenerationJob, update: ProgressUpdater) {
   return { coverImageUrl: updated.coverImageUrl, imageId: image.id, prompt };
 }
 
-const INLINE_IMAGE_CONCURRENCY = 2;
+function getInlineImageConcurrency(): number {
+  const raw = Number(process.env.INLINE_IMAGE_CONCURRENCY ?? "");
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 3;
+}
 
 type SectionJob = {
   insertAfter: number;
@@ -349,19 +421,25 @@ async function runInlineImages(job: GenerationJob, update: ProgressUpdater) {
 
   await update(10, `正在生成第 1/${totalToGenerate} 张配图`);
 
-  const generationResults = await mapWithConcurrency(jobs, INLINE_IMAGE_CONCURRENCY, async (sectionJob) => {
+  const generationResults = await mapWithConcurrency(jobs, getInlineImageConcurrency(), async (sectionJob) => {
     try {
-      const prompt = await generateSectionImagePrompt(
-        article.topic,
-        article.style,
-        sectionJob.heading,
-        sectionJob.sectionContent,
-        {
-          sectionIndex: sectionJob.documentOrderIndex,
-          totalSections: totalToGenerate,
+      const { prompt, url } = await withRetry(
+        async () => {
+          const prompt = await generateSectionImagePrompt(
+            article.topic,
+            article.style,
+            sectionJob.heading,
+            sectionJob.sectionContent,
+            {
+              sectionIndex: sectionJob.documentOrderIndex,
+              totalSections: totalToGenerate,
+            },
+          );
+          const { url } = await generateSectionImage(prompt);
+          return { prompt, url };
         },
+        { attempts: 2, baseDelayMs: 1500 },
       );
-      const { url } = await generateSectionImage(prompt);
       const result: SectionResult = {
         insertAfter: sectionJob.insertAfter,
         heading: sectionJob.heading,

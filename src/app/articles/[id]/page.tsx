@@ -1784,6 +1784,18 @@ export default function ArticlePage({
               }}
               disabled={!article.content}
             />
+            {blogSyncConfigured ? (
+              <ActionChip
+                busy={busy}
+                label="同步博客"
+                activeLabel="同步到博客"
+                onClick={() => {
+                  setBlogSyncResult(null);
+                  setBlogSyncDialogOpen(true);
+                }}
+                disabled={!article.content}
+              />
+            ) : null}
           </div>
         </div>
         </div>
