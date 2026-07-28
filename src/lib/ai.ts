@@ -2124,6 +2124,21 @@ CRITICAL: This model ONLY understands natural language. YOU MUST:
 const IMAGE_STYLE_ANCHOR =
   "Premium internet-tech editorial illustration. Deep navy-to-black gradient background with a subtle dark-mode UI feel. Glassmorphism cards with frosted translucent panels, thin luminous borders, and soft cyan/blue glow. Refined geometric line work, faint circuit traces and data-flow lines, micro grid texture. High-end SaaS / developer-tool aesthetic — sleek, modern, premium, never childish. Cinematic rim lighting, depth of field, subtle particle dust. Never flat cartoon, never hand-drawn doodle, never pastel macaron.";
 
+/** 封面专用：深色科技横幅（Node.js 安全、ADB 工具箱类） */
+const COVER_STYLE_DARK =
+  "Dark premium tech article banner, 16:9. Deep navy-to-black gradient with subtle starfield particles, faint circuit traces, and soft cyan or emerald glow. One large 3D isometric hero object as focal point (shield with lock, Android robot outline, terminal window, API nodes, workflow diagram — must match topic). Optional small floating holographic UI badges with icons only. Bold Chinese headline typography. Sleek developer-tool / cybersecurity promo aesthetic. Never cartoon people with faces, never cluttered keyword chip rows.";
+
+/** 封面专用：浅色产品风（v0.dev、Tauri、面试题类） */
+const COVER_STYLE_LIGHT =
+  "Clean light tech article banner, 16:9. Soft sky-blue to white gradient with generous negative space. Left side: bold dark Chinese headline (1-2 lines) with crisp sans-serif typography. Right side: floating 3D UI mockups, glass dashboard panels, or isometric widgets with soft shadows. Modern SaaS product-marketing feel — minimal, airy, professional. Never dark cyberpunk background, never neon overload, never keyword chip rows.";
+
+const COVER_LAYOUT_VARIANTS = [
+  "LEFT_TITLE_RIGHT_HERO: bold Chinese headline on the left third (main line + smaller subtitle below); right two-thirds shows one large 3D isometric illustration related to the topic",
+  "BOTTOM_TITLE_CENTER_HERO: dominant 3D metaphor icon centered in the upper area; bottom band has bold white Chinese headline and subtitle with subtle glow",
+  "CENTER_TITLE_ABSTRACT: dark blue background with flowing cyan light waves or data streams; centered bold white Chinese headline, minimal decoration",
+  "DIAGONAL_SPLIT: diagonal luminous band divides canvas; headline on the darker side, 3D tech object on the lighter side",
+] as const;
+
 const SECTION_LAYOUT_VARIANTS = [
   "HORIZONTAL FLOW: 3-4 frosted glass cards in a left-to-right row, connected by glowing data-flow lines",
   "2x2 GRID: four glass cards in a balanced grid with subtle luminous connecting lines",
@@ -2250,77 +2265,55 @@ function reinforceSectionPrompt(
   return `${prompt.trim()} ${hints.join(" ")}`;
 }
 
-/** 从主题/标题/要点提炼封面中文关键词，避免模型编造无关生活类标签 */
-function deriveCoverKeywords(
-  topic: string,
+/** 封面主副标题：参照 v0.dev / Node.js 安全横幅，用大标题而非底部关键词卡片 */
+function deriveCoverTitleLines(
   title: string,
+  summary?: string | null,
   keyPoints: string[] = [],
-): string[] {
-  const candidates: string[] = [];
-  const push = (raw: string) => {
-    const cleaned = raw
-      .replace(/[《》【】\[\]（）()「」""''、，。！？：；]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (!cleaned) return;
-    for (const part of cleaned.split(/[\s/\-|—–]+/)) {
-      const t = part.trim();
-      // 封面卡只适合极短标签，过长会画糊或溢出
-      if (t.length >= 2 && t.length <= 6) candidates.push(t.slice(0, 6));
-    }
-  };
+): { headline: string; subtitle: string } {
+  const headline = title
+    .replace(/[《》【】\[\]（）()「」""'']/g, "")
+    .trim()
+    .slice(0, 18);
+  const summaryLine = (summary ?? "")
+    .replace(/[，。！？、；：]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 16);
+  const pointLine = keyPoints
+    .map((p) => p.replace(/[0-9０-９]+[.、．)\]]\s*/g, "").trim())
+    .find((p) => p.length >= 4 && p.length <= 16);
+  const subtitle = summaryLine || pointLine || "实用拆解";
+  return { headline: headline || "技术专题", subtitle };
+}
 
-  push(topic);
-  if (title && title !== topic) push(title.slice(0, 24));
-  for (const point of keyPoints.slice(0, 4)) {
-    push(point.replace(/[0-9０-９]+[.、．)\]]\s*/g, "").slice(0, 12));
+const LIGHT_COVER_TOPIC_RE =
+  /前端|ui|ux|设计|v0|tauri|组件|样式|css|面试|轻量|桌面|tsx|react|vue|svelte|tailwind|动效|布局/i;
+
+function pickCoverTheme(topic: string, title: string): "dark" | "light" {
+  const corpus = `${topic}${title}`;
+  if (LIGHT_COVER_TOPIC_RE.test(corpus)) {
+    return "light";
   }
+  return "dark";
+}
 
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const item of candidates) {
-    if (seen.has(item)) continue;
-    seen.add(item);
-    result.push(item);
-    if (result.length >= 4) break;
-  }
-
-  if (result.length >= 3) return result.slice(0, 4);
-  if (topic.trim()) return [topic.trim().slice(0, 4), "实践", "方法"].slice(0, 3);
-  return ["主题", "方法", "实践"];
+function pickCoverVisualVariant(topic: string, title: string) {
+  let hash = 0;
+  for (let i = 0; i < topic.length; i++) hash = (hash + topic.charCodeAt(i)) | 0;
+  const layout = COVER_LAYOUT_VARIANTS[Math.abs(hash) % COVER_LAYOUT_VARIANTS.length];
+  const theme = pickCoverTheme(topic, title);
+  const styleAnchor = theme === "light" ? COVER_STYLE_LIGHT : COVER_STYLE_DARK;
+  return { layout, theme, styleAnchor };
 }
 
 const LIFESTYLE_COVER_KEYWORD_RE =
   /美食|旅行|旅游|攻略|生活小技巧|文化漫谈|穿搭|护肤|美食推荐|生活方式|理财|星座|情感|养生|家居|亲子/;
 
-function isOffTopicCoverKeyword(keyword: string, topic: string, title: string): boolean {
-  if (LIFESTYLE_COVER_KEYWORD_RE.test(keyword)) {
-    const corpus = `${topic}${title}`;
-    return !LIFESTYLE_COVER_KEYWORD_RE.test(corpus);
-  }
-  return false;
-}
-
-function pickCoverKeywords(
-  llmKeywords: string[] | undefined,
-  topic: string,
-  title: string,
-  keyPoints: string[],
-): string[] {
-  const derived = deriveCoverKeywords(topic, title, keyPoints);
-  const fromLlm = (llmKeywords ?? [])
-    .map((k) => k.replace(/\s+/g, "").trim())
-    .filter((k) => k.length >= 2 && k.length <= 6)
-    .filter((k) => !isOffTopicCoverKeyword(k, topic, title));
-
-  if (fromLlm.length >= 3) return fromLlm.slice(0, 4);
-  return derived;
-}
-
 /** 用英文描述主题域，避免把中文主题原文塞进生图 prompt（易被画到角落） */
 function coverDomainHint(topic: string): string {
   const t = topic.toLowerCase();
-  if (/agent|智能体/.test(t)) return "AI agents, tools, and automation workflows";
+  if (/agent|智能体|claude|cursor|copilot|编码助手/.test(t)) return "AI coding assistants and developer workflows";
   if (/前端|react|vue|javascript|css|web/.test(t)) return "frontend engineering and AI-assisted coding";
   if (/prompt|提示词/.test(t)) return "prompt engineering and LLM workflows";
   if (/后端|api|服务端/.test(t)) return "backend engineering and APIs";
@@ -2341,7 +2334,12 @@ export async function generateCoverPrompt(
 ): Promise<string> {
   const title = context?.title?.trim() || topic;
   const keyPoints = context?.keyPoints ?? [];
-  const seedKeywords = deriveCoverKeywords(topic, title, keyPoints);
+  const { headline, subtitle } = deriveCoverTitleLines(
+    title,
+    context?.summary,
+    keyPoints,
+  );
+  const variant = pickCoverVisualVariant(topic, title);
   const domainHint = coverDomainHint(topic);
   const contentExcerpt = (context?.contentExcerpt ?? "")
     .replace(/<[^>]+>/g, " ")
@@ -2352,39 +2350,38 @@ export async function generateCoverPrompt(
   const prompt = await callChat([
     {
       role: "system",
-      content: IMAGE_PROMPT_SYSTEM + `\n\nCreate a cover illustration for a WeChat article. The image MUST visually reflect THIS article's topic — never a generic lifestyle blog cover.
+      content: IMAGE_PROMPT_SYSTEM + `\n\nCreate a WeChat article COVER banner (16:9). Match premium tech blog thumbnails — bold Chinese headline + one hero 3D illustration, NOT a row of small keyword cards.
 
-STYLE ANCHOR (fixed):
-${IMAGE_STYLE_ANCHOR}
+STYLE ANCHOR (fixed for this cover):
+${variant.styleAnchor}
 
-LAYOUT (pick ONE that fits the topic — vary composition, keep style):
-- LOWER ARC: 3-4 frosted glass cards arranged in a gentle arc across the lower third
-- DIAGONAL CASCADE: glass cards staggered diagonally from lower-left to lower-right
-- CENTER CLUSTER: one hero glass card with 2-3 smaller glass cards grouped below it
-- SPLIT BAND: glass cards sitting on a luminous colored band/strip across the lower area
+LAYOUT (use exactly this composition):
+${variant.layout}
 
-KEYWORD RULES (critical):
-- Output 3-4 Chinese keywords, each EXACTLY 2-6 characters — short labels only (e.g. 前端、Agent、Prompt)
-- Keywords ONLY from articleTopic / articleTitle / summary / keyPoints
-- FORBIDDEN unless the article itself is about them: 美食推荐、旅行攻略、生活小技巧、文化漫谈、穿搭、护肤、理财、星座
-- Seed keywords for reference: ${JSON.stringify(seedKeywords)}
-- Icons/metaphors MUST match domain (${domainHint}) — not food/travel/home
+TOPIC VISUALS:
+- Domain: ${domainHint}
+- Pick ONE large 3D hero metaphor that fits the article (shield/lock for security, Android robot for mobile tools, code terminal for CLI, dashboard panels for frontend, agent nodes for AI)
+- Small floating UI badges OK for decoration — icons only, no extra Chinese labels
 
-TEXT PLACEMENT (absolute — image models often ignore this, so be extreme):
-- The UPPER HALF of the image must be completely blank of ALL text — no Chinese, no English, no topic, no title, no tags
-- ESPECIALLY forbid text in the top-left corner, top-right corner, and top-center
-- The ONLY Chinese text in the whole image is the short keywords INSIDE the lower glass cards
-- Never paint articleTopic / articleTitle / summary as a header or corner watermark
-- Do not write words like "title", "topic", or the raw topic string anywhere on the canvas
+TEXT RULES (critical):
+- The ONLY Chinese text in the image: headline 「${headline}」 and subtitle 「${subtitle}」
+- Headline: large, bold, high contrast — main visual text element
+- Subtitle: smaller, below or beside headline
+- NEVER use a horizontal row of 3-4 frosted glass keyword chips at the bottom — that layout is forbidden
+- NEVER paint the raw articleTopic string as a corner watermark
+- FORBIDDEN unless the article is about them: 美食推荐、旅行攻略、生活小技巧、文化漫谈、穿搭、护肤
 
-Output JSON: { "prompt": string, "keywords": string[] }
-In "prompt": describe visuals in English; when mentioning card labels, list ONLY the short keywords. Never quote the full article topic/title as text to draw.`,
+Output JSON: { "prompt": string }
+In "prompt": describe visuals in English; specify exact Chinese headline and subtitle text and their placement.`,
     },
     {
       role: "user",
       content: JSON.stringify({
         domainHint,
-        // 仅作语义上下文，明确禁止绘制这些完整字符串
+        theme: variant.theme,
+        layoutVariant: variant.layout,
+        headline,
+        subtitle,
         contextForMeaningOnly: {
           articleTopic: topic,
           articleTitle: title,
@@ -2392,58 +2389,50 @@ In "prompt": describe visuals in English; when mentioning card labels, list ONLY
           keyPoints,
           contentExcerpt: contentExcerpt || undefined,
         },
-        doNotPaintTheseStrings: [topic, title].filter(Boolean),
-        preferredKeywords: seedKeywords,
+        doNotPaintTheseStrings: [topic].filter((s) => s !== headline && s !== subtitle),
       }),
     },
-  ], { jsonMode: true, maxTokens: 420, role: "cover-prompt" });
+  ], { jsonMode: true, maxTokens: 480, role: "cover-prompt" });
 
-  const parsed = safeParse<{ prompt?: string; keywords?: string[] }>(prompt, {});
-  const keywords = pickCoverKeywords(parsed.keywords, topic, title, keyPoints);
+  const parsed = safeParse<{ prompt?: string }>(prompt, {});
 
   if (parsed.prompt) {
-    return reinforceCoverPrompt(parsed.prompt, keywords, topic, title);
+    return reinforceCoverPrompt(parsed.prompt, headline, subtitle, variant);
   }
 
   return reinforceCoverPrompt(
-    `${IMAGE_STYLE_ANCHOR} WeChat article cover about ${domainHint}. ` +
-      `Lower third only: 3-4 frosted glass cards labeled exactly ${keywords.map((k) => `"${k}"`).join(", ")}. ` +
-      `Topic-relevant luminous icons (code brackets, agent nodes, workflow arrows — not food/travel). ` +
-      `Upper half completely empty of text. No corner labels. No floating titles.`,
-    keywords,
-    topic,
-    title,
+    `${variant.styleAnchor} ${variant.layout}. ` +
+      `Bold Chinese headline 「${headline}」 with subtitle 「${subtitle}」. ` +
+      `One large 3D isometric hero illustration about ${domainHint}. ` +
+      `No keyword chip row. No corner watermarks.`,
+    headline,
+    subtitle,
+    variant,
   );
 }
 
-/** 追加封面约束：禁止角落标题，只允许卡片内短关键词 */
+/** 追加封面约束：大标题横幅风，禁止底部关键词卡片 */
 function reinforceCoverPrompt(
   prompt: string,
-  keywords: string[],
-  topic: string,
-  title: string,
+  headline: string,
+  subtitle: string,
+  variant: ReturnType<typeof pickCoverVisualVariant>,
 ): string {
   let cleaned = prompt.trim();
 
-  // 去掉 prompt 里容易被模型「照抄上屏」的整段主题/标题引文
-  for (const raw of [title, topic]) {
-    const t = raw?.trim();
-    if (!t || t.length < 2) continue;
-    if (keywords.includes(t)) continue;
-    cleaned = cleaned.split(t).join("the article subject");
-  }
-
   const hints = [
-    "UPPER HALF of the image: absolutely no text of any kind (no Chinese, no English, no logos).",
-    "No text in top-left corner, top-right corner, or top-center — leave the dark navy gradient background only.",
-    `The ONLY Chinese text allowed anywhere in the image: ${keywords.map((k) => `「${k}」`).join("、")} — each written once, only inside lower frosted glass cards.`,
-    "Do not print the article topic or title as a separate header, watermark, or corner tag.",
-    "Card labels must be short (2-6 Chinese characters). Never put long sentences on cards.",
+    variant.styleAnchor,
+    `Layout: ${variant.layout}.`,
+    `Headline text must be exactly 「${headline}」 — large, bold, prominent.`,
+    `Subtitle text must be exactly 「${subtitle}」 — smaller, secondary.`,
+    "FORBIDDEN: horizontal row of 3-4 small glass cards with keyword labels at the bottom.",
+    "FORBIDDEN: text in top-left or top-right corners as watermarks.",
+    "No cartoon people with faces. No cluttered chip/tag rows.",
   ];
 
-  if (LIFESTYLE_COVER_KEYWORD_RE.test(cleaned) && !LIFESTYLE_COVER_KEYWORD_RE.test(topic)) {
+  if (LIFESTYLE_COVER_KEYWORD_RE.test(cleaned)) {
     hints.push(
-      "Remove any lifestyle labels such as 美食推荐/旅行攻略/生活小技巧/文化漫谈 — they are off-topic.",
+      "Remove lifestyle labels such as 美食推荐/旅行攻略/生活小技巧 — off-topic.",
     );
   }
 
