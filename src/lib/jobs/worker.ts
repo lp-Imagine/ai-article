@@ -12,6 +12,23 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let activeCount = 0;
 let lastRecoverAt = 0;
 
+async function recoverOrphanedJobsOnStartup() {
+  const result = await db.generationJob.updateMany({
+    where: { status: "running" },
+    data: {
+      status: "queued",
+      progress: 0,
+      stepLabel: "排队中（服务重启后恢复）",
+      error: null,
+      startedAt: null,
+      finishedAt: null,
+    },
+  });
+  if (result.count > 0) {
+    console.warn(`[job-worker] requeued ${result.count} orphaned running job(s) after startup`);
+  }
+}
+
 async function recoverStaleJobs() {
   const cutoff = new Date(Date.now() - getStaleRunningJobMs());
   const result = await db.generationJob.updateMany({
@@ -125,7 +142,8 @@ export function startJobWorker() {
   if (started) return;
   started = true;
   console.log("[job-worker] started");
-  void recoverStaleJobs()
+  void recoverOrphanedJobsOnStartup()
+    .then(() => recoverStaleJobs())
     .then(() => tick())
     .catch((err) => {
       console.error("[job-worker] startup recover failed:", err);

@@ -2121,68 +2121,205 @@ CRITICAL: This model ONLY understands natural language. YOU MUST:
 - The image MUST contain Chinese text as part of the design — specify the exact text and its visual treatment
 - No faces or people in the image`;
 
-const IMAGE_STYLE_ANCHOR =
-  "Premium internet-tech editorial illustration. Deep navy-to-black gradient background with a subtle dark-mode UI feel. Glassmorphism cards with frosted translucent panels, thin luminous borders, and soft cyan/blue glow. Refined geometric line work, faint circuit traces and data-flow lines, micro grid texture. High-end SaaS / developer-tool aesthetic — sleek, modern, premium, never childish. Cinematic rim lighting, depth of field, subtle particle dust. Never flat cartoon, never hand-drawn doodle, never pastel macaron.";
+/**
+ * 锁定参考图 lookbook（漏洞原理那张）：
+ * 暖米色纸底 + 粉/杏/薄荷/淡紫块面 + 深棕描边（背景干净，无三角/点点装饰）
+ */
+const DOODLE_LOOKBOOK = [
+  "CRITICAL LOOKBOOK (match this reference teaching doodle exactly — colors first):",
+  "Canvas background is warm latte beige paper, about #F3EBDF / #F7F0E6 — never pure white, never cool gray, never navy, never black.",
+  "Subtle paper texture only — clean warm sketchbook page with NO decorative icons, NO warning triangles, NO scattered dots, NO exclamation marks in the background.",
+  "All outlines are warm dark-brown ink (#4A3428), slightly wobbly hand-drawn strokes of uneven thickness — not pure black UI lines, not vector-perfect.",
+  "Filled shapes use soft desaturated pastels with matte flat coloring and heavily rounded corners, plus very soft light drop shadows under cards.",
+  "Signature fills: pale sky-blue panels (#C9DDF0), blush pink boxes (#F3CDD6), soft apricot/peach boxes (#F2D2B4), mint green result cards (#BFE6CB), lavender summary arrow (#C9B6E4), coral accent ribbon (#EF7B7B).",
+  "Text ink is dark brown/charcoal for readability. Atmosphere is warm, friendly, educational kawaii tech comic — never cyberpunk neon, never glassmorphism, never photoreal 3D, never muddy gray wash.",
+].join(" ");
 
-/** 封面专用：深色科技横幅（Node.js 安全、ADB 工具箱类） */
-const COVER_STYLE_DARK =
-  "Dark premium tech article banner, 16:9. Deep navy-to-black gradient with subtle starfield particles, faint circuit traces, and soft cyan or emerald glow. One large 3D isometric hero object as focal point (shield with lock, Android robot outline, terminal window, API nodes, workflow diagram — must match topic). Optional small floating holographic UI badges with icons only. Bold Chinese headline typography. Sleek developer-tool / cybersecurity promo aesthetic. Never cartoon people with faces, never cluttered keyword chip rows.";
+/** 章节配图：手绘科普信息图 */
+const SECTION_INFOGRAPHIC_STYLE =
+  `${DOODLE_LOOKBOOK} Friendly teaching comic infographic with cute simplified icons. High readability Chinese labels painted clearly and completely. One simple stick-figure without photoreal face is OK for the outcome.`;
 
-/** 封面专用：浅色产品风（v0.dev、Tauri、面试题类） */
-const COVER_STYLE_LIGHT =
-  "Clean light tech article banner, 16:9. Soft sky-blue to white gradient with generous negative space. Left side: bold dark Chinese headline (1-2 lines) with crisp sans-serif typography. Right side: floating 3D UI mockups, glass dashboard panels, or isometric widgets with soft shadows. Modern SaaS product-marketing feel — minimal, airy, professional. Never dark cyberpunk background, never neon overload, never keyword chip rows.";
+/** 章节分区用色（固定参考图配色） */
+const SECTION_COLOR_ROLES =
+  "Color roles: title chip cream with brown outline; cause/left area pale sky-blue; middle mechanism boxes blush pink (top) and soft apricot (bottom); result area mint green with coral ribbon; bottom summary is a thick lavender arrow. Keep the cream-beige paper showing around all panels.";
+
+const SECTION_FLOW_LAYOUTS = [
+  "LEFT_TO_RIGHT STORY: left cause panel → middle 1-2 mechanism boxes → right result; large summary arrow band across the bottom",
+  "TOP_TITLE THREE_PANELS: short title top-left; three equal rounded panels left-to-right (before → change → after) with a bottom conclusion ribbon",
+  "CAUSE_STACK_RESULT: left trigger; stacked dual flaw/step boxes in the middle; celebratory result on the right; bottom equation arrow",
+  "COMPARE_THEN_PICK: two soft boxes on the left (option A vs B); arrow to a chosen path; right side shows the outcome badge",
+] as const;
+
+/** 封面：同一 lookbook，内容仍是主副标题 + 主视觉 */
+const COVER_STYLE_DOODLE =
+  `${DOODLE_LOOKBOOK} Cover banner 16:9 in the SAME sketchbook look. Bold Chinese headline + short keyword subtitle in dark brown ink. One large cute doodle hero metaphor matching the topic (server, browser, stopwatch, puzzle, queue, shield as simplified icons). Use blush pink / apricot / mint / lavender accents on cream-beige paper. No glass chip rows, no neon.`;
 
 const COVER_LAYOUT_VARIANTS = [
-  "LEFT_TITLE_RIGHT_HERO: bold Chinese headline on the left third (main line + smaller subtitle below); right two-thirds shows one large 3D isometric illustration related to the topic",
-  "BOTTOM_TITLE_CENTER_HERO: dominant 3D metaphor icon centered in the upper area; bottom band has bold white Chinese headline and subtitle with subtle glow",
-  "CENTER_TITLE_ABSTRACT: dark blue background with flowing cyan light waves or data streams; centered bold white Chinese headline, minimal decoration",
-  "DIAGONAL_SPLIT: diagonal luminous band divides canvas; headline on the darker side, 3D tech object on the lighter side",
+  "LEFT_TITLE_RIGHT_HERO: bold Chinese headline + subtitle on the left third; right two-thirds shows one large hand-drawn doodle hero metaphor related to the topic",
+  "BOTTOM_TITLE_CENTER_HERO: dominant cute doodle illustration centered in the upper area; bottom cream band has bold dark Chinese headline and pastel subtitle",
+  "TITLE_OVER_SCENE: short bold headline near top-left; a horizontal hand-drawn scene with 1-2 soft pastel panels fills the mid canvas without extra Chinese labels",
+  "DIAGONAL_SPLIT: soft peach/pink wash diagonally divides canvas; headline on the cream-beige side, doodle tech object on the pastel side",
 ] as const;
 
-const SECTION_LAYOUT_VARIANTS = [
-  "HORIZONTAL FLOW: 3-4 frosted glass cards in a left-to-right row, connected by glowing data-flow lines",
-  "2x2 GRID: four glass cards in a balanced grid with subtle luminous connecting lines",
-  "CENTRAL HUB: one larger hero glass card with 3 smaller satellite cards around it, linked by thin light beams",
-  "VERTICAL TIMELINE: glass cards stacked top-to-bottom along a vertical light trail with step numbers in glowing circles",
-  "TWO-COLUMN CONTRAST: left vs right comparison — two tall glass panels facing each other with a vs/arrow divider",
-  "PROCESS FUNNEL: glass cards arranged in a gentle funnel or pyramid showing progression",
-  "RADIAL SPOKES: keyword cards placed around a central holographic icon like a mind-map (no photoreal faces)",
-  "LAYERED STACK: 3 glass cards slightly offset in 3D depth with soft shadows and depth-of-field",
-  "JOURNEY MAP: glass cards placed along a winding light path across the canvas",
-  "TOOLBOX SCENE: glass cards emerging from a sleek floating dashboard / dock panel",
-] as const;
+type SectionStoryPanel = {
+  role: "cause" | "step" | "flaw" | "result";
+  label: string;
+  caption: string;
+  visual: string;
+};
 
-const SECTION_METAPHOR_VARIANTS = [
-  "faint blueprint grid and circuit traces in background",
-  "floating geometric shapes (hexagons, triangles) with soft glow as secondary decoration",
-  "data packet particles and connection nodes drifting between cards",
-  "subtle node-link network mesh as ambient decoration",
-  "light beams and lens flares for performance/speed metaphor",
-  "puzzle-piece connectors with luminous edges between cards",
-  "magnifying glass and checklist icons with cyan glow near labels",
-  "bridge or link chain of glowing nodes connecting two concepts",
-  "compass or map pin with holographic ring for navigation/direction metaphor",
-  "gear and circuit-line doodles with subtle bloom for engineering topics",
-] as const;
+type SectionStoryboard = {
+  title: string;
+  panels: SectionStoryPanel[];
+  summary: string;
+};
 
-const SECTION_ACCENT_COLORS = [
-  "electric cyan as dominant accent",
-  "deep sapphire blue as dominant accent",
-  "violet indigo as dominant accent",
-  "emerald teal as dominant accent",
-  "warm gold as dominant accent",
-  "magenta pink as dominant accent",
-] as const;
-
-function pickSectionVisualVariant(sectionIndex: number) {
-  return {
-    layout: SECTION_LAYOUT_VARIANTS[sectionIndex % SECTION_LAYOUT_VARIANTS.length],
-    metaphor: SECTION_METAPHOR_VARIANTS[sectionIndex % SECTION_METAPHOR_VARIANTS.length],
-    accentColor: SECTION_ACCENT_COLORS[sectionIndex % SECTION_ACCENT_COLORS.length],
-  };
+function pickSectionFlowLayout(sectionIndex: number): string {
+  return SECTION_FLOW_LAYOUTS[sectionIndex % SECTION_FLOW_LAYOUTS.length];
 }
 
-/** 为文章章节生成配图提示词 - 调用 LLM 生成豆包 seedream 兼容 prompt */
+function softClipLabel(text: string, maxChars: number): string {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (!t) return t;
+  const chars = [...t];
+  const isLatinOnly = /[A-Za-z]/.test(t) && !/[\u4e00-\u9fa5]/.test(t);
+  const limit = isLatinOnly ? Math.max(maxChars, 22) : maxChars;
+  if (chars.length <= limit) return t;
+  if (isLatinOnly) {
+    const slice = t.slice(0, limit);
+    const sp = slice.lastIndexOf(" ");
+    return (sp >= 4 ? slice.slice(0, sp) : slice).trim();
+  }
+  return chars.slice(0, limit).join("").replace(/[，,。.!！？、：:]+$/u, "").trim();
+}
+
+function normalizeStoryboard(
+  raw: Partial<SectionStoryboard> | null | undefined,
+  sectionHeading: string,
+): SectionStoryboard | null {
+  if (!raw) return null;
+  const title = softClipLabel(String(raw.title ?? "").trim(), 8);
+  const summary = softClipLabel(String(raw.summary ?? "").trim(), 20);
+  const panelsIn = Array.isArray(raw.panels) ? raw.panels : [];
+  const panels: SectionStoryPanel[] = [];
+  for (const p of panelsIn) {
+    if (!p || typeof p !== "object") continue;
+    const label = softClipLabel(String((p as SectionStoryPanel).label ?? "").trim(), 12);
+    const caption = softClipLabel(String((p as SectionStoryPanel).caption ?? "").trim(), 16);
+    const visual = String((p as SectionStoryPanel).visual ?? "").trim().slice(0, 100);
+    let role = String((p as SectionStoryPanel).role ?? "step") as SectionStoryPanel["role"];
+    if (!["cause", "step", "flaw", "result"].includes(role)) role = "step";
+    if (!label) continue;
+    panels.push({ role, label, caption, visual: visual || "simple tech icon matching the label" });
+    if (panels.length >= 4) break;
+  }
+  if (!title || panels.length < 2 || !summary) return null;
+  const headingPlain = sectionHeading.replace(/<[^>]+>/g, "").trim();
+  const safeTitle =
+    title.length >= 2 && title !== headingPlain
+      ? title
+      : softClipLabel(headingPlain.split(/[：:]/)[0] || headingPlain, 8);
+  return { title: safeTitle || title, panels, summary };
+}
+
+function fallbackStoryboard(sectionHeading: string, plainSection: string): SectionStoryboard {
+  const heading = sectionHeading.replace(/<[^>]+>/g, "").trim();
+  const title = softClipLabel(heading.split(/[：:]/)[0] || heading, 8) || "本章要点";
+  const after = heading.split(/[：:]/)[1]?.trim() || "";
+
+  // 保留英文报错短语完整
+  const engPhrases = [...after.matchAll(/\b(?:other side closed|terminated|ECONNRESET|ETIMEDOUT)\b/gi)].map(
+    (m) => m[0],
+  );
+  const zhBits = after
+    .replace(/\b(?:other side closed|terminated|ECONNRESET|ETIMEDOUT)\b/gi, "")
+    .split(/\s*[、,，/|＋+&]\s*|\s*(?:与|和|及|vs\.?|VS)\s*/i)
+    .map((s) => softClipLabel(s.replace(/[？?].*$/, "").replace(/的实测.*$/u, "").trim(), 10))
+    .filter((s) => s.length >= 2 && !/^从\d/.test(s));
+
+  const bits = [...engPhrases, ...zhBits].slice(0, 3);
+
+  const fromTo = heading.match(/从\s*(\d+\s*秒)\s*到\s*(\d+\s*秒)/);
+  const metric = plainSection.match(/(\d+\s*秒).{0,8}(?:压到|降到|降至|到|→).{0,4}(\d+\s*秒)/);
+  const summary = fromTo
+    ? `${fromTo[1].replace(/\s+/g, "")}→${fromTo[2].replace(/\s+/g, "")}`
+    : metric
+      ? `${metric[1].replace(/\s+/g, "")}→${metric[2].replace(/\s+/g, "")}`
+      : softClipLabel(bits.length >= 2 ? `${bits[0]}+${bits[1]}` : title, 20);
+
+  const panels: SectionStoryPanel[] = [];
+  if (bits.length >= 2) {
+    panels.push({
+      role: "cause",
+      label: bits[0],
+      caption: "起点",
+      visual: "cute rounded icon for the starting concept",
+    });
+    panels.push({
+      role: "step",
+      label: bits[1],
+      caption: "关键一步",
+      visual: "middle pastel process box with simple doodle icon",
+    });
+    panels.push({
+      role: "result",
+      label: bits[2] || softClipLabel(summary, 10),
+      caption: "结果",
+      visual: "outcome badge or celebratory sticker",
+    });
+  } else {
+    panels.push({
+      role: "cause",
+      label: "问题",
+      caption: softClipLabel(heading, 14),
+      visual: "broken pipe or error icon doodle in a rounded box",
+    });
+    panels.push({
+      role: "step",
+      label: "做法",
+      caption: "拆解处理",
+      visual: "toolbox and checklist doodle",
+    });
+    panels.push({
+      role: "result",
+      label: "效果",
+      caption: summary,
+      visual: "green check and speed badge",
+    });
+  }
+  return { title, panels, summary };
+}
+
+function buildInfographicPrompt(
+  story: SectionStoryboard,
+  layout: string,
+  sectionIndex: number,
+  totalSections: number,
+): string {
+  const panelLines = story.panels
+    .map((p, i) => {
+      const cap = p.caption ? ` caption 「${p.caption}」` : "";
+      return `Panel ${i + 1} (${p.role}): label 「${p.label}」${cap}; draw ${p.visual}.`;
+    })
+    .join(" ");
+
+  return [
+    // lookbook 放最前，提高生图模型对颜色/背景的权重
+    SECTION_INFOGRAPHIC_STYLE,
+    SECTION_COLOR_ROLES,
+    `Layout: ${layout}.`,
+    `Section illustration ${sectionIndex + 1} of ${totalSections}.`,
+    `Top-left title chip exactly 「${story.title}」 in dark brown ink on cream.`,
+    panelLines,
+    `Bottom thick lavender arrow with summary text exactly 「${story.summary}」.`,
+    "Must feel like a warm sketchbook teaching page: latte-beige paper everywhere, pastel pink/apricot/mint blocks, brown doodle outlines. Background stays clean — no warning triangles, no scattered dots.",
+    "All Chinese text must be complete — never truncate mid-phrase.",
+    "FORBIDDEN: pure white studio background, cool gray wash, navy cyber background, neon glow, frosted glass, photoreal 3D, keyword chip rows.",
+    "No Midjourney/SD syntax. No aspect ratio or pixel size mentions.",
+  ].join(" ");
+}
+
+/** 为文章章节生成配图提示词 - 手绘科普信息图：讲清本章原理/流程 */
 export async function generateSectionImagePrompt(
   topic: string,
   _style: string | null,
@@ -2192,110 +2329,216 @@ export async function generateSectionImagePrompt(
 ): Promise<string> {
   const sectionIndex = options?.sectionIndex ?? 0;
   const totalSections = options?.totalSections ?? 1;
-  const variant = pickSectionVisualVariant(sectionIndex);
+  const layout = pickSectionFlowLayout(sectionIndex);
+  const plainSection = sectionContext.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
-  const prompt = await callChat([
-    {
-      role: "system",
-      content: IMAGE_PROMPT_SYSTEM + `
+  let story: SectionStoryboard | null = null;
+  try {
+    const extract = await callChat(
+      [
+        {
+          role: "system",
+          content: `你是技术科普插画分镜师。根据「本章标题+正文」，提炼一张手绘教学信息图的分镜（像「漏洞原理」那种：左因→中机制→右果+底部总结箭头）。
 
-Create a section illustration for a WeChat article. Keep the unified style anchor below, but make THIS image visually distinct from other sections in the same article.
+规则：
+- title：2-8 字总题（如「漏洞原理」「超时定位」「分段提效」），不要整段章节标题
+- panels：2-4 个，每个含 role/label/caption/visual
+  - role: cause | step | flaw | result
+  - label: 2-10 字短标签（完整可读）
+  - caption: 4-14 字补充说明（完整可读）
+  - visual: 英文简述该格要画什么（cute icon / browser / server / arrow…）
+- summary: 底部总结，最多 18 字，优先「A + B = 结论」或「425秒→105秒」这种公式感
+- 内容必须忠于本章正文，禁止编造本章没有的漏洞/报错/数字
+- 不要输出长句子；所有中文都要短而完整，避免生图截断
 
-STYLE ANCHOR (fixed — do not change):
-${IMAGE_STYLE_ANCHOR}
+Output JSON only:
+{ "title": string, "panels": [{ "role": string, "label": string, "caption": string, "visual": string }], "summary": string }`,
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            articleTopic: topic,
+            sectionHeading,
+            sectionContent: plainSection.slice(0, 1800),
+            preferredLayout: layout,
+          }),
+        },
+      ],
+      { jsonMode: true, maxTokens: 420, role: "section-image" },
+    );
+    story = normalizeStoryboard(safeParse<Partial<SectionStoryboard>>(extract, {}), sectionHeading);
+  } catch {
+    story = null;
+  }
 
-DIVERSITY (mandatory — vary composition and decorative elements):
-- Each section image must look different from a generic "row of cards" template
-- Use the assigned layoutVariant exactly — do not fall back to a default horizontal row unless that IS the assigned layout
-- Use the assigned visualMetaphor and accentColor to differentiate mood and decoration
-- Vary card shapes subtly when fitting: rounded glass rects, tags, hexagons, holo-panels, chips
-- Vary decorative elements: stars, sparkles, arrows, light beams, particle dust, plus badges, nodes — don't repeat the same set every time
-- Pick icons that match the section topic (code brackets, database cylinder, form checkbox, clock, shield, etc.) — not generic lightbulb every time
-
-CONTENT:
-- Do NOT just render the section heading as the main text
-- Extract 3-5 concrete keywords, methods, tools, or concepts from sectionContent (2-6 Chinese characters each)
-- Place each keyword inside its own glass card / chip with a small luminous icon
-- Do NOT mention aspect ratios or pixel dimensions
-
-Output JSON: { "prompt": string }`,
-    },
-    {
-      role: "user",
-      content: JSON.stringify({
-        articleTopic: topic,
-        sectionHeading,
-        sectionContent: sectionContext.slice(0, 800),
-        sectionIndex,
-        totalSections,
-        layoutVariant: variant.layout,
-        visualMetaphor: variant.metaphor,
-        accentColor: variant.accentColor,
-        diversityNote: `Section ${sectionIndex + 1} of ${totalSections} — must NOT look identical to other sections; honor layoutVariant strictly.`,
-      }),
-    },
-  ], { jsonMode: true, maxTokens: 420, role: "section-image" });
-
-  const parsed = safeParse<{ prompt?: string }>(prompt, {});
-  if (parsed.prompt) return reinforceSectionPrompt(parsed.prompt, variant);
-
-  const cleanHeading = sectionHeading.replace(/[——\-–—:：]/g, " ").replace(/[^\w\u4e00-\u9fa5 ]/g, "").trim().slice(0, 40);
-  return reinforceSectionPrompt(
-    `${IMAGE_STYLE_ANCHOR} Illustration about ${cleanHeading}. ${variant.layout}. ${variant.metaphor}. ${variant.accentColor}. Chinese keyword labels inside frosted glass cards.`,
-    variant,
-  );
+  if (!story) story = fallbackStoryboard(sectionHeading, plainSection);
+  return buildInfographicPrompt(story, layout, sectionIndex, totalSections);
 }
 
-function reinforceSectionPrompt(
-  prompt: string,
-  variant: ReturnType<typeof pickSectionVisualVariant>,
+/** 从正文/摘要本地提炼短关键词（无 LLM 时的兜底） */
+function extractLocalKeywords(corpus: string, limit = 4): string[] {
+  const text = corpus.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  const candidates: string[] = [];
+  const push = (raw: string) => {
+    const t = raw.replace(/[《》【】\[\]（）()「」""'']/g, "").trim();
+    if (t.length >= 2 && t.length <= 8 && !isWeakCoverSubtitle(t)) candidates.push(t);
+  };
+
+  // 英文/数字技术词
+  for (const m of text.matchAll(/\b(?:API|LLM|HTTP|Node\.?js|Claude|Cursor|timeout|gateway|\d+\s*秒|\d+\s*ms)\b/gi)) {
+    push(m[0].replace(/\s+/g, ""));
+  }
+  // 中文技术短语（简单词典 + 标题分片）
+  const dict = [
+    "网关超时", "分段生成", "受限并发", "单章降级", "跳过精炼", "封面并行",
+    "环境配置", "提示词", "多文件编辑", "代码地图", "单元测试", "重构",
+    "权限校验", "加密传输", "全栈安全", "实战手册", "开发者工具",
+  ];
+  for (const w of dict) {
+    if (text.includes(w)) push(w);
+  }
+  for (const part of text.split(/[，,。！？；、：:\s\/|—–·]+/)) {
+    if (part.length >= 3 && part.length <= 6) push(part);
+  }
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const k of candidates) {
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(k);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+const WEAK_COVER_SUBTITLE_BLOCKLIST = [
+  "大纲正常",
+  "正文失败",
+  "正文正常",
+  "生成成功",
+  "生成失败",
+  "生成正常",
+  "标题正常",
+  "封面失败",
+];
+
+function isWeakCoverSubtitle(text: string): boolean {
+  const t = text.trim();
+  if (t.length < 4 || t.length > 14) return true;
+  if (isSectionHeadingLike(t)) return true;
+  // 状态短句 / 无信息量碎片，不能当封面副标题
+  if (WEAK_COVER_SUBTITLE_BLOCKLIST.includes(t)) return true;
+  if (/^(大纲|正文|标题|封面|摘要)?(正常|失败|成功|完成|报错|超时)?$/.test(t)) return true;
+  if (/^(正常|失败|成功|完成|报错|可以|不行|没有|就是)$/.test(t)) return true;
+  if (/^(API|LLM|HTTP|CSS|JS)$/i.test(t)) return true;
+  return false;
+}
+
+/** 最终兜底：副标题绝不能是弱句；优先标题后半段 / 关键词拼接 */
+function assertSafeCoverSubtitle(
+  candidate: string,
+  keywords: string[],
+  title: string,
 ): string {
-  const lower = prompt.toLowerCase();
-  const hints: string[] = [];
-  if (!/glass|navy|cyan|premium|tech|circuit|gradient/i.test(prompt)) {
-    hints.push(IMAGE_STYLE_ANCHOR);
+  if (candidate && !isWeakCoverSubtitle(candidate)) return candidate;
+
+  const splitMatch = title.replace(/[《》【】\[\]（）()「」""'']/g, "").trim().match(/^(.+?[？?：:])(.+)$/);
+  if (splitMatch) {
+    const right = fitCoverPhrase(splitMatch[2].trim(), 14);
+    if (right && !isWeakCoverSubtitle(right)) return right;
   }
-  if (!/chinese|中文|汉字/i.test(lower)) {
-    hints.push("Chinese keyword labels (2-6 characters) inside each glass card.");
+
+  const fromKeywords = keywords.filter((k) => !isWeakCoverSubtitle(k));
+  if (fromKeywords.length >= 2) {
+    return fitCoverPhrase(fromKeywords.slice(0, 2).join(" · "), 14) || fromKeywords[0];
   }
-  if (!/layout|grid|timeline|hub|funnel|map|toolbox|radial|stack/i.test(lower)) {
-    hints.push(variant.layout);
-  }
-  if (hints.length === 0) return prompt.trim();
-  return `${prompt.trim()} ${hints.join(" ")}`;
+  if (fromKeywords[0]) return fromKeywords[0];
+  return "实战指南";
 }
 
-/** 封面主副标题：参照 v0.dev / Node.js 安全横幅，用大标题而非底部关键词卡片 */
+/** 仅接受已完整且够短的短语；过长且无法自然断句则放弃，绝不硬截中文 */
+function fitCoverPhrase(text: string, maxLen: number): string | null {
+  const cleaned = text.replace(/\s+/g, " ").trim();
+  if (!cleaned) return null;
+  if (cleaned.length <= maxLen) return cleaned;
+
+  // 英文：可在空格处截断
+  if (/[A-Za-z]/.test(cleaned) && cleaned.includes(" ")) {
+    const slice = cleaned.slice(0, maxLen);
+    if (/[A-Za-z0-9]$/.test(slice) && /[A-Za-z0-9]/.test(cleaned[maxLen] ?? "")) {
+      const lastSpace = slice.lastIndexOf(" ");
+      if (lastSpace >= Math.floor(maxLen * 0.5)) {
+        const cut = slice.slice(0, lastSpace).trim();
+        return cut.length >= 4 ? cut : null;
+      }
+      return null;
+    }
+    const breakAt = Math.max(slice.lastIndexOf(" "), slice.lastIndexOf("·"));
+    if (breakAt >= Math.floor(maxLen * 0.5)) {
+      const cut = slice.slice(0, breakAt).trim();
+      return cut.length >= 4 ? cut : null;
+    }
+  }
+
+  // 中文：绝不硬截，宁可不用
+  return null;
+}
+
+function isSectionHeadingLike(text: string): boolean {
+  return /^(开篇|核心|第[一二三四五六七八九十\d]+|写在最后|总结|引言|前言|结尾)/.test(text)
+    || /[？?]$/.test(text)
+    || text.includes("：")
+    || text.includes(":");
+}
+
+/**
+ * 封面主副标题：
+ * - 主标题用文章标题（可按？/：拆分）
+ * - 副标题用正文关键词总结，禁止摘抄「大纲正常」这类无信息短句
+ */
 function deriveCoverTitleLines(
   title: string,
   summary?: string | null,
-  keyPoints: string[] = [],
-): { headline: string; subtitle: string } {
-  const headline = title
-    .replace(/[《》【】\[\]（）()「」""'']/g, "")
-    .trim()
-    .slice(0, 18);
-  const summaryLine = (summary ?? "")
-    .replace(/[，。！？、；：]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 16);
-  const pointLine = keyPoints
-    .map((p) => p.replace(/[0-9０-９]+[.、．)\]]\s*/g, "").trim())
-    .find((p) => p.length >= 4 && p.length <= 16);
-  const subtitle = summaryLine || pointLine || "实用拆解";
-  return { headline: headline || "技术专题", subtitle };
+  topic?: string | null,
+): { headline: string; subtitle: string; keywords: string[] } {
+  const cleanedTitle = title.replace(/[《》【】\[\]（）()「」""'']/g, "").trim();
+  const corpus = `${topic ?? ""} ${cleanedTitle} ${summary ?? ""}`;
+  const keywords = extractLocalKeywords(corpus, 4);
+
+  // 标题含冒号 / 问号：前半主标题，后半若合格可作副标题
+  const splitMatch = cleanedTitle.match(/^(.+?[？?：:])(.+)$/);
+  if (splitMatch) {
+    const left = fitCoverPhrase(splitMatch[1].replace(/[：:]$/, "？").trim(), 22);
+    const right = fitCoverPhrase(splitMatch[2].trim(), 14);
+    if (left && right && !isWeakCoverSubtitle(right)) {
+      return { headline: left, subtitle: right, keywords };
+    }
+    if (left) {
+      const tag = keywords.length >= 2
+        ? keywords.slice(0, 2).join(" · ")
+        : keywords[0] || "实战指南";
+      return { headline: left, subtitle: fitCoverPhrase(tag, 14) || "实战指南", keywords };
+    }
+  }
+
+  const headline = fitCoverPhrase(cleanedTitle, 22) || cleanedTitle.slice(0, 22) || "技术专题";
+  const tag =
+    keywords.length >= 2
+      ? keywords.slice(0, 2).join(" · ")
+      : keywords[0] || "实战指南";
+  const subtitle = fitCoverPhrase(tag, 14) || "实战指南";
+  return { headline, subtitle, keywords };
 }
 
 const LIGHT_COVER_TOPIC_RE =
   /前端|ui|ux|设计|v0|tauri|组件|样式|css|面试|轻量|桌面|tsx|react|vue|svelte|tailwind|动效|布局/i;
 
-function pickCoverTheme(topic: string, title: string): "dark" | "light" {
+function pickCoverTheme(topic: string, title: string): "warm" | "cool" {
   const corpus = `${topic}${title}`;
-  if (LIGHT_COVER_TOPIC_RE.test(corpus)) {
-    return "light";
-  }
-  return "dark";
+  // 仍按主题微调冷暖，但都走手绘奶油纸风，不再出深色霓虹封面
+  if (LIGHT_COVER_TOPIC_RE.test(corpus)) return "cool";
+  return "warm";
 }
 
 function pickCoverVisualVariant(topic: string, title: string) {
@@ -2303,7 +2546,12 @@ function pickCoverVisualVariant(topic: string, title: string) {
   for (let i = 0; i < topic.length; i++) hash = (hash + topic.charCodeAt(i)) | 0;
   const layout = COVER_LAYOUT_VARIANTS[Math.abs(hash) % COVER_LAYOUT_VARIANTS.length];
   const theme = pickCoverTheme(topic, title);
-  const styleAnchor = theme === "light" ? COVER_STYLE_LIGHT : COVER_STYLE_DARK;
+  // 冷暖只微调强调色，背景始终锁死参考图的拿铁米色纸
+  const tint =
+    theme === "cool"
+      ? "Lean accents slightly toward pale sky-blue and lilac, still on latte-beige paper."
+      : "Lean accents slightly toward blush pink and apricot, still on latte-beige paper.";
+  const styleAnchor = `${COVER_STYLE_DOODLE} ${tint}`;
   return { layout, theme, styleAnchor };
 }
 
@@ -2334,23 +2582,30 @@ export async function generateCoverPrompt(
 ): Promise<string> {
   const title = context?.title?.trim() || topic;
   const keyPoints = context?.keyPoints ?? [];
-  const { headline, subtitle } = deriveCoverTitleLines(
-    title,
-    context?.summary,
-    keyPoints,
-  );
+  const derived = deriveCoverTitleLines(title, context?.summary, topic);
+  const { headline, keywords: seedKeywords } = derived;
+  let subtitle = derived.subtitle;
   const variant = pickCoverVisualVariant(topic, title);
   const domainHint = coverDomainHint(topic);
   const contentExcerpt = (context?.contentExcerpt ?? "")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 800);
+    .slice(0, 1200);
+  // 摘要里的「大纲正常」会诱导模型当副标题，送进 LLM 前先抹掉
+  const safeSummary = WEAK_COVER_SUBTITLE_BLOCKLIST.reduce(
+    (s, weak) => s.split(weak).join(""),
+    context?.summary || "",
+  ).replace(/[，,]{2,}/g, "，").trim();
+  const safeExcerpt = WEAK_COVER_SUBTITLE_BLOCKLIST.reduce(
+    (s, weak) => s.split(weak).join(""),
+    contentExcerpt,
+  );
 
   const prompt = await callChat([
     {
       role: "system",
-      content: IMAGE_PROMPT_SYSTEM + `\n\nCreate a WeChat article COVER banner (16:9). Match premium tech blog thumbnails — bold Chinese headline + one hero 3D illustration, NOT a row of small keyword cards.
+      content: IMAGE_PROMPT_SYSTEM + `\n\nCreate a WeChat article COVER banner (16:9) in the SAME hand-drawn educational doodle style as teaching infographics (cream paper, pastel panels, cute simplified icons). Content stays a cover: bold Chinese headline + one short keyword tagline + one hero doodle — NOT a multi-panel vulnerability storyboard.
 
 STYLE ANCHOR (fixed for this cover):
 ${variant.styleAnchor}
@@ -2360,19 +2615,28 @@ ${variant.layout}
 
 TOPIC VISUALS:
 - Domain: ${domainHint}
-- Pick ONE large 3D hero metaphor that fits the article (shield/lock for security, Android robot for mobile tools, code terminal for CLI, dashboard panels for frontend, agent nodes for AI)
-- Small floating UI badges OK for decoration — icons only, no extra Chinese labels
+- Pick ONE large hand-drawn doodle hero metaphor that fits the article (cute server, browser window, stopwatch, queue boxes, puzzle pieces, shield outline — flat pastel, not 3D render)
+- Tiny floating doodle badges OK for decoration — icons only, no extra Chinese labels
+
+SUBTITLE = KEYWORD SUMMARY (mandatory):
+- Read title/summary/content and extract the article's core keywords (tools, errors, methods, metrics)
+- Compress into ONE punchy Chinese tagline of 6-14 characters, e.g. 「网关超时 · 五步提效」「425秒压到105秒」
+- Seed keywords for reference: ${JSON.stringify(seedKeywords)}
+- FORBIDDEN as subtitle: status fragments like 「大纲正常」「正文失败」「生成成功」; chapter headings; truncated mid-phrases
 
 TEXT RULES (critical):
-- The ONLY Chinese text in the image: headline 「${headline}」 and subtitle 「${subtitle}」
-- Headline: large, bold, high contrast — main visual text element
-- Subtitle: smaller, below or beside headline
-- NEVER use a horizontal row of 3-4 frosted glass keyword chips at the bottom — that layout is forbidden
-- NEVER paint the raw articleTopic string as a corner watermark
-- FORBIDDEN unless the article is about them: 美食推荐、旅行攻略、生活小技巧、文化漫谈、穿搭、护肤
+- The ONLY Chinese text on the image: headline 「${headline}」 and your final subtitle tagline
+- Headline: large, bold, dark charcoal ink — copy 「${headline}」 EXACTLY
+- Subtitle: smaller pastel or charcoal keyword tagline — never truncate
+- NEVER paint outline/section headings (开篇/核心/第N章)
+- NEVER use a horizontal row of frosted glass keyword chips at the bottom
+- NEVER paint the raw articleTopic as a corner watermark
+- BACKGROUND must be warm cream / off-white paper, bright and clean — not navy cyber, not muddy gray
 
-Output JSON: { "prompt": string }
-In "prompt": describe visuals in English; specify exact Chinese headline and subtitle text and their placement.`,
+Output JSON: { "prompt": string, "subtitle": string, "keywords": string[] }
+- "subtitle": the final 6-14 char keyword tagline
+- "keywords": 3-5 short keywords extracted from the article content
+- In "prompt": describe visuals in English; Chinese text must match headline + subtitle exactly.`,
     },
     {
       role: "user",
@@ -2381,53 +2645,110 @@ In "prompt": describe visuals in English; specify exact Chinese headline and sub
         theme: variant.theme,
         layoutVariant: variant.layout,
         headline,
-        subtitle,
+        preferredSubtitle: subtitle,
+        seedKeywords,
         contextForMeaningOnly: {
           articleTopic: topic,
           articleTitle: title,
-          summary: context?.summary || "",
-          keyPoints,
-          contentExcerpt: contentExcerpt || undefined,
+          summary: safeSummary,
+          outlineHeadingsDoNotPaint: keyPoints,
+          contentExcerpt: safeExcerpt || undefined,
         },
-        doNotPaintTheseStrings: [topic].filter((s) => s !== headline && s !== subtitle),
+        doNotPaintTheseStrings: [
+          topic,
+          ...keyPoints,
+          ...WEAK_COVER_SUBTITLE_BLOCKLIST,
+        ].filter((s) => s && s !== headline && s !== subtitle),
       }),
     },
-  ], { jsonMode: true, maxTokens: 480, role: "cover-prompt" });
+  ], { jsonMode: true, maxTokens: 520, role: "cover-prompt" });
 
-  const parsed = safeParse<{ prompt?: string }>(prompt, {});
+  const parsed = safeParse<{ prompt?: string; subtitle?: string; keywords?: string[] }>(prompt, {});
+  const llmSubtitle = typeof parsed.subtitle === "string" ? parsed.subtitle.trim() : "";
+  if (llmSubtitle && !isWeakCoverSubtitle(llmSubtitle) && llmSubtitle.length <= 14) {
+    subtitle = llmSubtitle;
+  }
+  const llmKeywords = (parsed.keywords ?? [])
+    .map((k) => String(k).replace(/\s+/g, "").trim())
+    .filter((k) => k.length >= 2 && k.length <= 8 && !isWeakCoverSubtitle(k))
+    .slice(0, 5);
+  const finalKeywords = llmKeywords.length >= 2 ? llmKeywords : seedKeywords.filter((k) => !isWeakCoverSubtitle(k));
+
+  subtitle = assertSafeCoverSubtitle(subtitle, finalKeywords, title);
+
+  const forbidden = [
+    ...keyPoints,
+    ...WEAK_COVER_SUBTITLE_BLOCKLIST,
+  ];
 
   if (parsed.prompt) {
-    return reinforceCoverPrompt(parsed.prompt, headline, subtitle, variant);
+    return reinforceCoverPrompt(parsed.prompt, headline, subtitle, variant, forbidden);
   }
 
   return reinforceCoverPrompt(
     `${variant.styleAnchor} ${variant.layout}. ` +
-      `Bold Chinese headline 「${headline}」 with subtitle 「${subtitle}」. ` +
-      `One large 3D isometric hero illustration about ${domainHint}. ` +
-      `No keyword chip row. No corner watermarks.`,
+      `Bold Chinese headline 「${headline}」 with keyword subtitle 「${subtitle}」. ` +
+      `Keywords: ${finalKeywords.join(", ")}. ` +
+      `One large hand-drawn pastel doodle hero about ${domainHint}. ` +
+      `Cream paper background. No keyword chip row. No chapter headings.`,
     headline,
     subtitle,
     variant,
+    forbidden,
   );
 }
 
-/** 追加封面约束：大标题横幅风，禁止底部关键词卡片 */
+/** 追加封面约束：强制精确主副标题， scrub 弱句与章节标题残留 */
 function reinforceCoverPrompt(
   prompt: string,
   headline: string,
   subtitle: string,
   variant: ReturnType<typeof pickCoverVisualVariant>,
+  forbiddenExtra: string[] = [],
 ): string {
+  // 再保险：reinforce 入口绝不放行弱副标题
+  const safeSubtitle = isWeakCoverSubtitle(subtitle) ? "实战指南" : subtitle;
   let cleaned = prompt.trim();
 
+  // 强制改写所有 subtitle / 副标题引文
+  cleaned = cleaned
+    .replace(/(subtitle|副标题)[^「'"]{0,40}[「'"][^」'"]+[」'"]/gi, `subtitle 「${safeSubtitle}」`)
+    .replace(/smaller subtitle [「'"][^」'"]+[」'"]/gi, `smaller subtitle 「${safeSubtitle}」`)
+    .replace(/with subtitle [「'"][^」'"]+[」'"]/gi, `with subtitle 「${safeSubtitle}」`);
+
+  // 无论从哪漏进来，直接抹掉弱句
+  for (const weak of WEAK_COVER_SUBTITLE_BLOCKLIST) {
+    cleaned = cleaned.split(weak).join(safeSubtitle);
+  }
+
+  for (const bad of forbiddenExtra) {
+    const t = bad?.trim();
+    if (!t || t.length < 4) continue;
+    if (t === headline || t === safeSubtitle) continue;
+    if (WEAK_COVER_SUBTITLE_BLOCKLIST.includes(t)) continue; // 已处理
+    cleaned = cleaned.split(t).join("the article theme");
+    if (t.length >= 8) {
+      const prefix = t.slice(0, 12);
+      if (cleaned.includes(prefix)) {
+        cleaned = cleaned.split(prefix).join("");
+      }
+    }
+  }
+
+  // 丢掉摘要原文，避免模型再抄「大纲正常」——只保留最终要画的字
   const hints = [
     variant.styleAnchor,
     `Layout: ${variant.layout}.`,
-    `Headline text must be exactly 「${headline}」 — large, bold, prominent.`,
-    `Subtitle text must be exactly 「${subtitle}」 — smaller, secondary.`,
+    `Headline text must be exactly 「${headline}」 — large, bold, complete. Never truncate.`,
+    `Subtitle text must be exactly 「${safeSubtitle}」 — keyword tagline. Never use 大纲正常 or other status fragments.`,
+    `The ONLY Chinese strings allowed on the image are 「${headline}」 and 「${safeSubtitle}」.`,
+    "All on-image text must be complete phrases — never cut off Chinese or English mid-word.",
+    "BACKGROUND: warm latte beige paper (#F3EBDF), subtle paper grain only — clean empty space, no warning triangles, no scattered dots. Pastel blush/apricot/mint/lavender accents, brown doodle outlines.",
+    "FORBIDDEN: 大纲正常、正文失败、生成成功, and any chapter headings.",
     "FORBIDDEN: horizontal row of 3-4 small glass cards with keyword labels at the bottom.",
+    "FORBIDDEN: pure white studio bg, cool gray wash, dark navy cyber backgrounds, neon glow, photoreal 3D renders, glassmorphism.",
     "FORBIDDEN: text in top-left or top-right corners as watermarks.",
-    "No cartoon people with faces. No cluttered chip/tag rows.",
+    "No photoreal faces. Cute simplified doodle icons OK. No cluttered chip/tag rows.",
   ];
 
   if (LIFESTYLE_COVER_KEYWORD_RE.test(cleaned)) {

@@ -198,15 +198,25 @@ export default function ArticlePage({
 
   const refresh = useCallback(async () => {
     if (!id) return;
-    const res = await fetch(`/api/articles/${id}?t=${Date.now()}`, { cache: "no-store" });
-    const json = (await res.json()) as ApiResponse<ArticleRecord>;
-    if (json.code === 0 && json.data) {
-      setArticle(json.data);
-      if (json.data.selectedOutlineIndex != null) {
-        setActiveOutlineView(json.data.selectedOutlineIndex);
+    try {
+      const res = await fetch(`/api/articles/${id}?t=${Date.now()}`, { cache: "no-store" });
+      const text = await res.text();
+      if (!text) {
+        toast.show({ message: "服务无响应，请确认数据库已启动后刷新", variant: "error" });
+        setLoading(false);
+        return;
       }
-    } else {
-      toast.show({ message: json.message || "文章不存在", variant: "error" });
+      const json = JSON.parse(text) as ApiResponse<ArticleRecord>;
+      if (json.code === 0 && json.data) {
+        setArticle(json.data);
+        if (json.data.selectedOutlineIndex != null) {
+          setActiveOutlineView(json.data.selectedOutlineIndex);
+        }
+      } else {
+        toast.show({ message: json.message || "文章不存在", variant: "error" });
+      }
+    } catch {
+      toast.show({ message: "加载文章失败，请刷新重试", variant: "error" });
     }
     setLoading(false);
   }, [id, toast]);
@@ -266,15 +276,25 @@ export default function ArticlePage({
     initialized.current = true;
     (async () => {
       if (!id) return;
-      const res = await fetch(`/api/articles/${id}`, { cache: "no-store" });
-      const json = (await res.json()) as ApiResponse<ArticleRecord>;
-      if (json.code === 0 && json.data) {
-        setArticle(json.data);
-        if (json.data.selectedOutlineIndex != null) {
-          setActiveOutlineView(json.data.selectedOutlineIndex);
+      try {
+        const res = await fetch(`/api/articles/${id}`, { cache: "no-store" });
+        const text = await res.text();
+        if (!text) {
+          toast.show({ message: "服务无响应，请确认数据库已启动后刷新", variant: "error" });
+          setLoading(false);
+          return;
         }
-      } else {
-        toast.show({ message: json.message || "文章不存在", variant: "error" });
+        const json = JSON.parse(text) as ApiResponse<ArticleRecord>;
+        if (json.code === 0 && json.data) {
+          setArticle(json.data);
+          if (json.data.selectedOutlineIndex != null) {
+            setActiveOutlineView(json.data.selectedOutlineIndex);
+          }
+        } else {
+          toast.show({ message: json.message || "文章不存在", variant: "error" });
+        }
+      } catch {
+        toast.show({ message: "加载文章失败，请刷新重试", variant: "error" });
       }
       setLoading(false);
     })();

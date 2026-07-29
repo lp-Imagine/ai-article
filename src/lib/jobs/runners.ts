@@ -369,9 +369,17 @@ async function runInlineImages(job: GenerationJob, update: ProgressUpdater) {
     const nextBreak = afterSection.search(/<h2|<hr\s*\/?>/);
     const rawContent =
       nextBreak === -1
-        ? afterSection.slice(0, 1200)
-        : afterSection.slice(0, Math.min(nextBreak, 1200));
-    const sectionContent = rawContent.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+        ? afterSection.slice(0, 1800)
+        : afterSection.slice(0, Math.min(nextBreak, 1800));
+    // 保留列表/代码痕迹，便于关键词提炼（不要压成一句长空白）
+    const sectionContent = rawContent
+      .replace(/<\/(p|li|h3|pre|blockquote)>/gi, "\n")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/[ \t]{2,}/g, " ")
+      .trim();
 
     jobs.push({
       insertAfter: insertPos + match[0].length,
