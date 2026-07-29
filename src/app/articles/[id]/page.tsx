@@ -975,7 +975,47 @@ export default function ArticlePage({
 
       if (toastId) toast.dismiss(toastId);
       actionToastIdRef.current = null;
-      toast.show({ title: "操作成功", message: `${label}完成`, variant: "success" });
+
+      if (path.endsWith("/risk-check") && json.data) {
+        const data = json.data as {
+          score?: number;
+          issues?: string[];
+          suggestions?: string[];
+          factualFindings?: Array<{ excerpt: string; message: string; severity: string }>;
+        };
+        const score = data.score ?? 0;
+        const factual = data.factualFindings ?? [];
+        const highFactual = factual.filter((f) => f.severity === "high");
+        const issueCount = data.issues?.length ?? 0;
+
+        if (highFactual.length > 0) {
+          const preview = highFactual
+            .slice(0, 3)
+            .map((f) => `• ${f.message}`)
+            .join("\n");
+          toast.show({
+            title: `风险检测完成（${score} 分）`,
+            message: `发现 ${highFactual.length} 处疑似不可核验事实：\n${preview}${highFactual.length > 3 ? "\n…" : ""}`,
+            variant: "warning",
+            duration: 12000,
+          });
+        } else if (issueCount > 0) {
+          toast.show({
+            title: `风险检测完成（${score} 分）`,
+            message: data.issues?.slice(0, 4).map((i) => `• ${i}`).join("\n") ?? "发现若干风险项",
+            variant: score >= 75 ? "warning" : "error",
+            duration: 10000,
+          });
+        } else {
+          toast.show({
+            title: `风险检测完成（${score} 分）`,
+            message: "未发现明显风险，可继续推送",
+            variant: "success",
+          });
+        }
+      } else {
+        toast.show({ title: "操作成功", message: `${label}完成`, variant: "success" });
+      }
 
       if (isLong) {
         scheduleProgressClose(progressSessionId, 800);

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ArrowRight, RefreshCw } from "lucide-react";
+import { ArrowRight, Lightbulb, RefreshCw } from "lucide-react";
 import { FieldLabel, PageHeader, SectionCard } from "@/components/app-shell";
 import { useToast } from "@/components/toast";
 import {
@@ -68,6 +68,36 @@ export default function HomePage() {
   });
   const [recent, setRecent] = useState<RecentArticle[]>([]);
   const { runningTaskIds } = useArticleBackgroundTasks();
+
+  // Topic Ideas state
+  type TopicIdea = { topic: string; reason: string; source: string; score: number; tags?: string[] };
+  const [ideas, setIdeas] = useState<TopicIdea[]>([]);
+  const [ideasLoading, setIdeasLoading] = useState(false);
+  const [ideasCursor, setIdeasCursor] = useState(0);
+  const [ideasFilter, setIdeasFilter] = useState<"all" | "history" | "hot">("all");
+  const [ideasOpen, setIdeasOpen] = useState(false);
+
+  async function fetchIdeas(cursor = 0) {
+    setIdeasLoading(true);
+    try {
+      const params = new URLSearchParams({ count: "8", cursor: String(cursor) });
+      if (ideasFilter === "hot") params.set("includeHot", "true");
+      if (ideasFilter === "history") params.set("includeHot", "false");
+      const res = await fetch(`/api/topic-ideas?${params}`, { cache: "no-store" });
+      const json = await res.json();
+      if (json.code === 0 && json.data?.ideas?.length) {
+        setIdeas(json.data.ideas);
+        setIdeasCursor(cursor);
+        setIdeasOpen(true);
+      } else {
+        toast.show({ message: "暂时没有建议，试试换个筛选", variant: "warning" });
+      }
+    } catch {
+      toast.show({ message: "获取灵感失败，请重试", variant: "error" });
+    } finally {
+      setIdeasLoading(false);
+    }
+  }
 
   useEffect(() => {
     fetchRecent();
@@ -337,6 +367,81 @@ export default function HomePage() {
                     className="mt-2 w-full px-4 py-3.5 text-base"
                   />
                 </div>
+
+                <div className="flex items-end gap-2">
+                  <button
+                    type="button"
+                    disabled={ideasLoading}
+                    onClick={() => ideasOpen ? setIdeasOpen(false) : fetchIdeas(0)}
+                    className="btn-ghost inline-flex items-center gap-1.5 text-xs whitespace-nowrap py-1.5 px-3 rounded-lg border border-[var(--line)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors"
+                  >
+                    {ideasLoading ? (
+                      <span className="inline-block size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                    ) : (
+                      <Lightbulb size={14} />
+                    )}
+                    {ideasOpen ? "收起灵感" : "给我灵感"}
+                  </button>
+                </div>
+
+                {ideasOpen && ideas.length > 0 && (
+                  <div className="topic-ideas-panel rounded-xl border border-[var(--line)] bg-[var(--surface)] p-3 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5">
+                        {(["all", "history", "hot"] as const).map((f) => (
+                          <button
+                            key={f}
+                            type="button"
+                            onClick={() => { setIdeasFilter(f); fetchIdeas(0); }}
+                            className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                              ideasFilter === f
+                                ? "bg-[var(--accent-soft)] text-[var(--accent)]"
+                                : "text-[var(--muted)] hover:text-[var(--foreground)]"
+                            }`}
+                          >
+                            {f === "all" ? "综合" : f === "history" ? "历史" : "热点"}
+                          </button>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => fetchIdeas(ideasCursor + 1)}
+                        disabled={ideasLoading}
+                        className="btn-ghost inline-flex items-center gap-1 text-xs"
+                      >
+                        <RefreshCw size={12} className={ideasLoading ? "animate-spin" : ""} />
+                        换一批
+                      </button>
+                    </div>
+                    <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {ideas.map((idea, idx) => (
+                        <li key={idx}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              update("topic", idea.topic);
+                              setIdeasOpen(false);
+                              toast.show({ message: "已填入主题，可直接生成大纲", variant: "success", duration: 2500 });
+                              fetch("/api/topic-ideas", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ topic: idea.topic }),
+                              }).catch(() => {});
+                            }}
+                            className="w-full text-left rounded-lg border border-[var(--line)] p-2.5 hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] transition-colors group"
+                          >
+                            <p className="text-sm font-medium leading-snug line-clamp-2 group-hover:text-[var(--accent)]">
+                              {idea.topic}
+                            </p>
+                            <p className="mt-1 text-xs text-[var(--muted)] line-clamp-1">
+                              {idea.reason}
+                            </p>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
 
                 <div>
                   <FieldLabel>关键词</FieldLabel>

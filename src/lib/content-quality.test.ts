@@ -1,5 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { analyzeContentQuality } from "./content-quality";
+import { analyzeContentQuality, analyzeFactualClaims } from "./content-quality";
+
+describe("analyzeFactualClaims", () => {
+  it("flags named person, precise metrics and percentages in story-like case studies", () => {
+    const plain =
+      "内容团队的张磊把文本摘要接口从 GPT-3.5 升级到更快模型，P50 延迟从 2.1 秒降到 1.4 秒。" +
+      "三天后客诉量翻了三倍，成本反而涨了 60%，p99 延迟比旧模型高 220%。" +
+      "张磊说：「速度是诱饵，别被一个数字骗了。」";
+
+    const findings = analyzeFactualClaims(plain);
+    expect(findings.some((f) => f.code === "named_person")).toBe(true);
+    expect(findings.some((f) => f.code === "precise_percentage")).toBe(true);
+    expect(findings.some((f) => f.code === "precise_metric")).toBe(true);
+    expect(findings.some((f) => f.excerpt.includes("张磊"))).toBe(true);
+  });
+
+  it("does not flag anonymous phrasing", () => {
+    const plain =
+      "某内容团队把摘要接口升级后，延迟大约降了三成，成本也有所上升。" +
+      "团队后来回滚，并建立了更完整的评估标准。";
+    const findings = analyzeFactualClaims(plain);
+    expect(findings.some((f) => f.code === "named_person")).toBe(false);
+  });
+});
 
 describe("analyzeContentQuality", () => {
   it("flags AI cliches and chatty openers", () => {

@@ -29,7 +29,7 @@ export async function POST(
   });
 
   const issues = qualityIssuesToMessages(analysis.issues);
-  const { score, suggestions } = analysis;
+  const { score, suggestions, factualFindings } = analysis;
 
   await db.riskCheck.create({
     data: {
@@ -52,6 +52,7 @@ export async function POST(
       score,
       issues,
       suggestions,
+      factualFindings,
       plainLength: analysis.plainLength,
       clicheHits: analysis.clicheHits,
     },

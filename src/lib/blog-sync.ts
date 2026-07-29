@@ -46,6 +46,15 @@ type GhConfig = {
   siteUrl: string;
 };
 
+/** 推送 GitHub 前脱敏，避免 Secret scanning 把示例代码里的假 key 当成真密钥 */
+function scrubSecretsForPublish(text: string): string {
+  return text
+    .replace(/\bsk-[a-zA-Z0-9_-]{8,}\b/g, "YOUR_API_KEY")
+    .replace(/\bghp_[a-zA-Z0-9]{20,}\b/g, "ghp_YOUR_GITHUB_TOKEN")
+    .replace(/\bgithub_pat_[a-zA-Z0-9_]+\b/g, "github_pat_YOUR_TOKEN")
+    .replace(/\bAKIA[0-9A-Z]{16}\b/g, "AKIAYOURACCESSKEYID");
+}
+
 function readEnv(key: string): string {
   // 用户配置 (withUserConfig 注入) 优先，回退服务器 .env。
   return (getEnvValue(key) ?? process.env[key] ?? "").trim();
@@ -405,9 +414,11 @@ export async function syncArticleToBlog(
           article.keywords ?? "",
         ]);
 
+  const safeContent = scrubSecretsForPublish(article.content);
+
   const { rewriteSrc, coverPath, commitPaths } = await uploadImages(
     article.id,
-    article.content,
+    safeContent,
     article.coverImageUrl,
     config,
   );
@@ -415,7 +426,7 @@ export async function syncArticleToBlog(
   const date = formatDate(
     article.createdAt instanceof Date ? article.createdAt : new Date(article.createdAt),
   );
-  const bodyMd = htmlToBlogMarkdown(article.content, { rewriteSrc });
+  const bodyMd = htmlToBlogMarkdown(safeContent, { rewriteSrc });
   // 写入正式栏目路径，才能匹配 VitePress 侧栏 `/web/` 等前缀
   const mdPath = `website/${options.section}/${group}/${article.id}.md`;
   const legacyPaths = [
