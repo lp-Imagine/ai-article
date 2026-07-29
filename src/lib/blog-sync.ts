@@ -66,26 +66,6 @@ function readGhConfig(): GhConfig {
   return { token, repo, branch, siteUrl };
 }
 
-/** 站点 base 路径，例如 https://lp-imagine.github.io/penn-notes/ → "penn-notes"。
- *  正文里 <img src="/sync/..."> 是原生 HTML，VitePress 不会自动拼 base，需要手动前缀。 */
-function readBasePath(): string {
-  const siteUrl =
-    (getEnvValue("BLOG_SITE_URL") ?? process.env.BLOG_SITE_URL ?? "").trim() ||
-    "https://lp-imagine.github.io/vuepressblog/";
-  try {
-    const p = new URL(siteUrl).pathname.replace(/^\/+|\/+$/g, "");
-    return p;
-  } catch {
-    return "";
-  }
-}
-
-/** 把 /sync/... 这种站点绝对路径加上 base 前缀，用于正文 <img src>。 */
-function withBase(path: string, basePath: string): string {
-  if (!path.startsWith("/")) return path;
-  return basePath ? `/${basePath}${path}` : path;
-}
-
 export function isBlogSyncConfigured(): boolean {
   return Boolean(readEnv("BLOG_GITHUB_TOKEN"));
 }
@@ -340,17 +320,14 @@ async function uploadImages(
   html: string,
   coverUrl: string | null,
   config: GhConfig,
-  basePath: string,
 ): Promise<{
   rewriteSrc: (src: string) => string | null;
   coverPath: string | null;
-  coverSrc: string | null;
   commitPaths: string[];
 }> {
   const map = new Map<string, string>();
   const commitPaths: string[] = [];
   let coverPath: string | null = null;
-  let coverSrc: string | null = null;
   let imgIndex = 0;
 
   const allSrcs = collectImageSrcs(html);
@@ -366,7 +343,9 @@ async function uploadImages(
       const repoPath = `website/public/sync/${articleId}/${filename}`;
       await upsertFile(repoPath, buf, `blog-sync: image ${articleId}/${filename}`, config);
       commitPaths.push(repoPath);
-      map.set(src, withBase(`/sync/${articleId}/${filename}`, basePath));
+      // 必须写成 /sync/...（不含站点 base）。VitePress 构建时会按 base 改写；
+      // 写成 /penn-notes/sync/... 会导致 Rollup 当成模块解析失败。
+      map.set(src, `/sync/${articleId}/${filename}`);
     } catch (err) {
       console.error(`[blog-sync] image upload failed: ${src}`, err);
     }
@@ -382,9 +361,8 @@ async function uploadImages(
         await upsertFile(repoPath, buf, `blog-sync: cover ${articleId}`, config);
         commitPaths.push(repoPath);
         coverPath = `/sync/${articleId}/${filename}`;
-        coverSrc = withBase(coverPath, basePath);
         if (!map.has(coverUrl)) {
-          map.set(coverUrl, coverSrc);
+          map.set(coverUrl, coverPath);
         }
       }
     } catch (err) {
@@ -395,7 +373,6 @@ async function uploadImages(
   return {
     rewriteSrc: (src) => map.get(src) ?? null,
     coverPath,
-    coverSrc,
     commitPaths,
   };
 }
@@ -428,13 +405,11 @@ export async function syncArticleToBlog(
           article.keywords ?? "",
         ]);
 
-  const basePath = readBasePath();
-  const { rewriteSrc, coverPath, coverSrc, commitPaths } = await uploadImages(
+  const { rewriteSrc, coverPath, commitPaths } = await uploadImages(
     article.id,
     article.content,
     article.coverImageUrl,
     config,
-    basePath,
   );
 
   const date = formatDate(
@@ -461,7 +436,7 @@ export async function syncArticleToBlog(
   });
 
   // 与手写笔记一致：H1 标题 + meta + 封面，再跟正文
-  const fileContent = `${fm}# ${title}\n\n${buildArticleMeta(date, tags)}${buildCoverHtml(coverSrc, title)}${bodyMd}`;
+  const fileContent = `${fm}# ${title}\n\n${buildArticleMeta(date, tags)}${buildCoverHtml(coverPath, title)}${bodyMd}`;
   await upsertFile(
     mdPath,
     fileContent,
