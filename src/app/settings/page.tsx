@@ -267,7 +267,7 @@ export default function SettingsPage() {
     {
       key: "blogGithubRepo",
       label: "博客仓库",
-      placeholder: "owner/vuepressblog",
+      placeholder: "owner/repo",
     },
     {
       key: "blogGithubBranch",
@@ -277,7 +277,7 @@ export default function SettingsPage() {
     {
       key: "blogSiteUrl",
       label: "博客站点 URL",
-      placeholder: "https://lp-imagine.github.io/vuepressblog/",
+      placeholder: "https://username.github.io/repo/",
     },
   ];
 
@@ -547,7 +547,7 @@ export default function SettingsPage() {
           {activeSection === "blog" && (
             <SectionCard
               title="博客同步配置"
-              description="将文章同步到 vuepressblog 仓库的对应栏目并触发 GitHub Actions 部署。Token 仅保存在你的账号下，其他人不会看到。"
+              description="将文章同步到你配置的 GitHub 博客仓库对应栏目，并触发 Actions 自动部署。Token 仅保存在你的账号下，其他人不会看到。"
             >
               <div className="config-group mb-5">
                 <div className="config-group-title">

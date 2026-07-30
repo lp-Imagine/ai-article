@@ -3,13 +3,11 @@
  * Start embedded PostgreSQL for local development (no Docker/Homebrew required).
  * Data dir: .data/pg  |  Port: 5432  |  User/Pass/DB: draftly
  */
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 
-const require = createRequire(import.meta.url);
-const EmbeddedPostgres = require("embedded-postgres").default;
+const EmbeddedPostgres = (await import("embedded-postgres")).default;
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dataDir = path.join(root, ".data", "pg");

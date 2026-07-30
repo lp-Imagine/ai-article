@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { analyzeContentQuality, analyzeFactualClaims } from "./content-quality";
+import { analyzeContentQuality, analyzeFactualClaims, sanitizeFactualPlainText } from "./content-quality";
 
 describe("analyzeFactualClaims", () => {
-  it("flags named person, precise metrics and percentages in story-like case studies", () => {
+  it("flags named person and precise percentages in story-like case studies", () => {
     const plain =
       "内容团队的张磊把文本摘要接口从 GPT-3.5 升级到更快模型，P50 延迟从 2.1 秒降到 1.4 秒。" +
       "三天后客诉量翻了三倍，成本反而涨了 60%，p99 延迟比旧模型高 220%。" +
@@ -11,7 +11,8 @@ describe("analyzeFactualClaims", () => {
     const findings = analyzeFactualClaims(plain);
     expect(findings.some((f) => f.code === "named_person")).toBe(true);
     expect(findings.some((f) => f.code === "precise_percentage")).toBe(true);
-    expect(findings.some((f) => f.code === "precise_metric")).toBe(true);
+    // P50/P99 作为技术分位数标签不再当作高风险「编造指标」
+    expect(findings.some((f) => f.code === "precise_metric" && /P\d+/i.test(f.excerpt))).toBe(false);
     expect(findings.some((f) => f.excerpt.includes("张磊"))).toBe(true);
   });
 
@@ -21,6 +22,33 @@ describe("analyzeFactualClaims", () => {
       "团队后来回滚，并建立了更完整的评估标准。";
     const findings = analyzeFactualClaims(plain);
     expect(findings.some((f) => f.code === "named_person")).toBe(false);
+  });
+
+  it("does not misread 林薇把 as a person name", () => {
+    const plain = "主管林薇把任务拆成三步，客诉量随后上升。";
+    const findings = analyzeFactualClaims(plain);
+    const named = findings.filter((f) => f.code === "named_person");
+    expect(named.some((f) => f.message.includes("林薇把"))).toBe(false);
+  });
+});
+
+describe("sanitizeFactualPlainText", () => {
+  it("anonymizes role+name but keeps technical metrics", () => {
+    const { text, changed } = sanitizeFactualPlainText(
+      "主管林薇把接口升级后，成本涨了 40%，P50 延迟 2.1 秒，张磊说：「速度是诱饵。」",
+    );
+    expect(changed).toBe(true);
+    expect(text).toContain("某主管");
+    expect(text).not.toMatch(/林薇|张磊/);
+    expect(text).toContain("40%");
+    expect(text).toContain("P50");
+    expect(text).toContain("2.1 秒");
+  });
+
+  it("does not mangle 流程把 as a person name", () => {
+    const { text } = sanitizeFactualPlainText('一套可控的流程把“感觉很快”变成可验证指标。');
+    expect(text).toContain("流程把");
+    expect(text).not.toContain("某负责人");
   });
 });
 

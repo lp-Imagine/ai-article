@@ -1,9 +1,9 @@
 import type { OutlineOption } from "@/types/article";
 import { getEnvValue } from "@/lib/config-bridge";
 import { highlightCodeBlocks } from "@/lib/code-highlight";
-import { normalizeCalloutBlocks } from "@/lib/wechat-style";
+import { enforceArticleHtmlFormat, normalizeArticleMarkup, normalizeCalloutBlocks } from "@/lib/wechat-style";
 import { mapWithConcurrency } from "@/lib/map-with-concurrency";
-import { analyzeContentQuality } from "@/lib/content-quality";
+import { analyzeContentQuality, sanitizeFactualClaimsInHtml } from "@/lib/content-quality";
 import { isTransientNetworkError, withRetry } from "@/lib/retry";
 
 type TextRole =
@@ -325,7 +325,8 @@ function buildEvidenceBlock(engineering: boolean): string {
 - 凡主张「该怎么做」，必须落到代码、接口字段、状态、命令或可复现步骤之一
 - 禁止只有「要注意并发 / 要做好封装」这类正确但无法下手的句子；要么给代码/伪代码，要么给检查清单
 - 案例优先写「我当时怎么做的 / 错在哪 / 改完长什么样」，少写「业界普遍认为」
-- 事实合规：无可核验来源时，禁止虚构具体人名/公司名/精确百分比/精确时间点；可改成匿名角色、区间或量级
+- 事实合规：无可核验来源时，禁止虚构具体人名/公司名、无出处的百分比与日期；可改成匿名角色、区间或量级
+- **技术指标除外**：对比/压测语境下的 P50/P90/P99、ms、req/s、吞吐等应保留原样，不要改成「延迟指标」「较短时间」
 `.trim();
   }
   return `
@@ -334,7 +335,8 @@ function buildEvidenceBlock(engineering: boolean): string {
 - 科普/生活/观点文不要求代码；但**不能只有定义和态度**——读者读完要带走能用的东西（怎么判断、怎么试、会踩什么坑）
 - 若某章偏实践（教程、操作、避坑）：必须有可跟随步骤或真实情境，禁止纯概念铺陈
 - 若某章偏认知（观点、科普）：用一个具体现象/故事钉住论点，再讲机制；不要反过来先空讲大词
-- 事实合规：如无法提供可核验来源，不得写具体人名/公司名/百分比/金额/日期；改为匿名案例与近似表达（如「约三成」「近一周」）
+- 事实合规：如无法提供可核验来源，不得写具体人名/公司名、无出处的百分比/金额/日期；改为匿名案例与近似表达（如「约三成」「近一周」）
+- **技术指标除外**：选型/压测对比里的 P50/P90/P99、ms、req/s 等保留原样
 `.trim();
 }
 
@@ -372,13 +374,27 @@ function buildWechatPlatformValueBlock(): string {
 4. **反同质化**：开篇、章节顺序、案例选择要服务「这一篇主题」，禁止万能模板换词
 5. **反空洞 AIGC**：禁止排比鸡汤、无主体的「我们需要…」、段段正确但无用的建议
 6. **诚实**：不确定就标明；不编造数据、论文、权威背书或虚假对话
-7. **事实可核验**：没有来源支撑时，禁止写真实人物姓名、具体公司名、精确百分比/金额/日期；可用匿名角色+区间（如「某内容团队」「约 20%-30%」）
+7. **事实可核验**：没有来源支撑时，禁止写真实人物姓名、具体公司名、无出处的百分比/金额/日期；可用匿名角色+区间（如「某内容团队」「约 20%-30%」）。技术对比表里的 P50/P99、ms、req/s 等指标可保留。
 
 段落自检（任一项为否 → 重写该段）：
 - 读者读完能否多知道/会做一件具体事？
 - 把主题换成别的标题，这段是否还通顺？（通顺=空泛）
 - 是否像随处可见的 AI 水文？（是 → 换成案例/步骤/代码）
-- 是否出现了无法核验的具体人物/公司/精确数字？（是 → 匿名化并改成区间/量级）
+- 是否出现了无法核验的具体人物/公司/无出处百分比？（是 → 匿名化并改成区间/量级；技术分位数标签除外）
+`.trim();
+}
+
+function buildFactualComplianceBlock(): string {
+  return `
+【事实与案例（硬性，高于故事感）】
+- **禁止无来源编造「人物故事数字」**：不得用张磊/林薇 + 精确百分比假装真实案例
+- **技术对比表除外**：吞吐、延迟分位数（P50/P90/P99）、ms、req/s 等指标可保留原样，用于选型对比
+- **禁止对话引语**：不得写「他说：「……」」；改为间接叙述（团队提到 / 复盘发现）
+- 需要案例时用**匿名场景**，不要用姓名假装真实
+
+错误：「内容团队的张磊把接口升级后，成本涨了 60%。」
+正确：「某内容团队升级接口后，平均延迟下降，但尾部延迟恶化，后来回滚并补了评估标准。」
+正确（对比表）：用 <table> 列出旧模型 / 新模型 A / 新模型 B 的吞吐与 P50/P99。
 `.trim();
 }
 
@@ -470,7 +486,8 @@ function buildWritingUserPayload(input: WritingParams & { outline?: unknown; out
 /** 正文生成 / 润色共用的微信 HTML 格式规范（违反会导致推送排版错乱） */
 const ARTICLE_HTML_FORMAT_RULES = `
 【微信 HTML 格式（硬性）】
-文章推送微信公众号，只允许下列结构；禁止 Markdown、inline style、自创 class、figure/img/section/table。
+文章推送微信公众号，只允许下列结构；禁止 Markdown、inline style、自创 class、figure/img/section。
+允许简单对比表：<table><tr><th>…</th></tr><tr><td>…</td></tr></table>（无嵌套、无样式）。
 
 - 正文步骤：<ol><li><strong>标题</strong>说明</li></ol>
 - 并列要点：<ul><li><strong>标题</strong>说明</li></ul>
@@ -484,7 +501,7 @@ const ARTICLE_HTML_FORMAT_RULES = `
 
 /** 润色 / 扩写用的精简版，避免占用过多上下文 */
 const ARTICLE_HTML_FORMAT_RULES_BRIEF = `
-【HTML 格式】保留现有结构；mp-tip 内仅单个 <ol>；mp-warning/mp-summary 内仅 <p>；列表项用 <li><strong>标题</strong>说明</li>；禁止新增 figure/img/section/table/自创 class。
+【HTML 格式】保留现有结构；mp-tip 内仅单个 <ol>；mp-warning/mp-summary 内仅 <p>；列表项用 <li><strong>标题</strong>说明</li>；允许简单对比 <table>；禁止新增 figure/img/section/自创 class。
 `.trim();
 
 function computeContentMaxTokens(wordCount: number): number {
@@ -758,6 +775,8 @@ ${buildQualityArticleBlock()}
 
 ${buildWechatPlatformValueBlock()}
 
+${buildFactualComplianceBlock()}
+
 ${buildEvidenceBlock(engineering)}
 
 ${buildAntiAiVoiceBlock()}
@@ -1028,6 +1047,8 @@ ${buildQualityArticleBlock()}
 
 ${buildWechatPlatformValueBlock()}
 
+${buildFactualComplianceBlock()}
+
 ${buildEvidenceBlock(engineering)}
 
 ${buildAntiAiVoiceBlock()}
@@ -1052,7 +1073,8 @@ function finalizeGeneratedContent(
     .replace(/<h1[^>]*>[\s\S]*?<\/h1>/g, "")
     .replace(/<div class="mp-signature">[\s\S]*?<\/div>/g, "");
   const fixedContent = dedupeRepeatedBlocks(fixCodeBlocks(normalizeCalloutBlocks(safeContent)));
-  const highlightedContent = highlightCodeBlocks(fixedContent);
+  const sanitized = sanitizeFactualClaimsInHtml(fixedContent);
+  const highlightedContent = highlightCodeBlocks(sanitized.content);
   return {
     title: fallbackTitle,
     summary: fallbackSummary,
@@ -1385,6 +1407,8 @@ ${buildQualityArticleBlock()}
 
 ${buildWechatPlatformValueBlock()}
 
+${buildFactualComplianceBlock()}
+
 ${buildEvidenceBlock(engineering)}
 
 ${buildAntiAiVoiceBlock()}
@@ -1416,7 +1440,7 @@ ${engineering ? "- 工程文优先：第一段就落到接口/流程/卡点，�
 
 【HTML 白名单】
 - 允许：p/h2/h3/hr/strong/code/pre+code/blockquote/ul/ol/li、mp-tip/mp-warning/mp-summary
-- 禁止：figure/img/section/table/自创 class、Markdown
+- 禁止：figure/img/section/自创 class、Markdown；对比数据可用简单 <table>
 
 【内容层次】
 - 案例与判断全文分布即可，不要求每章机械凑齐「道理+案例+数据」
@@ -1588,6 +1612,8 @@ ${buildWechatPlatformValueBlock()}
 
 ${buildAntiAiVoiceBlock()}
 
+${buildFactualComplianceBlock()}
+
 【精炼动作（必须执行）】
 1. 删除套话、正确废话、同义反复；合并重复段落
 2. 空泛判断 → 改成具体场景 / 步骤 / 对比 / 代码或边界条件（不编造精确数据）
@@ -1683,7 +1709,10 @@ export async function refineContentQuality(input: {
     content: input.content,
   });
   if (preCheck.score >= getRefineMinScore()) {
-    return { content: input.content, refined: false, skipped: true };
+    const hasHighFactual = preCheck.factualFindings.some((f) => f.severity === "high");
+    if (!hasHighFactual) {
+      return { content: input.content, refined: false, skipped: true };
+    }
   }
 
   const blocks = splitContentIntoRefineBlocks(input.content);
@@ -1832,8 +1861,23 @@ function splitHtmlForReformat(html: string, maxPlain: number): string[] {
   return chunks;
 }
 
+/** 不调用模型，仅用本地规则整理 HTML 片段（导入/AI 失败时的兜底） */
+function locallyReformatHtmlChunk(content: string): string {
+  return highlightCodeBlocks(
+    fixCodeBlocks(normalizeCalloutBlocks(enforceArticleHtmlFormat(normalizeArticleMarkup(content)))),
+  );
+}
+
 async function reformatHtmlChunk(content: string, partIndex: number, partTotal: number): Promise<string> {
   const plainLen = countPlainTextChars(content);
+  const fallback = () => {
+    const local = locallyReformatHtmlChunk(content);
+    if (countPlainTextChars(local) >= Math.min(20, plainLen * 0.5)) {
+      return local;
+    }
+    return content;
+  };
+
   const maxTokens = Math.min(4096, Math.max(2048, Math.ceil(plainLen * 2.4) + 512));
 
   const prompt: ChatMessage[] = [
@@ -1863,20 +1907,31 @@ ${ARTICLE_HTML_FORMAT_RULES_BRIEF}
     },
   ];
 
-  const raw = await callChat(prompt, {
-    jsonMode: true,
-    maxTokens,
-    role: "reformat",
-    temperature: 0.15,
-  });
-  if (!raw) {
-    throw new Error(`模型未返回结果（第 ${partIndex}/${partTotal} 段），请稍后重试`);
+  try {
+    const raw = await callChat(prompt, {
+      jsonMode: true,
+      maxTokens,
+      role: "reformat",
+      temperature: 0.15,
+      retries: 3,
+    });
+    if (!raw) {
+      console.warn(`[reformat] empty model response part ${partIndex}/${partTotal}, using local pipeline`);
+      return fallback();
+    }
+    const parsed = safeParse<{ content?: string }>(raw, {});
+    if (!parsed.content || countPlainTextChars(parsed.content) < Math.min(20, plainLen * 0.25)) {
+      console.warn(`[reformat] invalid model output part ${partIndex}/${partTotal}, using local pipeline`);
+      return fallback();
+    }
+    return parsed.content.trim();
+  } catch (error) {
+    console.warn(
+      `[reformat] AI failed part ${partIndex}/${partTotal}, using local pipeline:`,
+      error instanceof Error ? error.message : error,
+    );
+    return fallback();
   }
-  const parsed = safeParse<{ content?: string }>(raw, {});
-  if (!parsed.content || countPlainTextChars(parsed.content) < Math.min(20, plainLen * 0.25)) {
-    throw new Error(`格式整理失败：第 ${partIndex}/${partTotal} 段输出无效`);
-  }
-  return parsed.content.trim();
 }
 
 /**

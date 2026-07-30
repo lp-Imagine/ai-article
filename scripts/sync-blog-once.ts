@@ -3,7 +3,7 @@ import { syncArticleToBlog } from "../src/lib/blog-sync";
 
 const db = new PrismaClient();
 const id = process.argv[2] || "cmrxngdq9000zpzulezqj56nc";
-const section = (process.argv[3] || "web") as "web" | "ui" | "tech" | "computer" | "misc";
+const section = (process.argv[3] || "web") as "web" | "ui" | "tech" | "computer" | "agent" | "misc";
 const group = process.argv[4] || "javascript";
 
 async function main() {

@@ -10,7 +10,7 @@ import {
 } from "@/lib/blog-sync-constants";
 
 const bodySchema = z.object({
-  section: z.enum(BLOG_SECTIONS),
+  section: z.enum(BLOG_SECTIONS).optional(),
   group: z.string().trim().min(1).max(40).optional(),
   tags: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
   draft: z.boolean().optional(),
@@ -75,6 +75,7 @@ export async function POST(
     }
 
     if (
+      parsed.section &&
       parsed.group &&
       !isValidBlogGroup(parsed.section as BlogSection, parsed.group)
     ) {
@@ -101,7 +102,7 @@ export async function POST(
           createdAt: article.createdAt,
         },
         {
-          section: parsed.section as BlogSection,
+          section: parsed.section,
           group: parsed.group,
           tags: parsed.tags,
           draft: parsed.draft,

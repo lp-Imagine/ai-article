@@ -8,7 +8,7 @@ import {
   guessImageExt,
   htmlToBlogMarkdown,
 } from "@/lib/html-to-blog-md";
-import { BLOG_SECTIONS, type BlogSection, inferBlogGroup, isValidBlogGroup } from "@/lib/blog-sync-constants";
+import { BLOG_SECTIONS, type BlogSection, inferBlogGroup, inferBlogPlacement, isValidBlogGroup } from "@/lib/blog-sync-constants";
 import { getEnvValue } from "@/lib/config-bridge";
 
 export { BLOG_SECTIONS, type BlogSection };
@@ -25,8 +25,9 @@ export type BlogSyncArticle = {
 };
 
 export type BlogSyncOptions = {
-  section: BlogSection;
-  /** 侧栏分组，如 javascript / css / docs */
+  /** 省略时根据标题/摘要/关键词自动推断 */
+  section?: BlogSection;
+  /** 侧栏分组，如 javascript / css / docs；省略时自动推断 */
   group?: string;
   tags?: string[];
   draft?: boolean;
@@ -397,22 +398,30 @@ export async function syncArticleToBlog(
   if (!title) {
     throw new Error("标题为空，无法同步到博客");
   }
-  if (!BLOG_SECTIONS.includes(options.section)) {
+
+  const tags = defaultTags(article, options.tags);
+  const hintBlob = [
+    ...tags,
+    article.title ?? "",
+    article.topic,
+    article.keywords ?? "",
+    article.summary ?? "",
+  ];
+  const inferred = inferBlogPlacement(hintBlob);
+  const section =
+    options.section && (BLOG_SECTIONS as readonly string[]).includes(options.section)
+      ? options.section
+      : inferred.section;
+  if (options.section && !(BLOG_SECTIONS as readonly string[]).includes(options.section)) {
     throw new Error(`无效栏目 section: ${options.section}`);
   }
 
   const config = readGhConfig();
   const draft = options.draft === true;
-  const tags = defaultTags(article, options.tags);
   const group =
-    options.group && isValidBlogGroup(options.section, options.group)
+    options.group && isValidBlogGroup(section, options.group)
       ? options.group
-      : inferBlogGroup(options.section, [
-          ...tags,
-          article.title ?? "",
-          article.topic,
-          article.keywords ?? "",
-        ]);
+      : inferBlogGroup(section, hintBlob);
 
   const safeContent = scrubSecretsForPublish(article.content);
 
@@ -428,10 +437,10 @@ export async function syncArticleToBlog(
   );
   const bodyMd = htmlToBlogMarkdown(safeContent, { rewriteSrc });
   // 写入正式栏目路径，才能匹配 VitePress 侧栏 `/web/` 等前缀
-  const mdPath = `website/${options.section}/${group}/${article.id}.md`;
+  const mdPath = `website/${section}/${group}/${article.id}.md`;
   const legacyPaths = [
-    `website/sync/${options.section}/${group}/${article.id}.md`,
-    `website/sync/${options.section}/${article.id}.md`,
+    `website/sync/${section}/${group}/${article.id}.md`,
+    `website/sync/${section}/${article.id}.md`,
   ];
 
   const fm = buildFrontmatter({
@@ -439,7 +448,7 @@ export async function syncArticleToBlog(
     date,
     summary: article.summary?.trim() || undefined,
     tags,
-    section: options.section,
+    section,
     group,
     sourceId: article.id,
     cover: coverPath,

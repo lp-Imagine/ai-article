@@ -39,6 +39,7 @@ const SECTION_TAGS: Record<BlogSection, string[]> = {
   ui: ["UI", "CSS", "设计系统", "交互", "可访问性", "动效"],
   tech: ["AI", "效率", "工作流", "自动化", "工具链", "实践"],
   computer: ["系统", "网络", "性能", "浏览器", "调试", "故障定位"],
+  agent: ["Agent", "Cursor", "提示词", "工作流", "MCP", "工具链"],
   misc: ["方法论", "案例", "复盘", "清单", "对比", "生活", "职场", "商业", "理财", "教育"],
 };
 
@@ -148,6 +149,14 @@ const HOT_TOPIC_SEEDS: Record<BlogSection | "all", string[]> = {
     "TCP \u8fde\u63a5\u590d\u7528\u51fa\u4e86\u95ee\u9898\u600e\u4e48\u67e5",
     "CDN \u56de\u6e90\u6162\u7684\u51e0\u4e2a\u9690\u853d\u539f\u56e0",
     "Linux cgroup v2 \u5728\u5b9e\u9645\u9879\u76ee\u91cc\u600e\u4e48\u505a\u8d44\u6e90\u9694\u79bb",
+  ],
+  agent: [
+    "从单次对话到可复用 Agent：我踩过的工程坑",
+    "Cursor Rules / AGENTS.md 怎么写才真正约束模型",
+    "MCP 工具接入后，权限和超时怎么设计",
+    "多 Agent 协作：拆任务还是拆角色更稳",
+    "提示词缓存与上下文裁剪：长会话还能不能控成本",
+    "把 Agent 嵌进现有工作流：最小可用切入点",
   ],
   misc: [
     // 方法论/写作

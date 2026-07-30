@@ -91,15 +91,20 @@ function excerptAround(text: string, index: number, len: number, radius = 24): s
   return (start > 0 ? "…" : "") + slice + (end < text.length ? "…" : "");
 }
 
+/** 去掉误捕的助词尾巴，如「林薇把」→「林薇」 */
+function normalizeCapturedName(raw: string): string {
+  return raw.replace(/[把被让给在对向与了过着将会要很]+$/u, "").trim();
+}
+
 function isLikelyPersonName(name: string): boolean {
-  if (!name || name.length < 2 || name.length > 3) return false;
-  if (NAME_BLOCKLIST.has(name)) return false;
-  if (/^[一二三四五六七八九十\d]+/.test(name)) return false;
-  if (/^(小|老|大)/.test(name) && name.length === 2) return true;
-  // 常见姓氏 + 1-2 字名
+  const normalized = normalizeCapturedName(name);
+  if (!normalized || normalized.length < 2 || normalized.length > 3) return false;
+  if (NAME_BLOCKLIST.has(normalized)) return false;
+  if (/^[一二三四五六七八九十\d]+/.test(normalized)) return false;
+  if (/^(小|老|大)/.test(normalized) && normalized.length === 2) return true;
   const surnames =
     "张王李赵刘陈杨黄周吴徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘于蒋蔡余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦付方白邹孟熊秦邱江尹薛闫段雷侯龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤";
-  if (surnames.includes(name[0]) && name.length >= 2) return true;
+  if (surnames.includes(normalized[0]) && normalized.length >= 2) return true;
   return false;
 }
 
@@ -122,13 +127,13 @@ export function analyzeFactualClaims(plain: string): FactualFinding[] {
   // 具体人名
   const namePatterns: Array<{ re: RegExp; label: string }> = [
     { re: /(?:叫|名叫|名为)([\u4e00-\u9fa5]{2,3})/g, label: "具名人物" },
-    { re: /(?:同事|朋友|学员|读者|用户|客户|主管|经理)([\u4e00-\u9fa5]{2,3})/g, label: "角色+姓名" },
-    { re: /([\u4e00-\u9fa5]{2,3})(?:说|表示|告诉|回复|抱怨|发现|决定|提出)/g, label: "人物动作" },
-    { re: /[\u4e00-\u9fa5]{1,8}的([\u4e00-\u9fa5]{2,3})(?=[，,。在把被让给对向]|$)/g, label: "所属+姓名" },
+    { re: /(?:同事|朋友|学员|读者|用户|客户|主管|经理)([\u4e00-\u9fa5]{2})(?=[把被让给在对向，,。!\s]|$)/g, label: "角色+姓名" },
+    { re: /([\u4e00-\u9fa5]{2})(?=[说表示告诉回复抱怨发现决定提出])/g, label: "人物动作" },
+    { re: /[\u4e00-\u9fa5]{1,8}的([\u4e00-\u9fa5]{2})(?=[，,。在把被让给对向]|$)/g, label: "所属+姓名" },
   ];
   for (const { re, label } of namePatterns) {
     for (const m of plain.matchAll(re)) {
-      const name = m[1];
+      const name = normalizeCapturedName(m[1]);
       if (!isLikelyPersonName(name)) continue;
       pushUniqueFinding(findings, seen, {
         code: "named_person",
@@ -184,13 +189,16 @@ export function analyzeFactualClaims(plain: string): FactualFinding[] {
     });
   }
 
-  // 性能/指标精确数字（P50/P99、X秒、Xms）
-  for (const m of plain.matchAll(/P\d{2,3}(?:\s*延迟|\s*时延)?|\d+(?:\.\d+)?\s*(?:秒|ms|毫秒)(?:的延迟|时延|内)?/gi)) {
+  // 性能时长：靠近分位数/吞吐/压测语境的视为技术对比，不标风险
+  for (const m of plain.matchAll(/\d+(?:\.\d+)?\s*秒/g)) {
+    const idx = m.index ?? 0;
+    const window = plain.slice(Math.max(0, idx - 24), idx + m[0].length + 16);
+    if (/P\d{2,3}|吞吐|延迟|压测|req\/s|ms|模型/i.test(window)) continue;
     pushUniqueFinding(findings, seen, {
       code: "precise_metric",
-      excerpt: excerptAround(plain, m.index ?? 0, m[0].length),
-      message: `精确指标「${m[0]}」若无实测数据，建议改为区间或删除`,
-      severity: "high",
+      excerpt: excerptAround(plain, idx, m[0].length),
+      message: `精确时长「${m[0]}」若无实测数据，建议改为区间或删除`,
+      severity: "medium",
     });
   }
 
@@ -209,6 +217,55 @@ export function analyzeFactualClaims(plain: string): FactualFinding[] {
   }
 
   return findings.slice(0, 12);
+}
+
+/** 将正文中的具名人物改为匿名表达（生成后兜底；不改写技术指标/百分比） */
+export function sanitizeFactualPlainText(text: string): { text: string; changed: boolean } {
+  let changed = false;
+  let out = text;
+
+  const apply = (re: RegExp, replacer: string | ((substring: string, ...args: unknown[]) => string)) => {
+    const next = out.replace(re, replacer as Parameters<typeof out.replace>[1]);
+    if (next !== out) changed = true;
+    out = next;
+  };
+
+  apply(/(?<![某])主管[\u4e00-\u9fa5]{2}(?=[把被在给对，,。\s])/g, "某主管");
+  apply(/(?<![某])经理[\u4e00-\u9fa5]{2}(?=[把被在给对说，,。\s])/g, "某经理");
+  apply(/(?<![某])同事[\u4e00-\u9fa5]{2}(?=[把被在给对说，,。\s])/g, "某同事");
+  apply(/(?<![某])朋友[\u4e00-\u9fa5]{2}(?=[把被在给对说，,。\s])/g, "某位朋友");
+  apply(/(?:叫|名叫|名为)[\u4e00-\u9fa5]{2,3}/g, "叫某负责人");
+
+  const surnames =
+    "张王李赵刘陈杨黄周吴徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘于蒋蔡余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦付方白邹孟熊秦邱江尹薛闫段雷侯龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤";
+  // 仅在「的/让/… + 姓名 + 把/说」等边界命中，避免「流程把」里的「程…」被误伤
+  const nameBoundary = `(?<=^|[的地得了着过与和及对给把被让向从在]|[，,。；;：:\\s「」『』“”‘’（）()【】\\[\\]《》])`;
+  apply(
+    new RegExp(`${nameBoundary}[${surnames}][\\u4e00-\\u9fa5]{1,2}(?=[说表示告诉回复抱怨])`, "g"),
+    "相关负责人",
+  );
+  apply(new RegExp(`${nameBoundary}[${surnames}][\\u4e00-\\u9fa5]{1,2}把`, "g"), "某负责人把");
+
+  // 不改写技术指标/百分比/时长：表格与性能文里这些是必要信息，模糊化会毁掉展示
+  apply(/[^\s，,。]{1,8}[说讲]：[「『"]/g, "团队提到：");
+
+  return { text: out, changed };
+}
+
+export function sanitizeFactualClaimsInHtml(html: string): { content: string; changed: boolean } {
+  let changed = false;
+  // 保留 table / pre，避免把对比表、代码里的数字和 P50 等冲掉
+  const content = html.replace(
+    /(<table[\s\S]*?<\/table>)|(<pre[\s\S]*?<\/pre>)|([^<]+)/gi,
+    (full, tableBlock, codeBlock, textPart) => {
+      if (tableBlock || codeBlock) return full;
+      if (!textPart) return full;
+      const { text, changed: c } = sanitizeFactualPlainText(textPart);
+      if (c) changed = true;
+      return text;
+    },
+  );
+  return { content, changed };
 }
 
 function stripHtml(html: string): string {

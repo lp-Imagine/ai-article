@@ -57,8 +57,96 @@ describe("convertImportedContent", () => {
   });
 
   it("imports simple HTML via cleanup pipeline", () => {
-    const { html } = convertImportedContent("<p>你好</p><p>世界</p>");
+    const { html, sourceKind } = convertImportedContent("<p>你好</p><p>世界</p>");
+    expect(sourceKind).toBe("html");
     expect(html.toLowerCase()).toContain("<p>");
     expect(plainTextLengthFromHtml(html)).toBeGreaterThan(0);
+  });
+
+  it("extracts body from full HTML documents", () => {
+    const page = `<!doctype html><html><head><title>x</title></head><body>
+      <article><p>${"正文内容。".repeat(30)}</p></article>
+      <footer>页脚</footer></body></html>`;
+    const { html, sourceKind } = convertImportedContent(page);
+    expect(sourceKind).toBe("html");
+    expect(html).toContain("正文内容");
+    expect(html).not.toContain("页脚");
+  });
+
+  it("extracts nested article blocks without truncating at inner div", () => {
+    const page = `<!doctype html><html><body>
+      <div class="post-content">
+        <p>引言段落</p>
+        <div class="code-wrap">
+          <span>content-script.js</span>
+          <pre><code>chrome.runtime.onMessage.addListener(() =&gt; {});</code></pre>
+        </div>
+        <p>代码块之后的段落不应丢失</p>
+      </div>
+      <footer>页脚</footer>
+    </body></html>`;
+    const { html } = convertImportedContent(page);
+    expect(html).toContain("引言段落");
+    expect(html).toContain("content-script.js");
+    expect(html).toContain("chrome.runtime");
+    expect(html).toContain("代码块之后的段落不应丢失");
+    expect(html).not.toContain("页脚");
+  });
+
+  it("preserves script examples inside pre/code when stripping page chrome", async () => {
+    const { extractArticleFromHtmlPage } = await import("./import-content");
+    const page = `<!doctype html><html><body>
+      <article>
+        <blockquote>双方通信直接发送 JSON 对象</blockquote>
+        <h2>content-script &amp;&amp; background</h2>
+        <pre><code class="language-js">// content-script.js
+<script src="content-script.js"></script>
+chrome.runtime.onMessage.addListener(() => {});
+</code></pre>
+        <p>后续章节内容完整保留</p>
+      </article>
+      <script>analytics();</script>
+    </body></html>`;
+    const out = extractArticleFromHtmlPage(page);
+    expect(out.content).toContain("content-script.js");
+    expect(out.content).toContain("chrome.runtime");
+    expect(out.content).toContain("后续章节内容完整保留");
+    expect(out.content).not.toContain("analytics");
+  });
+});
+
+describe("extractTitleFromContent", () => {
+  it("reads markdown heading", async () => {
+    const { extractTitleFromContent } = await import("./import-content");
+    expect(extractTitleFromContent("# Hello World\n\n正文")).toBe("Hello World");
+  });
+});
+
+describe("extractArticleFromHtmlPage", () => {
+  it("extracts wechat-like article block", async () => {
+    const { extractArticleFromHtmlPage } = await import("./import-content");
+    const html = `<!doctype html><html><head>
+      <meta property="og:title" content="测试标题" />
+      <meta name="description" content="这是摘要说明文字" />
+      <title>忽略</title></head><body>
+      <div id="js_content"><p>${"正文段落。".repeat(20)}</p><p>第二段内容足够长。</p></div>
+      </body></html>`;
+    const out = extractArticleFromHtmlPage(html);
+    expect(out.title).toBe("测试标题");
+    expect(out.summary).toContain("摘要");
+    expect(out.content).toContain("正文段落");
+  });
+});
+
+describe("assertSafeImportUrl", () => {
+  it("rejects localhost", async () => {
+    const { assertSafeImportUrl, ImportContentError } = await import("./import-content");
+    expect(() => assertSafeImportUrl("http://localhost/x")).toThrow(ImportContentError);
+    expect(() => assertSafeImportUrl("http://127.0.0.1/x")).toThrow(ImportContentError);
+  });
+
+  it("accepts https public urls", async () => {
+    const { assertSafeImportUrl } = await import("./import-content");
+    expect(assertSafeImportUrl("https://example.com/a").hostname).toBe("example.com");
   });
 });

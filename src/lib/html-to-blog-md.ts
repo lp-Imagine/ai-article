@@ -31,6 +31,26 @@ function stripTags(html: string): string {
   return decodeEntities(html.replace(/<[^>]+>/g, "")).trim();
 }
 
+/** Like stripTags but keep inline emphasis/code tags for VitePress HTML output. */
+function stripTagsKeepInline(html: string): string {
+  return decodeEntities(
+    html.replace(/<(?!\/?(?:strong|em|code)\b)[^>]+>/gi, ""),
+  ).trim();
+}
+
+function isBoldSpanStyle(attrs: string): boolean {
+  return /font-weight\s*:\s*(?:bold|700|800|900|bolder)\b/i.test(attrs);
+}
+
+function isItalicSpanStyle(attrs: string): boolean {
+  return /font-style\s*:\s*italic\b/i.test(attrs);
+}
+
+function wrapInlineTag(tag: "strong" | "em", text: string): string {
+  const t = text.trim();
+  return t ? `<${tag}>${t}</${tag}>` : "";
+}
+
 function mapLangLabel(label: string): string {
   const t = label.trim().toLowerCase();
   if (!t || t === "plain text" || t === "plaintext") return "";
@@ -127,14 +147,21 @@ function inlineToMd(
     const next = src && rewriteSrc ? rewriteSrc(src) ?? src : src;
     return next ? `![${alt}](${next})` : "";
   });
-  s = s.replace(/<(strong|b)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi, (_m, _t, inner) => {
-    const t = stripTags(inner);
-    return t ? `**${t}**` : "";
+  // WeChat 样式常把 strong 落成 span[style*=font-weight]
+  s = s.replace(/<span(\s[^>]*)>([\s\S]*?)<\/span>/gi, (full, attrs: string, inner) => {
+    if (isBoldSpanStyle(attrs)) return wrapInlineTag("strong", stripTags(inner));
+    if (isItalicSpanStyle(attrs)) return wrapInlineTag("em", stripTags(inner));
+    return stripTags(inner);
   });
-  s = s.replace(/<(em|i)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi, (_m, _t, inner) => {
-    const t = stripTags(inner);
-    return t ? `*${t}*` : "";
-  });
+  s = s.replace(/<(strong|b)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi, (_m, _t, inner) =>
+    wrapInlineTag("strong", stripTags(inner)),
+  );
+  s = s.replace(/<(em|i)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi, (_m, _t, inner) =>
+    wrapInlineTag("em", stripTags(inner)),
+  );
+  // 生成稿若误带 Markdown 加粗，转成 HTML 以便 VitePress 混排 HTML 时也能渲染
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, (_m, inner: string) => wrapInlineTag("strong", inner));
+  s = s.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, (_m, inner: string) => wrapInlineTag("em", inner));
   s = s.replace(/<code(?:\s[^>]*)?>([\s\S]*?)<\/code>/gi, (_m, inner) => {
     const t = stripTags(inner).replace(/`/g, "\\`");
     return t ? `\`${t}\`` : "";
@@ -148,7 +175,7 @@ function inlineToMd(
     images.push(img);
     return `\0IMG${images.length - 1}\0`;
   });
-  s = stripTags(s);
+  s = stripTagsKeepInline(s);
   s = s.replace(/\0IMG(\d+)\0/g, (_m, idx) => images[Number(idx)] ?? "");
   return s;
 }
@@ -167,6 +194,52 @@ function convertList(
       return `${marker} ${body}`;
     })
     .join("\n");
+}
+
+function cellText(
+  html: string,
+  rewriteSrc?: (src: string) => string | null | undefined,
+): string {
+  return inlineToMd(html.replace(/<\/?p(?:\s[^>]*)?>/gi, " ").trim(), rewriteSrc)
+    .replace(/\|/g, "\\|")
+    .replace(/\n+/g, " ")
+    .trim();
+}
+
+/** Convert HTML table to GFM markdown table (VitePress / penn-notes). */
+export function convertTable(
+  tableHtml: string,
+  rewriteSrc?: (src: string) => string | null | undefined,
+): string {
+  const rows: string[][] = [];
+  const rowRe = /<tr(?:\s[^>]*)?>([\s\S]*?)<\/tr>/gi;
+  let rowMatch: RegExpExecArray | null;
+  while ((rowMatch = rowRe.exec(tableHtml)) !== null) {
+    const cells: string[] = [];
+    const cellRe = /<(th|td)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi;
+    let cellMatch: RegExpExecArray | null;
+    while ((cellMatch = cellRe.exec(rowMatch[1])) !== null) {
+      cells.push(cellText(cellMatch[2], rewriteSrc) || " ");
+    }
+    if (cells.length > 0) rows.push(cells);
+  }
+  if (rows.length === 0) return "";
+
+  const colCount = Math.max(...rows.map((r) => r.length));
+  const normalized = rows.map((r) => {
+    const padded = [...r];
+    while (padded.length < colCount) padded.push(" ");
+    return padded;
+  });
+
+  const header = normalized[0];
+  const body = normalized.slice(1);
+  const lines = [
+    `| ${header.join(" | ")} |`,
+    `| ${header.map(() => "---").join(" | ")} |`,
+    ...body.map((r) => `| ${r.join(" | ")} |`),
+  ];
+  return lines.join("\n");
 }
 
 function convertPre(html: string): string {
@@ -202,12 +275,17 @@ function convertAll(
   takeCallouts("mp-warning", "::: warning");
   takeCallouts("mp-summary", "::: info 总结");
 
-  s = s.replace(/\sstyle="[^"]*"/gi, "");
+  const tables: string[] = [];
+  s = s.replace(/<table(?:\s[^>]*)?>[\s\S]*?<\/table>/gi, (full) => {
+    tables.push(convertTable(full, rewriteSrc));
+    return `\n\n%%TABLE${tables.length - 1}%%\n\n`;
+  });
+
   s = s.replace(/<\/?section(?:\s[^>]*)?>/gi, "\n");
 
   const out: string[] = [];
   const blockRe =
-    /<(h[1-6]|p|pre|ul|ol|blockquote|figure)(\s[^>]*)?>([\s\S]*?)<\/\1>|<hr\s*\/?>|<img(\s[^>]*)?\/?>|%%(?:FENCE|CALLOUT)\d+%%/gi;
+    /<(h[1-6]|p|pre|ul|ol|blockquote|figure)(\s[^>]*)?>([\s\S]*?)<\/\1>|<hr\s*\/?>|<img(\s[^>]*)?\/?>|%%(?:FENCE|CALLOUT|TABLE)\d+%%/gi;
 
   let last = 0;
   let m: RegExpExecArray | null;
@@ -219,10 +297,14 @@ function convertAll(
     const full = m[0];
     const fenceMatch = full.match(/^%%FENCE(\d+)%%$/);
     const calloutMatch = full.match(/^%%CALLOUT(\d+)%%$/);
+    const tableMatch = full.match(/^%%TABLE(\d+)%%$/);
     if (fenceMatch) {
       out.push(fences[Number(fenceMatch[1])] ?? "");
     } else if (calloutMatch) {
       out.push(callouts[Number(calloutMatch[1])] ?? "");
+    } else if (tableMatch) {
+      const t = tables[Number(tableMatch[1])] ?? "";
+      if (t) out.push(t);
     } else if (/^<hr/i.test(full)) {
       out.push("---");
     } else if (/^<img/i.test(full)) {
@@ -278,7 +360,8 @@ function convertAll(
   let md = out.filter(Boolean).join("\n\n");
   md = md
     .replace(/%%FENCE(\d+)%%/g, (_x, idx) => fences[Number(idx)] ?? "")
-    .replace(/%%CALLOUT(\d+)%%/g, (_x, idx) => callouts[Number(idx)] ?? "");
+    .replace(/%%CALLOUT(\d+)%%/g, (_x, idx) => callouts[Number(idx)] ?? "")
+    .replace(/%%TABLE(\d+)%%/g, (_x, idx) => tables[Number(idx)] ?? "");
   return `${md.replace(/\n{3,}/g, "\n\n").trim()}\n`;
 }
 

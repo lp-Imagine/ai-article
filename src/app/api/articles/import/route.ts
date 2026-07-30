@@ -49,7 +49,7 @@ export async function POST(request: Request) {
 
       const input = importArticleSchema.parse(json);
       const rawContent = decodeImportContent(input.content, input.contentEncoding);
-      const { html, wordCount } = convertImportedContent(rawContent);
+      const { html, wordCount, sourceKind } = convertImportedContent(rawContent);
       const summary = input.summary?.trim() || null;
 
       const article = await db.article.create({
@@ -74,7 +74,9 @@ export async function POST(request: Request) {
       let jobId: string | null = null;
       let reformatSkippedReason: string | null = null;
 
-      if (input.autoReformat) {
+      const shouldAutoReformat = input.autoReformat && sourceKind === "text";
+
+      if (shouldAutoReformat) {
         if (!isAiReady()) {
           reformatSkippedReason =
             "未配置 AI API Key，已跳过自动整理格式。请到「设置 → AI 模型」填写后重试导入，或在编辑页手动点「整理格式」。";

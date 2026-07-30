@@ -14,13 +14,10 @@ import {
   Save,
   Send,
   Shield,
-  Upload,
 } from "lucide-react";
 import PreviewDialog from "@/components/preview-dialog";
-import PushDialog from "@/components/push-dialog";
-import BlogSyncDialog from "@/components/blog-sync-dialog";
+import PushDialog, { type PushConfirmPayload } from "@/components/push-dialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import type { BlogSection } from "@/lib/blog-sync-constants";
 import { FieldLabel } from "@/components/app-shell";
 import { useToast } from "@/components/toast";
 import { ProgressDialog, type ProgressStep } from "@/components/progress-dialog";
@@ -119,11 +116,10 @@ export default function ArticlePage({
   const [busy, setBusy] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [pushDialogOpen, setPushDialogOpen] = useState(false);
-  const [blogSyncDialogOpen, setBlogSyncDialogOpen] = useState(false);
   const [pushResult, setPushResult] = useState<{ draftId: string; status: string } | null>(null);
   const [blogSyncResult, setBlogSyncResult] = useState<{ path: string; url: string } | null>(null);
   const [pushRecords, setPushRecords] = useState<PublishRecord[]>([]);
-  // 服务器是否配置了 BLOG_GITHUB_TOKEN。未配置时不向任何账号展示「同步到博客」入口。
+  // 服务器是否配置了博客同步 Token。未配置时推送弹窗不展示博客选项。
   const [blogSyncConfigured, setBlogSyncConfigured] = useState(false);
   const [editorTab, setEditorTab] = useState<"meta" | "content">("meta");
   const [activeOutlineView, setActiveOutlineView] = useState(0);
@@ -1100,60 +1096,107 @@ export default function ArticlePage({
     }
   }
 
-  async function handlePushConfirm() {
-    setPushDialogOpen(false);
-    if (article) {
-      await saveArticle({ silent: true });
-    }
-    await callAction(`/api/articles/${id}/push-draft`, "推送公众号草稿箱");
-    const res = await fetch(`/api/articles/${id}`, { cache: "no-store" });
-    const json = (await res.json()) as ApiResponse<ArticleRecord>;
-    if (json.code === 0 && json.data) {
-      setPushResult({
-        draftId: json.data.wechatDraftId ?? "",
-        status: json.data.status,
-      });
-    }
-    fetchPushHistory();
-  }
-
-  async function handleBlogSyncConfirm(payload: {
-    section: BlogSection;
-    group: string;
-    tags: string[];
-    draft: boolean;
-  }) {
+  async function handlePushConfirm(payload: PushConfirmPayload) {
     if (busy) {
       toast.show({ message: `请先等待「${busy}」完成`, variant: "warning" });
       return;
     }
-    setBlogSyncDialogOpen(false);
+    if (!payload.channels.length) {
+      toast.show({ message: "请至少选择一个推送目标", variant: "warning" });
+      return;
+    }
+
+    setPushDialogOpen(false);
     if (article) {
       await saveArticle({ silent: true });
     }
-    setBusy("同步到博客");
-    setBlogSyncResult(null);
+
+    const wantWechat = payload.channels.includes("wechat");
+    const wantBlog = payload.channels.includes("blog") && Boolean(payload.blog);
+    const labels = [
+      wantWechat ? "微信" : null,
+      wantBlog ? "博客" : null,
+    ].filter(Boolean);
+    setBusy(`推送（${labels.join(" + ")}）`);
+    setPushResult(null);
+    if (wantBlog) setBlogSyncResult(null);
+
+    const errors: string[] = [];
     try {
-      const res = await fetch(`/api/articles/${id}/sync-blog`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const json = (await res.json()) as ApiResponse<{ path: string; url: string }>;
-      if (json.code !== 0 || !json.data) {
-        toast.show({ message: json.message || "同步失败", variant: "error" });
-        return;
+      if (wantWechat) {
+        try {
+          const res = await fetch(`/api/articles/${id}/push-draft`, { method: "POST" });
+          const json = (await res.json()) as ApiResponse<{
+            draftId?: string;
+            status?: string;
+          }>;
+          if (json.code !== 0) {
+            errors.push(json.message || "微信推送失败");
+          } else {
+            setPushResult({
+              draftId: json.data?.draftId ?? "",
+              status: json.data?.status ?? "pushed",
+            });
+            const articleRes = await fetch(`/api/articles/${id}`, { cache: "no-store" });
+            const articleJson = (await articleRes.json()) as ApiResponse<ArticleRecord>;
+            if (articleJson.code === 0 && articleJson.data) {
+              setPushResult({
+                draftId: articleJson.data.wechatDraftId ?? json.data?.draftId ?? "",
+                status: articleJson.data.status,
+              });
+            }
+          }
+        } catch (err) {
+          errors.push(err instanceof Error ? err.message : "微信推送失败");
+        }
       }
-      setBlogSyncResult(json.data);
-      toast.show({ message: "已同步到博客，正在触发部署", variant: "success" });
-    } catch (err) {
-      toast.show({
-        message: err instanceof Error ? err.message : "同步失败",
-        variant: "error",
-      });
+
+      if (wantBlog && payload.blog) {
+        try {
+          const res = await fetch(`/api/articles/${id}/sync-blog`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload.blog),
+          });
+          const json = (await res.json()) as ApiResponse<{ path: string; url: string }>;
+          if (json.code !== 0 || !json.data) {
+            errors.push(json.message || "博客同步失败");
+          } else {
+            setBlogSyncResult(json.data);
+          }
+        } catch (err) {
+          errors.push(err instanceof Error ? err.message : "博客同步失败");
+        }
+      }
+
+      if (errors.length === 0) {
+        toast.show({
+          message:
+            wantWechat && wantBlog
+              ? "微信与博客均已推送"
+              : wantBlog
+                ? "已同步到博客，正在触发部署"
+                : "已推送到微信草稿箱",
+          variant: "success",
+        });
+      } else if (errors.length < labels.length) {
+        toast.show({
+          message: `部分成功：${errors.join("；")}`,
+          variant: "warning",
+          duration: 8000,
+        });
+      } else {
+        toast.show({
+          message: errors.join("；"),
+          variant: "error",
+          duration: 8000,
+        });
+      }
+
+      fetchPushHistory();
+      await refresh();
     } finally {
       setBusy(null);
-      fetchPushHistory();
     }
   }
 
@@ -1332,6 +1375,7 @@ export default function ArticlePage({
                 type="button"
                 onClick={() => {
                   setPushResult(null);
+                  setBlogSyncResult(null);
                   setPushDialogOpen(true);
                 }}
                 disabled={busy !== null || !article.content}
@@ -1339,27 +1383,9 @@ export default function ArticlePage({
               >
                 <span className="inline-flex items-center gap-1.5">
                   <Send size={14} />
-                  推送草稿箱
+                  {busy?.startsWith("推送") ? "推送中..." : "推送"}
                 </span>
               </button>
-              {blogSyncConfigured ? (
-
-                <button
-                type="button"
-                onClick={() => {
-                  setBlogSyncResult(null);
-                  setBlogSyncDialogOpen(true);
-                }}
-                disabled={busy !== null || !article.content}
-                className="btn-secondary text-sm article-topbar-publish-btn"
-              >
-                <span className="inline-flex items-center gap-1.5">
-                  <Upload size={14} />
-                  {busy === "同步到博客" ? "同步中..." : "同步到博客"}
-                </span>
-              </button>
-
-              ) : null}
             </div>
           </div>
           </div>
@@ -1514,7 +1540,7 @@ export default function ArticlePage({
               </p>
             </div>
             <p className="outline-imported-hint">
-              本文由导入创建；导入时会自动排队「整理格式」。完成后可继续润色、配图或推送；若未自动整理，可手动点正文工具里的「整理格式」。
+              本文由导入创建。纯文本/Markdown 导入会自动排队「整理格式」；HTML 导入已做本地规范化，可直接润色、配图或推送。需要时可手动点正文工具里的「整理格式」。
             </p>
           </section>
         ) : null}
@@ -1577,13 +1603,14 @@ export default function ArticlePage({
           <button
             onClick={() => {
               setPushResult(null);
+              setBlogSyncResult(null);
               setPushDialogOpen(true);
             }}
             disabled={busy !== null || !article.content}
             className="workflow-btn workflow-btn-primary workflow-item-mobile-only"
           >
             <Send size={14} />
-            推送草稿箱
+            推送
           </button>
           {article.title ? (
             <button
@@ -1837,25 +1864,15 @@ export default function ArticlePage({
             <ActionChip busy={busy} label="生成封面图" onClick={() => callAction(`/api/articles/${id}/generate-cover`, "生成封面图")} />
             <ActionChip
               busy={busy}
-              label="推送草稿箱"
+              label="推送"
+              activeLabel="推送"
               onClick={() => {
                 setPushResult(null);
+                setBlogSyncResult(null);
                 setPushDialogOpen(true);
               }}
               disabled={!article.content}
             />
-            {blogSyncConfigured ? (
-              <ActionChip
-                busy={busy}
-                label="同步博客"
-                activeLabel="同步到博客"
-                onClick={() => {
-                  setBlogSyncResult(null);
-                  setBlogSyncDialogOpen(true);
-                }}
-                disabled={!article.content}
-              />
-            ) : null}
           </div>
         </div>
         </div>
@@ -1903,20 +1920,11 @@ export default function ArticlePage({
         coverImageUrl={article.coverImageUrl}
         wordCount={plainCharCount}
         targetWords={article.wordCount}
-      />
-
-      <BlogSyncDialog
-        open={blogSyncDialogOpen}
-        onClose={() => setBlogSyncDialogOpen(false)}
-        onConfirm={handleBlogSyncConfirm}
-        busy={busy !== null}
-        title={article.title ?? article.topic}
-        summary={article.summary}
-        coverImageUrl={article.coverImageUrl}
+        blogSyncConfigured={blogSyncConfigured}
         defaultTags={article.keywords ?? ""}
       />
 
-      {!pushDialogOpen && !blogSyncDialogOpen && !previewOpen && !progress.open && !cancelConfirmOpen ? (
+      {!pushDialogOpen && !previewOpen && !progress.open && !cancelConfirmOpen ? (
       <div className="mobile-editor-dock">
         <button
           type="button"
@@ -1956,6 +1964,7 @@ export default function ArticlePage({
             type="button"
             onClick={() => {
               setPushResult(null);
+              setBlogSyncResult(null);
               setPushDialogOpen(true);
             }}
             disabled={busy !== null || !article.content}
@@ -1985,7 +1994,7 @@ function ActionChip({
   disabled?: boolean;
 }) {
   const key = activeLabel ?? label;
-  const isLoading = busy === key;
+  const isLoading = busy === key || Boolean(activeLabel && busy?.startsWith(activeLabel));
   return (
     <button
       type="button"

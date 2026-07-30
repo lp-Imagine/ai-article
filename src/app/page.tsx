@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { ArrowRight, Lightbulb, RefreshCw } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ArrowRight, FileUp, Lightbulb, Link2, RefreshCw } from "lucide-react";
 import { FieldLabel, PageHeader, SectionCard } from "@/components/app-shell";
 import { useToast } from "@/components/toast";
 import {
@@ -19,6 +19,16 @@ import {
 } from "@/lib/article-task-tracker";
 import { readApiResponse } from "@/lib/api-client";
 import { useArticleBackgroundTasks } from "@/hooks/use-article-background-tasks";
+import {
+  extractTitleFromContent,
+  IMPORT_CONTENT_MAX_CHARS,
+  IMPORT_FILE_EXTENSIONS,
+  isSupportedImportFilename,
+} from "@/lib/import-parse-helpers";
+
+type ImportSource = "paste" | "file" | "url";
+
+const IMPORT_ACCEPT = IMPORT_FILE_EXTENSIONS.join(",");
 
 type RecentArticle = {
   id: string;
@@ -66,6 +76,12 @@ export default function HomePage() {
     content: "",
     summary: "",
   });
+  const [importSource, setImportSource] = useState<ImportSource>("paste");
+  const [importUrl, setImportUrl] = useState("");
+  const [importFileName, setImportFileName] = useState<string | null>(null);
+  const [urlFetching, setUrlFetching] = useState(false);
+  const [fileDragOver, setFileDragOver] = useState(false);
+  const importFileInputRef = useRef<HTMLInputElement>(null);
   const [recent, setRecent] = useState<RecentArticle[]>([]);
   const { runningTaskIds } = useArticleBackgroundTasks();
 
@@ -111,6 +127,92 @@ export default function HomePage() {
     setImportForm((prev) => ({ ...prev, [key]: value }));
   }
 
+  function applyImportedDraft(next: {
+    title?: string | null;
+    content: string;
+    summary?: string | null;
+    fileName?: string | null;
+  }) {
+    const content = next.content.slice(0, IMPORT_CONTENT_MAX_CHARS);
+    setImportForm((prev) => {
+      const guessed = extractTitleFromContent(content);
+      return {
+        title: (next.title?.trim() || prev.title.trim() || guessed || "").slice(0, 200),
+        content,
+        summary: (next.summary?.trim() || prev.summary).slice(0, 500),
+      };
+    });
+    if (next.fileName !== undefined) {
+      setImportFileName(next.fileName);
+    }
+  }
+
+  async function readImportFile(file: File) {
+    if (!isSupportedImportFilename(file.name)) {
+      toast.show({
+        message: `仅支持 ${IMPORT_FILE_EXTENSIONS.join(" / ")} 文件`,
+        variant: "warning",
+      });
+      return;
+    }
+    if (file.size > 2_500_000) {
+      toast.show({ message: "文件过大（建议 2.5MB 以内）", variant: "warning" });
+      return;
+    }
+    const text = await file.text();
+    if (!text.trim()) {
+      toast.show({ message: "文件内容为空", variant: "warning" });
+      return;
+    }
+    const fromName = file.name.replace(/\.[^.]+$/, "").trim();
+    applyImportedDraft({
+      content: text,
+      title: fromName.length >= 2 ? fromName.slice(0, 80) : null,
+      fileName: file.name,
+    });
+    setImportSource("paste");
+    toast.show({ message: `已载入「${file.name}」，可核对后导入`, variant: "success", duration: 2800 });
+  }
+
+  async function handleImportUrlFetch() {
+    const url = importUrl.trim();
+    if (!url || urlFetching || loading) return;
+    setUrlFetching(true);
+    try {
+      const res = await fetch("/api/articles/import-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const json = await readApiResponse<{
+        title: string;
+        content: string;
+        summary: string | null;
+        sourceUrl?: string;
+      }>(res);
+      if (json.code !== 0 || !json.data?.content) {
+        throw new Error(json.message || "网页抓取失败");
+      }
+      applyImportedDraft({
+        title: json.data.title,
+        content: json.data.content,
+        summary: json.data.summary,
+        fileName: null,
+      });
+      setImportSource("paste");
+      toast.show({ message: "已从网页提取正文，请核对后导入", variant: "success", duration: 3000 });
+    } catch (err) {
+      toast.show({
+        title: "抓取失败",
+        message: err instanceof Error ? err.message : "网页抓取失败",
+        variant: "error",
+        duration: 6000,
+      });
+    } finally {
+      setUrlFetching(false);
+    }
+  }
+
   async function fetchRecent() {
     try {
       const res = await fetch("/api/articles?page=1&limit=5", { cache: "no-store" });
@@ -125,7 +227,19 @@ export default function HomePage() {
 
   async function handleImportSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!importForm.title.trim() || !importForm.content.trim() || loading) return;
+    if (!importForm.content.trim() || loading) return;
+
+    const title =
+      importForm.title.trim() ||
+      extractTitleFromContent(importForm.content)?.trim() ||
+      "";
+    if (!title) {
+      toast.show({ message: "请填写标题，或在正文开头加 # 标题", variant: "warning" });
+      return;
+    }
+    if (!importForm.title.trim()) {
+      updateImport("title", title);
+    }
     setLoading(true);
 
     try {
@@ -135,7 +249,6 @@ export default function HomePage() {
           ? window.btoa(unescape(encodeURIComponent(importForm.content)))
           : Buffer.from(importForm.content, "utf8").toString("base64");
 
-      const title = importForm.title.trim();
       const created = await fetch("/api/articles/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -330,7 +443,7 @@ export default function HomePage() {
             description={
               createMode === "ai"
                 ? "填一个主题，先让 AI 按你选的数量给出大纲方案，确定方向后再生成正文。"
-                : "粘贴已有标题与正文（纯文本或 Markdown），导入后会自动按公众号规范整理格式，再继续润色、配图与推送。"
+                : "粘贴正文、上传 Markdown/HTML，或从公开网页链接抓取。HTML 导入会自动规范化；纯文本/Markdown 导入后可选用 AI 整理格式。"
             }
             className="home-create-card"
           >
@@ -554,13 +667,124 @@ export default function HomePage() {
               </form>
             ) : (
               <form className="home-create-form space-y-6" onSubmit={handleImportSubmit}>
+                <div className="home-import-source-tabs" role="tablist" aria-label="导入方式">
+                  {(
+                    [
+                      { id: "paste" as const, label: "粘贴" },
+                      { id: "file" as const, label: "上传文件" },
+                      { id: "url" as const, label: "网页链接" },
+                    ] as const
+                  ).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={importSource === tab.id}
+                      className={`home-import-source-tab${importSource === tab.id ? " home-import-source-tab-active" : ""}`}
+                      onClick={() => setImportSource(tab.id)}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                {importSource === "file" && (
+                  <div
+                    className={`home-import-dropzone${fileDragOver ? " home-import-dropzone-active" : ""}`}
+                    onDragEnter={(e) => {
+                      e.preventDefault();
+                      setFileDragOver(true);
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setFileDragOver(true);
+                    }}
+                    onDragLeave={(e) => {
+                      e.preventDefault();
+                      setFileDragOver(false);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setFileDragOver(false);
+                      const file = e.dataTransfer.files?.[0];
+                      if (file) void readImportFile(file);
+                    }}
+                  >
+                    <input
+                      ref={importFileInputRef}
+                      type="file"
+                      accept={IMPORT_ACCEPT}
+                      className="sr-only"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = "";
+                        if (file) void readImportFile(file);
+                      }}
+                    />
+                    <FileUp size={22} className="text-[var(--accent)]" aria-hidden />
+                    <p className="mt-2 text-sm font-medium">拖拽文件到此处，或点击选择</p>
+                    <p className="mt-1 text-xs text-[var(--muted)]">
+                      支持 {IMPORT_FILE_EXTENSIONS.join(" / ")}
+                    </p>
+                    <button
+                      type="button"
+                      className="btn-ghost mt-3 text-xs"
+                      onClick={() => importFileInputRef.current?.click()}
+                    >
+                      选择文件
+                    </button>
+                    {importFileName && (
+                      <p className="mt-2 text-xs text-[var(--muted)]">最近载入：{importFileName}</p>
+                    )}
+                  </div>
+                )}
+
+                {importSource === "url" && (
+                  <div className="space-y-3">
+                    <div>
+                      <FieldLabel>公开网页链接</FieldLabel>
+                      <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                        <input
+                          type="url"
+                          value={importUrl}
+                          onChange={(e) => setImportUrl(e.target.value)}
+                          placeholder="https://… 博客、公众号文章页等"
+                          className="w-full flex-1 px-4 py-2.5 text-sm"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void handleImportUrlFetch();
+                            }
+                          }}
+                        />
+                        <button
+                          type="button"
+                          disabled={urlFetching || !importUrl.trim()}
+                          onClick={() => void handleImportUrlFetch()}
+                          className="btn-ghost inline-flex shrink-0 items-center justify-center gap-1.5 px-4 py-2.5 text-sm"
+                        >
+                          {urlFetching ? (
+                            <span className="inline-block size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                          ) : (
+                            <Link2 size={14} />
+                          )}
+                          {urlFetching ? "抓取中…" : "抓取正文"}
+                        </button>
+                      </div>
+                      <p className="mt-2 text-xs text-[var(--muted)]">
+                        会尽量抽取标题与正文；微信等站点若拦截抓取，请改用复制粘贴或导出 HTML。
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 <div>
                   <FieldLabel>标题</FieldLabel>
                   <input
                     type="text"
                     value={importForm.title}
                     onChange={(e) => updateImport("title", e.target.value)}
-                    placeholder="文章标题"
+                    placeholder="可留空，将尝试从正文自动识别"
                     className="mt-2 w-full px-4 py-3.5 text-base"
                     maxLength={200}
                   />
@@ -569,13 +793,35 @@ export default function HomePage() {
                   <FieldLabel>正文</FieldLabel>
                   <textarea
                     value={importForm.content}
-                    onChange={(e) => updateImport("content", e.target.value)}
-                    placeholder={"粘贴纯文本或 Markdown，例如：\n\n## 小节标题\n\n正文段落，可用 **加粗**。\n\n- 列表项一\n- 列表项二"}
+                    onChange={(e) => {
+                      const content = e.target.value;
+                      setImportForm((prev) => {
+                        const next = { ...prev, content };
+                        if (!prev.title.trim()) {
+                          const guessed = extractTitleFromContent(content);
+                          if (guessed) next.title = guessed;
+                        }
+                        return next;
+                      });
+                    }}
+                    onPaste={(e) => {
+                      const html = e.clipboardData.getData("text/html");
+                      const plain = e.clipboardData.getData("text/plain");
+                      // 富文本粘贴：优先保留 HTML，便于后续清理管线识别
+                      if (html && html.includes("<") && html.length > (plain?.length || 0) + 20) {
+                        e.preventDefault();
+                        applyImportedDraft({ content: html });
+                        setImportSource("paste");
+                      }
+                    }}
+                    placeholder={
+                      "粘贴纯文本、Markdown 或从网页复制的内容。例如：\n\n## 小节标题\n\n正文段落，可用 **加粗**。\n\n- 列表项一\n- 列表项二"
+                    }
                     className="mt-2 min-h-[220px] w-full px-4 py-3 text-sm leading-6"
                     required
                   />
                   <p className="mt-2 text-xs text-[var(--muted)]">
-                    支持纯文本、Markdown；若粘贴 HTML 也会尽量识别并清理。
+                    支持纯文本、Markdown、HTML；从 Word / 浏览器复制时会优先保留富文本结构。
                   </p>
                 </div>
                 <div>
@@ -590,7 +836,7 @@ export default function HomePage() {
                 </div>
                 <button
                   type="submit"
-                  disabled={loading || !importForm.title.trim() || !importForm.content.trim()}
+                  disabled={loading || !importForm.content.trim()}
                   className="home-create-submit w-full btn-primary py-3.5 text-sm"
                 >
                   {loading ? (
