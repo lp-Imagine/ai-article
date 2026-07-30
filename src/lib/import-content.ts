@@ -233,6 +233,9 @@ export function extractArticleFromHtmlPage(
     matchTagText(raw, "h1") ||
     "";
   title = decodeEntities(title).replace(/\s+/g, " ").trim().slice(0, 120);
+  // 多数 CMS / 静态站会把站点名拼到 <title> 末尾（"文章标题 | 站点名"），
+  // 这里剥离末尾的 ` | xxx` 后缀，避免与正文中重复的首 H1 叠加。
+  title = title.replace(/\s*[\|｜]\s*[^\|｜]+$/, "").trim();
 
   const summary =
     metaContent(raw, "og:description") ||
@@ -249,6 +252,7 @@ export function extractArticleFromHtmlPage(
     extractByTag(raw, "article"),
     extractByAttr(raw, "role", "main"),
     extractByTag(raw, "main"),
+    extractByClass(raw, "vp-doc"), // VitePress 文档正文
     extractByClass(raw, "post-content"),
     extractByClass(raw, "article-content"),
     extractByClass(raw, "entry-content"),
@@ -277,9 +281,32 @@ export function extractArticleFromHtmlPage(
 
   return {
     title,
-    content: bodyHtml.trim(),
+    content: stripDuplicateFirstH1(bodyHtml.trim(), title),
     summary: cleanSummary,
   };
+}
+
+/**
+ * 若 bodyHtml 中第一个 <h1> 的纯文本与 title 相同，则移除该 H1。
+ * 避免预览组件同时渲染 props.title 和正文首 H1 造成的视觉重复
+ * （常见于 VitePress / 多数 CMS 页面：frontmatter title 渲染成 H1，
+ *  而页面 <title> 标签又拼接了站点名，导致两处标题并列出现）。
+ */
+function stripDuplicateFirstH1(html: string, title: string): string {
+  if (!title) return html;
+  // 同时 normalize 零宽空格 / BOM 等不可见字符（VitePress 的 header-anchor
+  // 链接会带 \u200B），避免因不可见字符导致首 H1 与 title 判等失败。
+  const normalize = (s: string) =>
+    s.replace(/[\s\u200B-\u200D\uFEFF]/g, "").toLowerCase();
+  const normalizedTitle = normalize(title);
+  const h1Re = /<h1\b[^>]*>([\s\S]*?)<\/h1>/i;
+  const m = h1Re.exec(html);
+  if (!m) return html;
+  const innerText = normalize(m[1].replace(/<[^>]+>/g, ""));
+  if (innerText === normalizedTitle) {
+    return html.slice(0, m.index) + html.slice(m.index + m[0].length);
+  }
+  return html;
 }
 
 function metaContent(html: string, name: string): string {
@@ -436,8 +463,28 @@ function stripChromeBlocks(html: string): string {
     .replace(/<(nav|header|footer|aside|iframe|svg|form)\b[\s\S]*?<\/\1>/gi, "");
 }
 
+/**
+ * 移除 Shiki 语法高亮产生的内联 span（style 含 --shiki-light / --shiki-dark）。
+ * 这些 span 仅承担颜色信息，对正文无语义价值；嵌套多层会让代码块体积膨胀数倍，
+ * 导致导入长文时被 IMPORT_CONTENT_MAX_CHARS 截断。循环以展开嵌套。
+ */
+function stripShikiSpans(html: string): string {
+  let prev: string;
+  let cur = html;
+  do {
+    prev = cur;
+    cur = cur.replace(
+      /<span\b[^>]*style="[^"]*--shiki-(?:light|dark)[^"]*"[^>]*>([\s\S]*?)<\/span>/g,
+      "$1",
+    );
+  } while (cur !== prev);
+  return cur;
+}
+
 function stripChrome(html: string): string {
-  const { masked, blocks } = maskHtmlBlocks(html);
+  // 先清理 Shiki 高亮 span（含 pre/code 内部），避免代码块膨胀导致导入截断
+  const unshinked = stripShikiSpans(html);
+  const { masked, blocks } = maskHtmlBlocks(unshinked);
   return unmaskHtmlBlocks(stripChromeBlocks(masked), blocks).trim();
 }
 
