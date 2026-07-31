@@ -1,6 +1,7 @@
 import type { BlogSection } from "@/lib/blog-sync-constants";
 import { BLOG_SECTIONS } from "@/lib/blog-sync-constants";
 import { db } from "@/lib/db";
+import { generateHotTopics } from "@/lib/ai";
 
 export type TopicIdeaSource = "history" | "template" | "hot" | "mixed";
 
@@ -329,6 +330,53 @@ function buildHotCandidates(section: BlogSection | null, rnd: () => number): Can
   }));
 }
 
+type LlmHotTopic = { topic: string; angle: string; tags: string[] };
+
+/** LLM 热点缓存：按 section 缓存 1 小时，避免每次刷新都调用模型 */
+const LLM_HOT_CACHE_TTL_MS = 60 * 60 * 1000;
+const llmHotCache = new Map<string, { expiresAt: number; topics: LlmHotTopic[] }>();
+
+/**
+ * 拉取 LLM 生成的当下热点选题（前端 / AI / Agent / 程序员方向），带 1 小时缓存。
+ * 未配置 AI 或调用失败时返回空数组，由静态 HOT_TOPIC_SEEDS 兜底。
+ */
+async function fetchLlmHotTopics(section: BlogSection | null, count: number): Promise<LlmHotTopic[]> {
+  const key = section ?? "all";
+  const cached = llmHotCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.topics.slice(0, count);
+  }
+
+  try {
+    const topics = await generateHotTopics({
+      section,
+      sectionTags: section ? SECTION_TAGS[section] : [],
+      count: Math.min(10, count + 2),
+    });
+    if (topics.length > 0) {
+      llmHotCache.set(key, { expiresAt: Date.now() + LLM_HOT_CACHE_TTL_MS, topics });
+    }
+    return topics.slice(0, count);
+  } catch (error) {
+    console.warn(
+      "[topic-ideas] fetchLlmHotTopics failed, fallback to static seeds:",
+      error instanceof Error ? error.message : error,
+    );
+    return [];
+  }
+}
+
+/** LLM 热点候选：baseScore 高于静态热点（0.7），让新鲜选题优先展示 */
+function buildLlmHotCandidates(llmTopics: LlmHotTopic[]): Candidate[] {
+  return llmTopics.map((t) => ({
+    topic: t.topic,
+    reason: t.angle || "来自 AI 生成的当下热点方向，可结合你的写作风格快速落地。",
+    source: "hot" as const,
+    tags: t.tags.length > 0 ? ["AI 热点", ...t.tags].slice(0, 4) : ["AI 热点"],
+    baseScore: 0.86,
+  }));
+}
+
 function buildMixedCandidates(
   historyTopics: string[],
   includeHot: boolean,
@@ -443,16 +491,20 @@ export async function getTopicIdeas(input: TopicIdeasRequest): Promise<TopicIdea
   if (pending) return pending;
 
   const task = (async (): Promise<TopicIdeasResult> => {
-    const recent = await db.article.findMany({
-      where: { userId: input.userId },
-      orderBy: { updatedAt: "desc" },
-      take: 40,
-      select: {
-        topic: true,
-        title: true,
-        keywords: true,
-      },
-    });
+    // DB 历史文章与 LLM 热点生成并行，避免串行拉长等待
+    const [recent, llmHotTopics] = await Promise.all([
+      db.article.findMany({
+        where: { userId: input.userId },
+        orderBy: { updatedAt: "desc" },
+        take: 40,
+        select: {
+          topic: true,
+          title: true,
+          keywords: true,
+        },
+      }),
+      includeHot ? fetchLlmHotTopics(section, 6) : Promise.resolve([]),
+    ]);
 
     const historyTopics = recent
       .map((a) => (a.title?.trim() || a.topic || "").trim())
@@ -466,10 +518,11 @@ export async function getTopicIdeas(input: TopicIdeasRequest): Promise<TopicIdea
     const history = buildHistoryCandidates(historyTopics, section, rnd);
     const templates = buildTemplateCandidates(section);
     const mixed = buildMixedCandidates(historyTopics, includeHot, rnd);
+    const llmHot = includeHot ? buildLlmHotCandidates(llmHotTopics) : [];
     const hot = includeHot ? buildHotCandidates(section, rnd) : [];
 
     const ideas = dedupeAndRank(
-      [...history, ...templates, ...mixed, ...hot],
+      [...llmHot, ...history, ...templates, ...mixed, ...hot],
       historyTopics,
       count,
       seed,
@@ -478,7 +531,8 @@ export async function getTopicIdeas(input: TopicIdeasRequest): Promise<TopicIdea
     const result: TopicIdeasResult = {
       ideas,
       fromCache: false,
-      degradedHot: false,
+      // LLM 热点为空时标记降级：本次热点全部来自静态库
+      degradedHot: includeHot && llmHotTopics.length === 0,
     };
     cache.set(key, { expiresAt: Date.now() + CACHE_TTL_MS, value: result });
     return result;

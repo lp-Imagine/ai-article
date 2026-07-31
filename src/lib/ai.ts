@@ -11,6 +11,7 @@ type TextRole =
   | "content"
   | "summary"
   | "titles"
+  | "topic-ideas"
   | "cover-prompt"
   | "polish"
   | "expand"
@@ -236,6 +237,7 @@ function getLlmTimeoutMs(role: TextRole): number {
     return 480_000; // 8 分钟
   }
   if (role === "outline") return 420_000; // 7 分钟
+  if (role === "topic-ideas") return 45_000; // 选题热点需快速返回，失败即降级静态库
   return 180_000; // 其它短任务 3 分钟
 }
 
@@ -2120,6 +2122,86 @@ export async function generateTitles(input: {
     `如果你也在为${topic}感到焦虑，试试这个办法`,
     `我用 2 年踩完${topic}的所有坑，总结出这几点`,
   ].map((text, i) => ({ text, style: fallbackStyles[i] ?? "备选" }));
+}
+
+/**
+ * LLM 生成当下热点选题（前端 / AI / Agent / 程序员方向）。
+ * 用于「给个灵感」增强：替代写死的静态热点库，让选题随时间保持新鲜。
+ * 未配置 AI 或调用失败时返回空数组，由调用方降级到静态热点。
+ */
+export async function generateHotTopics(input: {
+  section?: string | null;
+  sectionTags?: string[];
+  count?: number;
+}): Promise<Array<{ topic: string; angle: string; tags: string[] }>> {
+  if (!isAiConfigured()) return [];
+
+  const count = Math.max(4, Math.min(10, input.count ?? 6));
+  const focusAreas =
+    input.sectionTags && input.sectionTags.length > 0
+      ? input.sectionTags.join("、")
+      : "前端工程、AI 应用、AI Agent / 编程助手、程序员效率与工程实践";
+  const today = new Date().toISOString().slice(0, 10);
+
+  const prompt: ChatMessage[] = [
+    {
+      role: "system",
+      content: `你是资深技术内容策划，长期跟踪前端、AI、AI Agent、程序员效率领域的社区动态（GitHub、Hacker News、掘金、X、公众号）。
+
+【任务】生成 ${count} 个「当下有讨论度」的公众号选题。
+
+【硬性要求】
+- 选题贴合 ${today} 前后 3-6 个月内的技术热点：新发布的工具/框架/模型、正在演进的实践、持续争议的工程话题
+- 领域聚焦：${focusAreas}
+- 每个选题要落到**具体**工具名 / 版本 / 协议 / 实践（如 MCP、Cursor Rules、RSC、Tailwind v4、向量数据库），禁止"AI 时代""大模型趋势"这类空泛大词
+- 避免写烂的入门科普（什么是 React / JS 基础语法），面向有 1-3 年经验的工程师
+- 角度多样：踩坑复盘 / 对比选型 / 工程落地 / 趋势判断 / 效率工具，至少覆盖 3 种
+- 选题 12-24 字，可含具体技术名词；不要标题党、不要震惊体
+
+【输出】
+JSON：{ "topics": [{ "topic": string, "angle": string, "tags": string[] }] }
+- topic：选题（12-24 字）
+- angle：一句话说明"为什么现在写这篇有人看"（≤30 字）
+- tags：2-3 个标签`,
+    },
+    {
+      role: "user",
+      content: JSON.stringify({
+        date: today,
+        section: input.section ?? "all",
+        focusAreas,
+        count,
+      }),
+    },
+  ];
+
+  try {
+    const raw = await callChat(prompt, {
+      jsonMode: true,
+      maxTokens: 1500,
+      role: "topic-ideas",
+      temperature: 0.85,
+    });
+    const parsed = safeParse<{
+      topics?: Array<{ topic?: string; angle?: string; tags?: string[] }>;
+    }>(raw, {});
+    return (parsed.topics ?? [])
+      .map((t) => ({
+        topic: String(t.topic ?? "").trim(),
+        angle: String(t.angle ?? "").trim(),
+        tags: Array.isArray(t.tags)
+          ? t.tags.map((x) => String(x).trim()).filter(Boolean).slice(0, 3)
+          : [],
+      }))
+      .filter((t) => t.topic.length >= 8 && t.topic.length <= 32)
+      .slice(0, count);
+  } catch (error) {
+    console.warn(
+      "[generateHotTopics] LLM failed, caller should fallback to static seeds:",
+      error instanceof Error ? error.message : error,
+    );
+    return [];
+  }
 }
 
 export async function generateSummary(input: {
