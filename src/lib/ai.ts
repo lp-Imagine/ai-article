@@ -237,7 +237,7 @@ function getLlmTimeoutMs(role: TextRole): number {
     return 480_000; // 8 分钟
   }
   if (role === "outline") return 420_000; // 7 分钟
-  if (role === "topic-ideas") return 45_000; // 选题热点需快速返回，失败即降级静态库
+  if (role === "topic-ideas") return 25_000; // 灵感热点：命中缓存秒回；冷启动等模型，超时降级静态库
   return 180_000; // 其它短任务 3 分钟
 }
 
@@ -2133,36 +2133,41 @@ export async function generateHotTopics(input: {
   section?: string | null;
   sectionTags?: string[];
   count?: number;
+  /** 换一批批次号，促使模型换一批不同选题 */
+  batch?: number;
 }): Promise<Array<{ topic: string; angle: string; tags: string[] }>> {
   if (!isAiConfigured()) return [];
 
   const count = Math.max(4, Math.min(10, input.count ?? 6));
+  const batch = Number.isFinite(input.batch) ? Math.max(0, Number(input.batch)) : 0;
   const focusAreas =
     input.sectionTags && input.sectionTags.length > 0
       ? input.sectionTags.join("、")
-      : "前端工程、AI 应用、AI Agent / 编程助手、程序员效率与工程实践";
+      : "前端工程、全栈实践、AI 应用、AI Agent / 编程助手、TypeScript / Node 工程化";
   const today = new Date().toISOString().slice(0, 10);
 
   const prompt: ChatMessage[] = [
     {
       role: "system",
-      content: `你是资深技术内容策划，长期跟踪前端、AI、AI Agent、程序员效率领域的社区动态（GitHub、Hacker News、掘金、X、公众号）。
+      content: `你是资深技术内容策划，长期跟踪前端、全栈、AI、AI Agent、程序员效率领域的社区动态（GitHub、Hacker News、掘金、X、公众号）。
 
 【任务】生成 ${count} 个「当下有讨论度」的公众号选题。
 
 【硬性要求】
 - 选题贴合 ${today} 前后 3-6 个月内的技术热点：新发布的工具/框架/模型、正在演进的实践、持续争议的工程话题
 - 领域聚焦：${focusAreas}
-- 每个选题要落到**具体**工具名 / 版本 / 协议 / 实践（如 MCP、Cursor Rules、RSC、Tailwind v4、向量数据库），禁止"AI 时代""大模型趋势"这类空泛大词
+- **比例约束**：至少 80% 选题属于前端 / 全栈 / AI / Agent / 工程效率；综合向（职场鸡汤、理财、生活）最多 1 条，且必须和技术人处境强相关
+- 每个选题要落到**具体**工具名 / 版本 / 协议 / 实践（如 MCP、Cursor Rules、RSC、Tailwind v4、向量数据库、Next.js），禁止"AI 时代""大模型趋势"这类空泛大词
 - 避免写烂的入门科普（什么是 React / JS 基础语法），面向有 1-3 年经验的工程师
 - 角度多样：踩坑复盘 / 对比选型 / 工程落地 / 趋势判断 / 效率工具，至少覆盖 3 种
 - 选题 12-24 字，可含具体技术名词；不要标题党、不要震惊体
+${batch > 0 ? `- 这是第 ${batch + 1} 批刷新：请给出与常见首批选题明显不同的新角度/新工具，避免重复上一批` : ""}
 
 【输出】
 JSON：{ "topics": [{ "topic": string, "angle": string, "tags": string[] }] }
 - topic：选题（12-24 字）
 - angle：一句话说明"为什么现在写这篇有人看"（≤30 字）
-- tags：2-3 个标签`,
+- tags：2-3 个标签（优先：前端 / 全栈 / AI / Agent / 工程）`,
     },
     {
       role: "user",
@@ -2171,6 +2176,8 @@ JSON：{ "topics": [{ "topic": string, "angle": string, "tags": string[] }] }
         section: input.section ?? "all",
         focusAreas,
         count,
+        batch,
+        refresh: batch > 0,
       }),
     },
   ];

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { PenLine, Send, ShieldCheck, Sparkles } from "lucide-react";
+import { ICP_BEIAN_NO, ICP_BEIAN_URL } from "@/lib/site-beian";
 
 type AuthShellProps = {
   mode: "login" | "register";
@@ -120,6 +121,25 @@ export function AuthShell({ mode, children }: AuthShellProps) {
           </div>
         </main>
       </div>
+
+      <footer className="auth-beian">
+        <a
+          className="auth-beian-chip"
+          href={ICP_BEIAN_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="查询工信部备案信息"
+        >
+          <span className="auth-beian-mark" aria-hidden="true" />
+          <span className="auth-beian-meta">
+            <span className="auth-beian-label">ICP</span>
+            <span className="auth-beian-no">{ICP_BEIAN_NO}</span>
+          </span>
+          <span className="auth-beian-arrow" aria-hidden="true">
+            ↗
+          </span>
+        </a>
+      </footer>
     </div>
   );
 }

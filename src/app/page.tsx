@@ -49,10 +49,10 @@ const statusMap: Record<string, { label: string; color: string }> = {
 };
 
 const workflowSteps = [
-  { step: "01", label: "填写主题" },
-  { step: "02", label: "选择大纲" },
-  { step: "03", label: "生成正文" },
-  { step: "04", label: "推送草稿" },
+  { step: "01", label: "定主题" },
+  { step: "02", label: "选大纲" },
+  { step: "03", label: "出正文" },
+  { step: "04", label: "推草稿" },
 ];
 
 type ApiResponse<T> = { code: number; message: string; data: T };
@@ -87,26 +87,44 @@ export default function HomePage() {
 
   // Topic Ideas state
   type TopicIdea = { topic: string; reason: string; source: string; score: number; tags?: string[] };
+  type IdeasFilter = "all" | "history" | "hot";
   const [ideas, setIdeas] = useState<TopicIdea[]>([]);
   const [ideasLoading, setIdeasLoading] = useState(false);
   const [ideasCursor, setIdeasCursor] = useState(0);
-  const [ideasFilter, setIdeasFilter] = useState<"all" | "history" | "hot">("all");
+  const [ideasFilter, setIdeasFilter] = useState<IdeasFilter>("all");
   const [ideasOpen, setIdeasOpen] = useState(false);
+  const [ideasEmptyReason, setIdeasEmptyReason] = useState<string | null>(null);
 
-  async function fetchIdeas(cursor = 0) {
+  async function fetchIdeas(cursor = 0, filter: IdeasFilter = ideasFilter, opts?: { refresh?: boolean }) {
+    if (filter !== ideasFilter || opts?.refresh) {
+      setIdeas([]);
+      setIdeasEmptyReason(null);
+    }
     setIdeasLoading(true);
     try {
-      const params = new URLSearchParams({ count: "8", cursor: String(cursor) });
-      if (ideasFilter === "hot") params.set("includeHot", "true");
-      if (ideasFilter === "history") params.set("includeHot", "false");
+      const params = new URLSearchParams({
+        count: "8",
+        cursor: String(cursor),
+        mode: filter,
+      });
+      // 换一批：强制重新调模型生成热点（历史模式本身不走 LLM）
+      if (opts?.refresh && filter !== "history") {
+        params.set("refresh", "1");
+      }
       const res = await fetch(`/api/topic-ideas?${params}`, { cache: "no-store" });
       const json = await res.json();
-      if (json.code === 0 && json.data?.ideas?.length) {
-        setIdeas(json.data.ideas);
+      if (json.code === 0 && json.data) {
+        const nextIdeas = (json.data.ideas ?? []) as TopicIdea[];
+        setIdeas(nextIdeas);
         setIdeasCursor(cursor);
+        setIdeasFilter(filter);
         setIdeasOpen(true);
+        setIdeasEmptyReason(nextIdeas.length ? null : json.data.emptyReason || "暂时没有建议");
+        if (!nextIdeas.length && !json.data.emptyReason) {
+          toast.show({ message: "暂时没有建议，请稍后再试", variant: "warning" });
+        }
       } else {
-        toast.show({ message: "暂时没有建议，试试换个筛选", variant: "warning" });
+        toast.show({ message: "暂时没有建议，请稍后再试", variant: "warning" });
       }
     } catch {
       toast.show({ message: "获取灵感失败，请重试", variant: "error" });
@@ -117,6 +135,7 @@ export default function HomePage() {
 
   useEffect(() => {
     fetchRecent();
+    void fetch("/api/topic-ideas?count=8&cursor=0&mode=all", { cache: "no-store" }).catch(() => {});
   }, []);
 
   function update<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
@@ -421,9 +440,9 @@ export default function HomePage() {
   return (
     <>
       <PageHeader
-        eyebrow="Editorial Workspace"
+        eyebrow="Write · Polish · Publish"
         title="Draftly · 内容工作台"
-        description="从一个主题出发，到推送到公众号草稿箱。也可导入已有手写稿，继续润色、配图与推送。"
+        description="主题一填，大纲、正文、配图到公众号草稿箱一次做完；已有文稿也能导入继续打磨。"
         className="home-page-header"
       />
 
@@ -442,8 +461,8 @@ export default function HomePage() {
             title="快速开始"
             description={
               createMode === "ai"
-                ? "填一个主题，先让 AI 按你选的数量给出大纲方案，确定方向后再生成正文。"
-                : "粘贴正文、上传 Markdown/HTML，或从公开网页链接抓取。HTML 导入会自动规范化；纯文本/Markdown 导入后可选用 AI 整理格式。"
+                ? "写好主题后生成多套大纲，选定方向再出正文。"
+                : "粘贴、上传或抓取网页；导入后可润色、配图并推送。"
             }
             className="home-create-card"
           >
@@ -470,8 +489,24 @@ export default function HomePage() {
 
             {createMode === "ai" ? (
               <form className="home-create-form space-y-6" onSubmit={handleSubmit}>
-                <div>
-                  <FieldLabel>主题 / 标题</FieldLabel>
+                <div className="home-topic-block">
+                  <div className="home-topic-head">
+                    <FieldLabel>主题 / 标题</FieldLabel>
+                    <button
+                      type="button"
+                      disabled={ideasLoading}
+                      onClick={() => (ideasOpen ? setIdeasOpen(false) : fetchIdeas(0))}
+                      className={`home-inspire-btn${ideasOpen ? " home-inspire-btn-active" : ""}`}
+                      aria-expanded={ideasOpen}
+                    >
+                      {ideasLoading ? (
+                        <span className="home-inspire-spinner" aria-hidden />
+                      ) : (
+                        <Lightbulb size={14} strokeWidth={2.1} />
+                      )}
+                      <span>{ideasOpen ? "收起灵感" : "给我灵感"}</span>
+                    </button>
+                  </div>
                   <input
                     type="text"
                     value={form.topic}
@@ -479,82 +514,126 @@ export default function HomePage() {
                     placeholder="例如：用 React 做流式 AI 对话界面 / 普通人如何用 AI 提升效率"
                     className="mt-2 w-full px-4 py-3.5 text-base"
                   />
-                </div>
 
-                <div className="flex items-end gap-2">
-                  <button
-                    type="button"
-                    disabled={ideasLoading}
-                    onClick={() => ideasOpen ? setIdeasOpen(false) : fetchIdeas(0)}
-                    className="btn-ghost inline-flex items-center gap-1.5 text-xs whitespace-nowrap py-1.5 px-3 rounded-lg border border-[var(--line)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors"
-                  >
-                    {ideasLoading ? (
-                      <span className="inline-block size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                    ) : (
-                      <Lightbulb size={14} />
-                    )}
-                    {ideasOpen ? "收起灵感" : "给我灵感"}
-                  </button>
-                </div>
-
-                {ideasOpen && ideas.length > 0 && (
-                  <div className="topic-ideas-panel rounded-xl border border-[var(--line)] bg-[var(--surface)] p-3 space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-1.5">
-                        {(["all", "history", "hot"] as const).map((f) => (
-                          <button
-                            key={f}
-                            type="button"
-                            onClick={() => { setIdeasFilter(f); fetchIdeas(0); }}
-                            className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-                              ideasFilter === f
-                                ? "bg-[var(--accent-soft)] text-[var(--accent)]"
-                                : "text-[var(--muted)] hover:text-[var(--foreground)]"
-                            }`}
-                          >
-                            {f === "all" ? "综合" : f === "history" ? "历史" : "热点"}
-                          </button>
-                        ))}
+                  {ideasOpen && (
+                    <div className="topic-ideas-panel" aria-live="polite">
+                      <div className="topic-ideas-toolbar">
+                        <div className="topic-ideas-filters" role="tablist" aria-label="灵感筛选">
+                          {(
+                            [
+                              { id: "all" as const, label: "综合", hint: "历史 + 热点混合" },
+                              { id: "history" as const, label: "历史", hint: "基于你写过的文章" },
+                              { id: "hot" as const, label: "热点", hint: "当下技术热点" },
+                            ] as const
+                          ).map((f) => (
+                            <button
+                              key={f.id}
+                              type="button"
+                              role="tab"
+                              title={f.hint}
+                              aria-selected={ideasFilter === f.id}
+                              disabled={ideasLoading}
+                              onClick={() => {
+                                if (ideasFilter === f.id) return;
+                                void fetchIdeas(0, f.id);
+                              }}
+                              className={`topic-ideas-filter${ideasFilter === f.id ? " topic-ideas-filter-active" : ""}`}
+                            >
+                              {f.label}
+                            </button>
+                          ))}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void fetchIdeas(ideasCursor + 1, ideasFilter, { refresh: true })}
+                          disabled={ideasLoading || (ideasFilter === "history" && ideas.length === 0)}
+                          className="topic-ideas-refresh"
+                        >
+                          <RefreshCw size={12} className={ideasLoading ? "animate-spin" : ""} />
+                          换一批
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => fetchIdeas(ideasCursor + 1)}
-                        disabled={ideasLoading}
-                        className="btn-ghost inline-flex items-center gap-1 text-xs"
-                      >
-                        <RefreshCw size={12} className={ideasLoading ? "animate-spin" : ""} />
-                        换一批
-                      </button>
+
+                      <p className="topic-ideas-caption">
+                        {ideasFilter === "history"
+                          ? "从你最近写过的主题延伸，不含通用热点。"
+                          : ideasFilter === "hot"
+                            ? "当下前端 / AI / 全栈热点，不含历史偏好。"
+                            : "历史延伸与技术热点混合，点选一条填入主题。"}
+                      </p>
+
+                      {ideasLoading && ideas.length === 0 ? (
+                        <div className="topic-ideas-loading">
+                          <span className="home-inspire-spinner" aria-hidden />
+                          <span>正在挑选选题…</span>
+                        </div>
+                      ) : ideas.length === 0 ? (
+                        <div className="topic-ideas-empty">
+                          <p>{ideasEmptyReason || "暂时没有建议"}</p>
+                          {ideasFilter === "history" ? (
+                            <button
+                              type="button"
+                              className="topic-ideas-empty-action"
+                              onClick={() => void fetchIdeas(0, "hot")}
+                            >
+                              看看热点
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <ul className="topic-ideas-list">
+                          {ideas.map((idea, idx) => {
+                            const sourceLabel =
+                              idea.source === "history"
+                                ? "历史"
+                                : idea.source === "hot"
+                                  ? "热点"
+                                  : idea.source === "mixed"
+                                    ? "混合"
+                                    : "模板";
+                            return (
+                              <li key={`${idea.topic}-${idx}`}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    update("topic", idea.topic);
+                                    setIdeasOpen(false);
+                                    toast.show({
+                                      message: "已填入主题，可直接生成大纲",
+                                      variant: "success",
+                                      duration: 2500,
+                                    });
+                                    fetch("/api/topic-ideas", {
+                                      method: "POST",
+                                      headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({ topic: idea.topic }),
+                                    }).catch(() => {});
+                                  }}
+                                  className="topic-idea-item"
+                                >
+                                  <div className="topic-idea-item-top">
+                                    <span className={`topic-idea-source topic-idea-source-${idea.source}`}>
+                                      {sourceLabel}
+                                    </span>
+                                    {idea.tags?.find((t) => t !== sourceLabel) ? (
+                                      <span className="topic-idea-tag">
+                                        {idea.tags.find((t) => t !== sourceLabel)}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  <p className="topic-idea-title">{idea.topic}</p>
+                                  {idea.reason ? (
+                                    <p className="topic-idea-reason">{idea.reason}</p>
+                                  ) : null}
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
                     </div>
-                    <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {ideas.map((idea, idx) => (
-                        <li key={idx}>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              update("topic", idea.topic);
-                              setIdeasOpen(false);
-                              toast.show({ message: "已填入主题，可直接生成大纲", variant: "success", duration: 2500 });
-                              fetch("/api/topic-ideas", {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ topic: idea.topic }),
-                              }).catch(() => {});
-                            }}
-                            className="w-full text-left rounded-lg border border-[var(--line)] p-2.5 hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] transition-colors group"
-                          >
-                            <p className="text-sm font-medium leading-snug line-clamp-2 group-hover:text-[var(--accent)]">
-                              {idea.topic}
-                            </p>
-                            <p className="mt-1 text-xs text-[var(--muted)] line-clamp-1">
-                              {idea.reason}
-                            </p>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+                  )}
+                </div>
 
                 <div>
                   <FieldLabel>关键词</FieldLabel>
@@ -858,7 +937,7 @@ export default function HomePage() {
 
         <SectionCard
           title="最近文章"
-          description="继续编辑未完成的内容"
+          description="未完成的继续改，已推送的也能回来改。"
           className="h-fit"
           headerExtra={
             <button onClick={fetchRecent} className="btn-ghost inline-flex items-center gap-1 text-xs">

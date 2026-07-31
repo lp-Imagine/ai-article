@@ -13,7 +13,15 @@ export async function GET(request: Request) {
   const count = Number(searchParams.get("count") ?? "8") || 8;
   const section = searchParams.get("section") || undefined;
   const includeHot = searchParams.get("includeHot") !== "false";
+  const modeParam = searchParams.get("mode");
+  const mode =
+    modeParam === "all" || modeParam === "history" || modeParam === "hot"
+      ? modeParam
+      : undefined;
   const cursor = Number(searchParams.get("cursor") ?? "0") || 0;
+  const refresh =
+    searchParams.get("refresh") === "1" ||
+    searchParams.get("refresh") === "true";
 
   // 注入用户级 AI 配置（设置页保存的 key），否则 LLM 热点生成读不到 key 只能降级
   return withAuthUserConfig(user, async () => {
@@ -23,7 +31,9 @@ export async function GET(request: Request) {
         count,
         section: section as Parameters<typeof getTopicIdeas>[0]["section"],
         includeHot,
+        mode,
         cursor,
+        refresh,
       });
       metrics.served += result.ideas.length;
       return NextResponse.json({
