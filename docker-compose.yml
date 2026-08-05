@@ -26,6 +26,7 @@ services:
     ports:
       - "${APP_BIND:-127.0.0.1:3000}:3000"
     environment:
+      TZ: ${TZ:-Asia/Shanghai}
       DATABASE_URL: postgresql://${POSTGRES_USER:-draftly}:${POSTGRES_PASSWORD:-draftly}@db:5432/${POSTGRES_DB:-draftly}?connection_limit=10&pool_timeout=20
       COOKIE_SECURE: ${COOKIE_SECURE:-0}
       SUPER_ADMIN_USERNAME: ${SUPER_ADMIN_USERNAME:-}

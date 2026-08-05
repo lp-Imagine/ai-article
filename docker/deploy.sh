@@ -179,6 +179,7 @@ export POSTGRES_DB="${POSTGRES_DB:-draftly}"
 export JOB_MAX_CONCURRENT_PER_USER="${JOB_MAX_CONCURRENT_PER_USER:-2}"
 export JOB_DAILY_LIMIT="${JOB_DAILY_LIMIT:-50}"
 export JOB_DAILY_LIMIT_ENABLED="${JOB_DAILY_LIMIT_ENABLED:-1}"
+export TZ="${TZ:-Asia/Shanghai}"
 
 echo "==> Docker Compose 构建并启动（Postgres + App）"
 COMPOSE=(docker compose)
