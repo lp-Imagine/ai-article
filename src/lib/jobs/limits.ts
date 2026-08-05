@@ -7,6 +7,7 @@ export const JOB_TYPE_LABELS: Record<GenerationJobType, string> = {
   inline_images: "生成章节配图",
   polish: "全文润色",
   expand: "扩写正文",
+  quick_generate: "快捷生成",
 };
 
 /** 根据 type + payload 解析对外展示文案（polish + reformat → 整理格式） */

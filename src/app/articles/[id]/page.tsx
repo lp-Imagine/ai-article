@@ -4,7 +4,9 @@ import Link from "next/link";
 import { use, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
+  AlertCircle,
   Check,
+  ChevronDown,
   Copy,
   Eye,
   FileText,
@@ -1816,36 +1818,44 @@ export default function ArticlePage({
               </div>
             ) : null}
             {pushRecords.length > 0 ? (
-              <details className="push-inline">
-                <summary className="cursor-pointer text-sm font-medium">
-                  发布历史 · {pushRecords.length} 条
+              <details className="push-history">
+                <summary className="push-history-summary">
+                  <span>
+                    发布历史
+                    <span className="push-history-count">{pushRecords.length} 条</span>
+                  </span>
+                  <ChevronDown size={15} className="push-history-chevron" />
                 </summary>
-                <div className="mt-3 w-full space-y-2">
-                  {pushRecords.map((r) => (
-                    <div key={r.id} className="flex items-center justify-between gap-3 text-xs">
-                      <div className="flex items-center gap-2">
-                        <span className={`badge ${r.status === "success" ? "badge-success" : "badge-danger"}`}>
-                          {r.status === "success" ? "成功" : "失败"}
-                        </span>
-                        <span className="badge badge-muted">
-                          {r.channel === "blog" ? "博客" : "微信"}
-                        </span>
-                        <span className="text-[var(--muted)]">
-                          {new Date(r.createdAt).toLocaleString("zh-CN", {
-                            month: "2-digit",
-                            day: "2-digit",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </span>
+                <div className="push-history-list">
+                  {pushRecords.map((r) => {
+                    const isSuccess = r.status === "success";
+                    return (
+                      <div key={r.id} className="push-history-item">
+                        <div className="push-history-meta">
+                          <span className={`badge ${isSuccess ? "badge-success" : "badge-danger"}`}>
+                            {isSuccess ? "成功" : "失败"}
+                          </span>
+                          <span className="badge badge-muted">
+                            {r.channel === "blog" ? "博客" : "微信"}
+                          </span>
+                          <span className="push-history-time">
+                            {new Date(r.createdAt).toLocaleString("zh-CN", {
+                              month: "2-digit",
+                              day: "2-digit",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </span>
+                        </div>
+                        {r.errorMessage ? (
+                          <div className="push-history-error">
+                            <AlertCircle size={13} className="shrink-0 push-history-error-icon" />
+                            <span title={r.errorMessage}>{r.errorMessage}</span>
+                          </div>
+                        ) : null}
                       </div>
-                      {r.errorMessage ? (
-                        <span className="truncate text-[var(--danger)]" title={r.errorMessage}>
-                          {r.errorMessage}
-                        </span>
-                      ) : null}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </details>
             ) : null}

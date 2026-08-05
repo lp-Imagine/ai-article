@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 
 type Props = {
   open: boolean;
   title: string;
   description?: string;
+  children?: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   onConfirm: () => void;
@@ -16,6 +17,7 @@ export function ConfirmDialog({
   open,
   title,
   description,
+  children,
   confirmLabel = "确定",
   cancelLabel = "取消",
   onConfirm,
@@ -49,6 +51,7 @@ export function ConfirmDialog({
             {title}
           </h2>
           {description ? <p className="confirm-dialog-desc">{description}</p> : null}
+          {children}
         </div>
         <div className="confirm-dialog-actions">
           <button type="button" className="btn-secondary confirm-dialog-btn" onClick={onCancel}>

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Clock3, Home, LogOut, Settings, Sparkles, Users } from "lucide-react";
+import { CalendarClock, Clock3, Home, LogOut, Settings, Sparkles, Users } from "lucide-react";
 import clsx from "clsx";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { BackgroundTaskFloat } from "@/components/background-task-float";
@@ -20,12 +20,14 @@ type MeUser = {
 const baseNavItems = [
   { href: "/", label: "工作台", icon: Home, tour: "nav-home" },
   { href: "/history", label: "历史", icon: Clock3, tour: "nav-history" },
+  { href: "/schedules", label: "定时任务", icon: CalendarClock, tour: "nav-schedules" },
   { href: "/settings", label: "设置", icon: Settings, tour: "nav-settings" },
 ];
 
 function pageTitleForPath(pathname: string): string | null {
   if (pathname === "/") return "工作台";
   if (pathname === "/history") return "历史记录";
+  if (pathname === "/schedules") return "定时任务";
   if (pathname === "/settings") return "设置";
   if (pathname.startsWith("/articles/")) return "文章编辑";
   if (pathname.startsWith("/admin/users")) return "用户管理";

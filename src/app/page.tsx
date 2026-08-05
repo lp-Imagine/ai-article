@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, FileUp, Lightbulb, Link2, RefreshCw } from "lucide-react";
+import { ArrowRight, FileUp, Lightbulb, Link2, RefreshCw, Zap } from "lucide-react";
 import { FieldLabel, PageHeader, SectionCard } from "@/components/app-shell";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useToast } from "@/components/toast";
 import {
   clearArticleBackgroundTask,
@@ -71,6 +72,8 @@ export default function HomePage() {
     goal: "知识分享",
     outlineCount: 3,
   });
+  const [quickGenerateConfirm, setQuickGenerateConfirm] = useState<string | null>(null);
+  const [quickAutoPush, setQuickAutoPush] = useState(false);
   const [importForm, setImportForm] = useState({
     title: "",
     content: "",
@@ -437,6 +440,108 @@ export default function HomePage() {
     }
   }
 
+  /**
+   * 快捷生成：点按钮时先弹确认框，可选择生成后是否自动推送微信草稿。
+   * 一键完成 大纲 → 自动采用方案 → 正文（含精炼 + 封面）→（可选）推送。
+   */
+  function openQuickGenerateConfirm(topicOverride?: string) {
+    const topic = (topicOverride ?? form.topic).trim();
+    if (!topic || loading) return;
+    setQuickAutoPush(false);
+    setQuickGenerateConfirm(topic);
+  }
+
+  async function handleQuickGenerate(topic: string, autoPush: boolean) {
+    if (!topic || loading) return;
+    setLoading(true);
+
+    try {
+      const res = await fetch("/api/articles/quick-generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic,
+          keywords: form.keywords,
+          style: form.style,
+          wordCount: Number(form.wordCount),
+          audience: form.audience,
+          goal: form.goal,
+          outlineCount: form.outlineCount,
+          autoPush,
+        }),
+      });
+      const json = (await res.json()) as ApiResponse<{
+        article: { id: string };
+        jobId: string;
+      }>;
+      if (json.code !== 0) {
+        throw new Error(json.message || "快捷生成失败");
+      }
+      const articleId = json.data.article.id;
+      const jobId = json.data.jobId;
+
+      startArticleBackgroundTask({
+        articleId,
+        label: "快捷生成",
+        title: "正在快捷生成文章",
+        articleLabel: topic,
+        startedAt: Date.now(),
+        statusAtStart: "draft",
+        contentLengthAtStart: 0,
+        jobId,
+      });
+
+      void waitForGenerationJob(jobId)
+        .then((job) => {
+          clearArticleBackgroundTask(articleId);
+          if (job.status === "failed" || job.status === "cancelled") {
+            emitArticleBackgroundTaskFinished({
+              articleId,
+              label: "快捷生成",
+              status: "failed",
+              error: job.error || "快捷生成失败",
+            });
+            toast.show({
+              title: "快捷生成失败",
+              message: job.error || "任务执行失败",
+              variant: "error",
+              duration: 6000,
+            });
+          } else {
+            emitArticleBackgroundTaskFinished({
+              articleId,
+              label: "快捷生成",
+              status: "succeeded",
+            });
+            toast.show({
+              message: "快捷生成完成，大纲与正文已就绪",
+              variant: "success",
+            });
+          }
+        })
+        .catch((err) => {
+          clearArticleBackgroundTask(articleId);
+          emitArticleBackgroundTaskFinished({
+            articleId,
+            label: "快捷生成",
+            status: "failed",
+            error: err instanceof Error ? err.message : "快捷生成失败",
+          });
+        });
+
+      toast.show({
+        message: "快捷生成已开始：大纲与正文将自动完成，无需中途操作",
+        variant: "success",
+        duration: 5000,
+      });
+      router.push(`/articles/${articleId}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "快捷生成失败";
+      toast.show({ title: "快捷生成失败", message, variant: "error", duration: 6000 });
+      setLoading(false);
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -592,7 +697,7 @@ export default function HomePage() {
                                     ? "混合"
                                     : "模板";
                             return (
-                              <li key={`${idea.topic}-${idx}`}>
+                              <li key={`${idea.topic}-${idx}`} className="topic-idea-wrap">
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -625,6 +730,19 @@ export default function HomePage() {
                                   {idea.reason ? (
                                     <p className="topic-idea-reason">{idea.reason}</p>
                                   ) : null}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="topic-idea-quick-generate"
+                                  title="快捷生成全文：大纲自动采用，直接出正文"
+                                  disabled={loading}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setIdeasOpen(false);
+                                    openQuickGenerateConfirm(idea.topic);
+                                  }}
+                                >
+                                  <Zap size={13} />
                                 </button>
                               </li>
                             );
@@ -726,23 +844,44 @@ export default function HomePage() {
                   </div>
                 </div>
 
-                <button
-                  type="submit"
-                  disabled={loading || !form.topic.trim()}
-                  className="home-create-submit w-full btn-primary py-3.5 text-sm"
-                >
-                  {loading ? (
-                    <span className="inline-flex items-center justify-center gap-2">
-                      <span className="inline-block size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                      生成大纲中...
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center justify-center gap-2">
-                      生成大纲
-                      <ArrowRight size={16} />
-                    </span>
-                  )}
-                </button>
+                <div className="home-create-actions">
+                  <button
+                    type="submit"
+                    disabled={loading || !form.topic.trim()}
+                    className="home-create-submit btn-primary py-3.5 text-sm"
+                  >
+                    {loading ? (
+                      <span className="inline-flex items-center justify-center gap-2">
+                        <span className="inline-block size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                        生成大纲中...
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center justify-center gap-2">
+                        生成大纲
+                        <ArrowRight size={16} />
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openQuickGenerateConfirm()}
+                    disabled={loading || !form.topic.trim()}
+                    className="home-create-submit quick-generate-btn py-3.5 text-sm"
+                    title="一键生成：大纲自动采用，直接出正文，无需中途选择"
+                  >
+                    {loading ? (
+                      <span className="inline-flex items-center justify-center gap-2">
+                        <span className="inline-block size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                        快捷生成中...
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center justify-center gap-2">
+                        <Zap size={16} />
+                        快捷生成全文
+                      </span>
+                    )}
+                  </button>
+                </div>
               </form>
             ) : (
               <form className="home-create-form space-y-6" onSubmit={handleImportSubmit}>
@@ -988,6 +1127,34 @@ export default function HomePage() {
           )}
         </SectionCard>
       </section>
+
+      <ConfirmDialog
+        open={quickGenerateConfirm !== null}
+        title="快捷生成全文"
+        description="将一键完成：大纲自动采用 → 生成正文（含精炼与封面）→ 可选推送微信草稿。"
+        confirmLabel="开始生成"
+        cancelLabel="取消"
+        onConfirm={() => {
+          const topic = quickGenerateConfirm;
+          setQuickGenerateConfirm(null);
+          if (topic) void handleQuickGenerate(topic, quickAutoPush);
+        }}
+        onCancel={() => setQuickGenerateConfirm(null)}
+      >
+        <label className="confirm-dialog-check-row">
+          <input
+            type="checkbox"
+            checked={quickAutoPush}
+            onChange={(e) => setQuickAutoPush(e.target.checked)}
+          />
+          <span>
+            生成完成后<strong>自动推送到微信草稿箱</strong>
+            <span className="confirm-dialog-check-hint">
+              需已在「设置 → 微信公众号」配置 App ID / Secret
+            </span>
+          </span>
+        </label>
+      </ConfirmDialog>
     </>
   );
 }

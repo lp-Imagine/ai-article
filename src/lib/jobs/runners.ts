@@ -4,6 +4,7 @@ import {
   generateContent,
   generateCoverPrompt,
   generateOutline,
+  generateTitles,
   polishContent,
   reformatArticleHtml,
   expandSection,
@@ -14,6 +15,7 @@ import { analyzeContentQuality } from "@/lib/content-quality";
 import { generateCoverImage, generateSectionImage } from "@/lib/image-gen";
 import { mapWithConcurrency } from "@/lib/map-with-concurrency";
 import { withRetry } from "@/lib/retry";
+import { pushArticleToWechatDraft } from "@/lib/push-draft";
 import { withUserConfig } from "@/lib/config-bridge";
 
 type OutlineRecord = {
@@ -50,6 +52,8 @@ export async function runGenerationJob(job: GenerationJob): Promise<Prisma.Input
         return runPolish(job, update);
       case "expand":
         return runExpand(job, update);
+      case "quick_generate":
+        return runQuickGenerate(job, update);
       default:
         throw new Error(`未知任务类型: ${job.type}`);
     }
@@ -574,4 +578,185 @@ async function runExpand(job: GenerationJob, update: ProgressUpdater) {
 
   await update(100, "完成");
   return { ok: true };
+}
+
+/**
+ * 快捷生成：一键完成 大纲 → 自动采用第 1 套 → 正文（含精炼 + 封面）→（可选）推送微信草稿。
+ * 全程无需用户中途选择大纲或手动触发各步骤。
+ * payload: { autoPush?: boolean }
+ */
+async function runQuickGenerate(job: GenerationJob, update: ProgressUpdater) {
+  await update(3, "读取文章");
+  const article = await db.article.findFirst({
+    where: { id: job.articleId, userId: job.userId },
+  });
+  if (!article) throw new Error("文章不存在");
+
+  const payload = (job.payload ?? {}) as { autoPush?: boolean };
+
+  // 1) 生成大纲（自动采用第 1 套方案）
+  await update(8, "生成大纲");
+  const outlineCount = article.outlineCount ?? 3;
+  const outlines = await generateOutline({
+    topic: article.topic,
+    style: article.style,
+    wordCount: article.wordCount,
+    audience: article.audience,
+    goal: article.goal,
+    keywords: article.keywords,
+    outlineCount,
+  });
+  const selectedOutline = outlines[0];
+  if (!selectedOutline) throw new Error("大纲生成失败：未返回可用方案");
+
+  await update(26, "保存大纲（自动采用第 1 套）");
+  await db.article.update({
+    where: { id: article.id },
+    data: {
+      outline: outlines,
+      outlineCount,
+      selectedOutlineIndex: 0,
+      status: "outlined",
+    },
+  });
+  await db.articleVersion.create({
+    data: {
+      articleId: article.id,
+      versionType: "outline",
+      source: "ai",
+      outline: outlines,
+    },
+  });
+
+  // 2) 生成正文（与 content 任务一致：正文 + 精炼 + 封面并行）
+  await update(30, "生成正文");
+  let generated = await generateContent(
+    {
+      topic: article.topic,
+      outline: selectedOutline,
+      style: article.style,
+      wordCount: article.wordCount,
+      audience: article.audience,
+      goal: article.goal,
+      keywords: article.keywords,
+    },
+    {
+      onProgress: async (stepLabel, stepIndex, stepTotal) => {
+        const progress =
+          30 + Math.floor(((stepIndex + 1) / Math.max(stepTotal, 1)) * 34);
+        await update(progress, stepLabel);
+      },
+    },
+  );
+
+  await update(66, "精炼正文 + 生成封面图");
+  const coverTask = (async () => {
+    const keyPoints = (selectedOutline.sections ?? [])
+      .slice(0, 3)
+      .map((s) => s.heading);
+    const coverPrompt = await generateCoverPrompt(article.topic, article.style, {
+      title: generated.title,
+      summary: generated.summary,
+      keyPoints: keyPoints.length > 0 ? keyPoints : undefined,
+      contentExcerpt: generated.content,
+    });
+    const cover = await generateCoverImage(coverPrompt);
+    await db.imageAsset.create({
+      data: {
+        articleId: article.id,
+        type: "cover",
+        source: cover.source === "ai" ? "ai" : "upload",
+        url: cover.url,
+        prompt: coverPrompt,
+      },
+    });
+    return cover.url;
+  })();
+
+  const [refined, coverResult] = await Promise.all([
+    refineContentQuality({
+      topic: article.topic,
+      title: generated.title,
+      summary: generated.summary,
+      content: generated.content,
+      style: article.style,
+    }),
+    coverTask.then(
+      (url) => ({ url, error: null as string | null }),
+      (err: unknown) => ({
+        url: null,
+        error: err instanceof Error ? err.message : "封面图生成失败",
+      }),
+    ),
+  ]);
+
+  if (refined.refined) {
+    generated = {
+      ...generated,
+      content: refined.content,
+      summary: refined.summary ?? generated.summary,
+    };
+  }
+
+  const coverImageUrl = coverResult.url;
+  const coverWarning = coverResult.error;
+  if (coverWarning) {
+    console.error("[job:quick_generate] cover failed:", coverWarning);
+  }
+
+  await update(84, "保存正文");
+  const updated = await db.article.update({
+    where: { id: article.id },
+    data: {
+      title: generated.title,
+      summary: generated.summary,
+      content: generated.content,
+      ...(coverImageUrl ? { coverImageUrl } : {}),
+      status: "generated",
+    },
+  });
+  await db.articleVersion.create({
+    data: {
+      articleId: article.id,
+      versionType: "generated",
+      source: "ai",
+      title: generated.title,
+      summary: generated.summary,
+      content: generated.content,
+    },
+  });
+
+  // 3) 可选：自动推送到微信草稿箱（推送失败不阻断任务，正文已生成可稍后手动推送）
+  let pushed: { draftMediaId: string; warnings: string[] } | null = null;
+  let pushWarning: string | null = null;
+  if (payload.autoPush) {
+    await update(90, "推送到微信草稿箱");
+    try {
+      const result = await pushArticleToWechatDraft({
+        articleId: article.id,
+        userId: job.userId,
+      });
+      pushed = { draftMediaId: result.draftMediaId, warnings: result.warnings };
+    } catch (err) {
+      pushWarning = err instanceof Error ? err.message : "自动推送失败";
+      console.error("[job:quick_generate] auto push failed:", pushWarning);
+    }
+  }
+
+  await update(100, "完成");
+  return {
+    articleId: updated.id,
+    outlineIndex: 0,
+    coverImageUrl: updated.coverImageUrl,
+    coverWarning,
+    autoPush: payload.autoPush === true,
+    push: pushed
+      ? { pushed: true, draftMediaId: pushed.draftMediaId, warnings: pushed.warnings }
+      : { pushed: false, warning: pushWarning },
+    qualityScore: analyzeContentQuality({
+      title: generated.title,
+      summary: generated.summary,
+      content: generated.content,
+    }).score,
+  };
 }
