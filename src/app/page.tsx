@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, FileUp, Lightbulb, Link2, RefreshCw, Zap } from "lucide-react";
+import { ArrowRight, FileUp, Lightbulb, Link2, RefreshCw, Sparkles, Zap } from "lucide-react";
 import { FieldLabel, PageHeader, SectionCard } from "@/components/app-shell";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useToast } from "@/components/toast";
@@ -545,13 +545,13 @@ export default function HomePage() {
   return (
     <>
       <PageHeader
-        eyebrow="Write · Polish · Publish"
+        eyebrow="Workspace"
         title="Draftly · 内容工作台"
         description="主题一填，大纲、正文、配图到公众号草稿箱一次做完；已有文稿也能导入继续打磨。"
         className="home-page-header"
       />
 
-      <div className="workflow-steps home-workflow-steps mb-8">
+      <div className="workflow-steps home-workflow-steps mb-6">
         {workflowSteps.map((item) => (
           <div key={item.step} className="workflow-step">
             <p className="workflow-step-num">{item.step}</p>
@@ -560,7 +560,7 @@ export default function HomePage() {
         ))}
       </div>
 
-      <section className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.65fr)_minmax(280px,1fr)] home-workspace">
+      <section className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(300px,1fr)] home-workspace">
         <div data-tour="home-create">
           <SectionCard
             title="快速开始"
@@ -570,6 +570,11 @@ export default function HomePage() {
                 : "粘贴、上传或抓取网页；导入后可润色、配图并推送。"
             }
             className="home-create-card"
+            headerExtra={
+              <span className="home-card-icon" aria-hidden>
+                <Sparkles size={16} />
+              </span>
+            }
           >
             <div className="home-create-mode-tabs" role="tablist" aria-label="创作方式">
               <button
@@ -579,6 +584,7 @@ export default function HomePage() {
                 className={`home-create-mode-tab${createMode === "ai" ? " home-create-mode-tab-active" : ""}`}
                 onClick={() => setCreateMode("ai")}
               >
+                <Sparkles size={15} />
                 AI 创作
               </button>
               <button
@@ -588,6 +594,7 @@ export default function HomePage() {
                 className={`home-create-mode-tab${createMode === "import" ? " home-create-mode-tab-active" : ""}`}
                 onClick={() => setCreateMode("import")}
               >
+                <FileUp size={15} />
                 导入文章
               </button>
             </div>
@@ -1077,9 +1084,12 @@ export default function HomePage() {
         <SectionCard
           title="最近文章"
           description="未完成的继续改，已推送的也能回来改。"
-          className="h-fit"
+          className="home-recent-card"
           headerExtra={
-            <button onClick={fetchRecent} className="btn-ghost inline-flex items-center gap-1 text-xs">
+            <button
+              onClick={fetchRecent}
+              className="btn-ghost inline-flex items-center gap-1 text-xs"
+            >
               <RefreshCw size={12} />
               刷新
             </button>
