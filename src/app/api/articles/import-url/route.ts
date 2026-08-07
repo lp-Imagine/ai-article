@@ -14,7 +14,9 @@ const bodySchema = z.object({
 });
 
 const FETCH_TIMEOUT_MS = 20_000;
-const MAX_HTML_BYTES = 2_500_000;
+// 微信公众号等重页面 HTML 常达 3–8MB，放宽到 20MB（与文件导入一致）；
+// 正文提取后仍受 IMPORT_CONTENT_MAX_CHARS 上限约束。
+const MAX_HTML_BYTES = 20_000_000;
 
 /** 从公开网页抓取标题与正文，供导入表单预填（不落库） */
 export async function POST(request: Request) {
@@ -61,7 +63,8 @@ export async function POST(request: Request) {
     }
 
     const html = buf.toString("utf8");
-    if (html.length > IMPORT_CONTENT_MAX_CHARS * 4) {
+    // UTF-8 下字符数 ≤ 字节数，此上限仅作防御
+    if (html.length > MAX_HTML_BYTES) {
       throw new ImportContentError("网页内容过大，请改用粘贴或上传文件");
     }
 
