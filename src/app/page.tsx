@@ -57,6 +57,36 @@ const workflowSteps = [
   { step: "04", label: "推草稿" },
 ];
 
+/**
+ * 粘贴富文本的 HTML 片段起点是否「看起来完整」。
+ * 微信等页面复制出的片段常以半截标签/属性文本开头（如
+ * `webkit-tap-highlight-color: ...` 或 `Consolas, "Liberation Mono"...`），
+ * 这类片段直接进正文框会显示不完整。
+ */
+const PASTE_HTML_START_RE =
+  /^\s*(?:<!doctype\s+html|<html|<head|<body|<div|<section|<article|<main|<p\b|<h[1-6]\b|<pre|<ol|<ul|<li|<blockquote|<table|<figure|<img|<span|<a\b)/i;
+
+function isWellFormedHtmlStart(html: string): boolean {
+  return PASTE_HTML_START_RE.test(html);
+}
+
+/** 畸形 / 超大 HTML 的兜底：优先用剪贴板纯文本（通常完整），再尝试从 DOM 抽正文 */
+function pasteFallbackText(html: string, plain: string): string {
+  const plainText = (plain || "").trim();
+  if (plainText.length >= 40) return plainText;
+  try {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const container = doc.querySelector(
+      "#js_content, .rich_media_content, article, main, [role='main'], .post-content, .article-content, .entry-content, #content",
+    );
+    const text = ((container || doc.body) as HTMLElement).innerText.trim();
+    if (text.length >= 40) return text;
+  } catch {
+    // 解析失败就回退原始 HTML
+  }
+  return plainText || html;
+}
+
 type ApiResponse<T> = { code: number; message: string; data: T };
 
 export default function HomePage() {
@@ -1039,7 +1069,13 @@ export default function HomePage() {
                       // 富文本粘贴：优先保留 HTML，便于后续清理管线识别
                       if (html && html.includes("<") && html.length > (plain?.length || 0) + 20) {
                         e.preventDefault();
-                        applyImportedDraft({ content: html });
+                        // 微信/网页复制常带半截标签或超大 HTML，直接入框会内容不完整；
+                        // 结构完整且不超限的保留原 HTML，否则回退为完整纯文本。
+                        const content =
+                          html.length > IMPORT_CONTENT_MAX_CHARS || !isWellFormedHtmlStart(html)
+                            ? pasteFallbackText(html, plain)
+                            : html;
+                        applyImportedDraft({ content: content.slice(0, IMPORT_CONTENT_MAX_CHARS) });
                         setImportSource("paste");
                       }
                     }}
