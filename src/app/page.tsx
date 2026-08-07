@@ -23,6 +23,7 @@ import { useArticleBackgroundTasks } from "@/hooks/use-article-background-tasks"
 import {
   extractTitleFromContent,
   IMPORT_CONTENT_MAX_CHARS,
+  IMPORT_MAX_FILE_BYTES,
   IMPORT_FILE_EXTENSIONS,
   isSupportedImportFilename,
 } from "@/lib/import-parse-helpers";
@@ -177,8 +178,11 @@ export default function HomePage() {
       });
       return;
     }
-    if (file.size > 2_500_000) {
-      toast.show({ message: "文件过大（建议 2.5MB 以内）", variant: "warning" });
+    if (file.size > IMPORT_MAX_FILE_BYTES) {
+      toast.show({
+        message: `文件过大（建议 ${IMPORT_MAX_FILE_BYTES / 1024 / 1024}MB 以内）`,
+        variant: "warning",
+      });
       return;
     }
     const text = await file.text();

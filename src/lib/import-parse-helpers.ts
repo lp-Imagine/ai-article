@@ -1,6 +1,7 @@
 /** 导入解析的轻量工具（可安全在客户端引用，勿依赖 wechat-style） */
 
-export const IMPORT_CONTENT_MAX_CHARS = 80_000;
+export const IMPORT_CONTENT_MAX_CHARS = 160_000;
+export const IMPORT_MAX_FILE_BYTES = 20 * 1024 * 1024; // 20MB
 export const IMPORT_FILE_EXTENSIONS = [".md", ".markdown", ".txt", ".html", ".htm"] as const;
 
 function decodeEntities(text: string): string {
