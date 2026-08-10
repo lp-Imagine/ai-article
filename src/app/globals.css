@@ -6001,6 +6001,8 @@ textarea::placeholder {
   z-index: 2;
   display: flex;
   justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
   margin: 0;
   padding: 0 16px;
   pointer-events: none;
@@ -6048,6 +6050,13 @@ textarea::placeholder {
   border-radius: 50%;
   background: linear-gradient(135deg, #47a1ff, #0071e3);
   box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.12);
+}
+
+.auth-beian-gongan-mark {
+  flex-shrink: 0;
+  width: 18px;
+  height: 20px;
+  object-fit: contain;
 }
 
 .auth-beian-meta {

@@ -3,7 +3,12 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { PenLine, Send, ShieldCheck, Sparkles } from "lucide-react";
-import { ICP_BEIAN_NO, ICP_BEIAN_URL } from "@/lib/site-beian";
+import {
+  ICP_BEIAN_NO,
+  ICP_BEIAN_URL,
+  PUBLIC_SECURITY_BEIAN_NO,
+  PUBLIC_SECURITY_BEIAN_URL,
+} from "@/lib/site-beian";
 
 type AuthShellProps = {
   mode: "login" | "register" | "reset";
@@ -173,6 +178,27 @@ export function AuthShell({ mode, children }: AuthShellProps) {
           <span className="auth-beian-meta">
             <span className="auth-beian-label">ICP</span>
             <span className="auth-beian-no">{ICP_BEIAN_NO}</span>
+          </span>
+          <span className="auth-beian-arrow" aria-hidden="true">
+            ↗
+          </span>
+        </a>
+        <a
+          className="auth-beian-chip"
+          href={PUBLIC_SECURITY_BEIAN_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="查询公安备案信息"
+        >
+          <img
+            className="auth-beian-gongan-mark"
+            src="/beian-gongan.png"
+            alt=""
+            aria-hidden="true"
+          />
+          <span className="auth-beian-meta">
+            <span className="auth-beian-label">公网安备</span>
+            <span className="auth-beian-no">{PUBLIC_SECURITY_BEIAN_NO}</span>
           </span>
           <span className="auth-beian-arrow" aria-hidden="true">
             ↗
