@@ -6145,12 +6145,22 @@ textarea::placeholder {
   }
 
   .auth-beian-bar {
-    padding: 6px 8px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    padding: 7px 10px;
   }
 
   .auth-beian-link {
-    padding: 2px 7px;
+    justify-content: center;
+    padding: 2px 8px;
     font-size: 11px;
+  }
+
+  .auth-beian-divider {
+    width: 64%;
+    height: 1px;
+    margin: 2px auto;
   }
 
   .auth-beian-no {
