@@ -8,8 +8,15 @@ import { forbidden, notFound, requireSuperAdmin } from "@/lib/api-auth";
 const patchSchema = z.object({
   disabled: z.boolean().optional(),
   displayName: z.string().trim().max(40).nullable().optional(),
+  email: z
+    .string()
+    .trim()
+    .email("请输入有效的邮箱")
+    .max(200, "邮箱过长")
+    .nullable()
+    .optional(),
   role: z.enum(["USER", "SUPER_ADMIN"]).optional(),
-  password: z.string().min(6).max(72).optional(),
+  password: z.string().min(8).max(72).optional(),
 });
 
 export async function PATCH(
@@ -48,17 +55,32 @@ export async function PATCH(
       }
     }
 
+    if (input.email !== undefined && input.email !== null) {
+      const email = input.email.toLowerCase();
+      const emailTaken = await db.user.findFirst({
+        where: { email, id: { not: id } },
+      });
+      if (emailTaken) {
+        return NextResponse.json(
+          { code: 1001, message: "邮箱已被其它账号占用", data: null },
+          { status: 400 },
+        );
+      }
+    }
+
     const updated = await db.user.update({
       where: { id },
       data: {
         disabled: input.disabled,
         displayName: input.displayName === undefined ? undefined : input.displayName,
+        email: input.email === undefined ? undefined : input.email?.toLowerCase() ?? null,
         role: input.role,
         passwordHash: input.password ? hashPassword(input.password) : undefined,
       },
       select: {
         id: true,
         username: true,
+        email: true,
         displayName: true,
         role: true,
         disabled: true,

@@ -73,6 +73,7 @@ enum GenerationJobStatus {
 model User {
   id           String    @id @default(cuid())
   username     String    @unique
+  email        String?   @unique
   passwordHash String
   displayName  String?
   role         UserRole  @default(USER)
@@ -85,6 +86,22 @@ model User {
   sessions  Session[]
   jobs      GenerationJob[]
   schedules ArticleSchedule[]
+}
+
+/** 邮箱验证码：注册 / 重置密码共用，只存哈希，10 分钟有效，最多尝试 5 次 */
+model EmailVerificationCode {
+  id             String   @id @default(cuid())
+  email          String
+  purpose        String // "register" | "reset"
+  codeHash       String   @unique
+  userId         String?
+  failedAttempts Int      @default(0)
+  expiresAt      DateTime
+  usedAt         DateTime?
+  createdAt      DateTime @default(now())
+
+  @@index([email, purpose])
+  @@index([expiresAt])
 }
 
 model Session {

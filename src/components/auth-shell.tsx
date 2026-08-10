@@ -6,12 +6,81 @@ import { PenLine, Send, ShieldCheck, Sparkles } from "lucide-react";
 import { ICP_BEIAN_NO, ICP_BEIAN_URL } from "@/lib/site-beian";
 
 type AuthShellProps = {
-  mode: "login" | "register";
+  mode: "login" | "register" | "reset";
   children: ReactNode;
 };
 
+const COPY: Record<
+  AuthShellProps["mode"],
+  {
+    heroTitle: ReactNode;
+    heroDesc: ReactNode;
+    eyebrow: string;
+    title: string;
+    lead: string;
+    footer: ReactNode;
+  }
+> = {
+  login: {
+    heroTitle: (
+      <>
+        从选题到草稿箱
+        <br />
+        一条链路写完
+      </>
+    ),
+    heroDesc:
+      "登录后继续大纲、正文、配图与推送，把公众号创作收进同一套工作流。",
+    eyebrow: "欢迎回来",
+    title: "登录账号",
+    lead: "使用用户名与密码进入工作台",
+    footer: (
+      <>
+        还没有账号？<Link href="/register">去注册</Link>
+      </>
+    ),
+  },
+  register: {
+    heroTitle: (
+      <>
+        创建你的写作空间
+        <br />
+        数据完全独立
+      </>
+    ),
+    heroDesc:
+      "注册即可拥有独立的文章、设置与推送配置，适合个人或多人协作使用。",
+    eyebrow: "开始使用",
+    title: "注册账号",
+    lead: "填写基础信息，马上开始创作",
+    footer: (
+      <>
+        已有账号？<Link href="/login">去登录</Link>
+      </>
+    ),
+  },
+  reset: {
+    heroTitle: (
+      <>
+        设置新密码
+        <br />
+        重新出发
+      </>
+    ),
+    heroDesc: "邮箱验证已通过，请设置一个新密码。",
+    eyebrow: "设置新密码",
+    title: "重置密码",
+    lead: "验证通过，请设置新密码",
+    footer: (
+      <>
+        已完成？<Link href="/login">去登录</Link>
+      </>
+    ),
+  },
+};
+
 export function AuthShell({ mode, children }: AuthShellProps) {
-  const isLogin = mode === "login";
+  const copy = COPY[mode];
 
   return (
     <div className="auth-page">
@@ -35,26 +104,8 @@ export function AuthShell({ mode, children }: AuthShellProps) {
             </div>
 
             <div className="auth-hero-copy">
-              <h1 className="auth-hero-title">
-                {isLogin ? (
-                  <>
-                    从选题到草稿箱
-                    <br />
-                    一条链路写完
-                  </>
-                ) : (
-                  <>
-                    创建你的写作空间
-                    <br />
-                    数据完全独立
-                  </>
-                )}
-              </h1>
-              <p className="auth-hero-desc">
-                {isLogin
-                  ? "登录后继续大纲、正文、配图与推送，把公众号创作收进同一套工作流。"
-                  : "注册即可拥有独立的文章、设置与推送配置，适合个人或多人协作使用。"}
-              </p>
+              <h1 className="auth-hero-title">{copy.heroTitle}</h1>
+              <p className="auth-hero-desc">{copy.heroDesc}</p>
             </div>
 
             <ul className="auth-hero-points">
@@ -98,26 +149,14 @@ export function AuthShell({ mode, children }: AuthShellProps) {
                 </div>
                 <span>Draftly</span>
               </div>
-              <p className="auth-panel-eyebrow">{isLogin ? "欢迎回来" : "开始使用"}</p>
-              <h2 className="auth-panel-title">{isLogin ? "登录账号" : "注册账号"}</h2>
-              <p className="auth-panel-lead">
-                {isLogin ? "使用用户名与密码进入工作台" : "填写基础信息，马上开始创作"}
-              </p>
+              <p className="auth-panel-eyebrow">{copy.eyebrow}</p>
+              <h2 className="auth-panel-title">{copy.title}</h2>
+              <p className="auth-panel-lead">{copy.lead}</p>
             </header>
 
             {children}
 
-            <p className="auth-footer">
-              {isLogin ? (
-                <>
-                  还没有账号？<Link href="/register">去注册</Link>
-                </>
-              ) : (
-                <>
-                  已有账号？<Link href="/login">去登录</Link>
-                </>
-              )}
-            </p>
+            <p className="auth-footer">{copy.footer}</p>
           </div>
         </main>
       </div>

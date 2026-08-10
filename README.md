@@ -38,6 +38,16 @@ npm run dev
 
 在 **设置** 页配置 AI / 图像 / 微信公众号，或写入环境变量（完整列表见 [`.env.example`](.env.example)）。
 
+注册需填写邮箱并完成邮箱验证码验证；忘记密码通过绑定邮箱的验证码重置。邮件支持双通道（见
+[`.env.example`](.env.example)）：
+
+- **SMTP**：`MAIL_PROVIDER=smtp` + `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` /
+  `SMTP_PASS` / `SMTP_FROM`（163 / QQ / 企业邮等，全局配一次即可给任意收件人发信）
+- **Resend**：`MAIL_PROVIDER=resend` + `RESEND_API_KEY` + `SMTP_FROM`（发件域名需在 Resend 验证）
+
+不配 `MAIL_PROVIDER` 时默认 auto：有 `RESEND_API_KEY` 走 Resend，否则有 `SMTP_HOST` 走 SMTP。
+未配置任何通道时，开发模式把验证码打印到服务端日志，生产环境会提示「邮件服务未配置」。
+
 ### 同步到 vuepressblog
 
 正文生成后，可在文章页「发布」区点击 **同步到博客**，将 Markdown 写入 [vuepressblog](https://github.com/lp-Imagine/vuepressblog) 的 `website/sync/<section>/`，并触发 GitHub Actions 部署到 GitHub Pages。

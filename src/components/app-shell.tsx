@@ -37,7 +37,10 @@ function pageTitleForPath(pathname: string): string | null {
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const isAuthPage = pathname === "/login" || pathname === "/register";
+  const isAuthPage =
+    pathname === "/login" ||
+    pathname === "/register" ||
+    pathname === "/reset-password";
   const mobileTitle = pageTitleForPath(pathname);
   const isArticleEditor = pathname.startsWith("/articles/");
   const [me, setMe] = useState<MeUser | null>(null);

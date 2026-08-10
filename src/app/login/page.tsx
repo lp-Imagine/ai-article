@@ -3,6 +3,7 @@
 import { FormEvent, Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Eye, EyeOff, Check } from "lucide-react";
+import Link from "next/link";
 import { AuthShell } from "@/components/auth-shell";
 import { SliderCaptcha } from "@/components/slider-captcha";
 
@@ -155,6 +156,12 @@ function LoginForm() {
             {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
           </button>
         </div>
+      </div>
+
+      <div className="auth-forgot-row">
+        <Link href="/reset-password" className="auth-forgot-link">
+          忘记密码？
+        </Link>
       </div>
 
       <label

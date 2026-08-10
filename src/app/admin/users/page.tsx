@@ -13,6 +13,7 @@ import { clearSessionAndGoLogin, isUnauthorizedResponse } from "@/lib/session-cl
 type AdminUser = {
   id: string;
   username: string;
+  email: string | null;
   displayName: string | null;
   role: "USER" | "SUPER_ADMIN";
   disabled: boolean;
@@ -35,6 +36,7 @@ export default function AdminUsersPage() {
   const [pendingDelete, setPendingDelete] = useState<AdminUser | null>(null);
   const [resetTarget, setResetTarget] = useState<AdminUser | null>(null);
   const [manageUser, setManageUser] = useState<AdminUser | null>(null);
+  const [manageEmail, setManageEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -145,7 +147,7 @@ export default function AdminUsersPage() {
 
   async function submitReset(e: FormEvent) {
     e.preventDefault();
-    if (!resetTarget || newPassword.length < 6) return;
+    if (!resetTarget || newPassword.length < 8) return;
     await patchUser(resetTarget.id, { password: newPassword });
     setResetTarget(null);
     setNewPassword("");
@@ -155,6 +157,11 @@ export default function AdminUsersPage() {
     setManageUser(null);
     setResetTarget(user);
     setNewPassword("");
+  }
+
+  function openManage(user: AdminUser) {
+    setManageEmail(user.email || "");
+    setManageUser(user);
   }
 
   function openDelete(user: AdminUser) {
@@ -212,7 +219,7 @@ export default function AdminUsersPage() {
                         type="button"
                         className="admin-user-manage-btn"
                         disabled={busy}
-                        onClick={() => setManageUser(user)}
+                        onClick={() => openManage(user)}
                       >
                         管理
                         <ChevronRight size={16} strokeWidth={2} />
@@ -226,6 +233,9 @@ export default function AdminUsersPage() {
                         {user.disabled ? "已禁用" : "正常"}
                       </span>
                       <span className="admin-user-stat">文章 {user.articleCount}</span>
+                      <span className="admin-user-stat">
+                        邮箱 {user.email || "未设置"}
+                      </span>
                     </div>
                   </div>
                   <div className="admin-user-actions">
@@ -305,6 +315,38 @@ export default function AdminUsersPage() {
               <p className="admin-action-sheet-sub">@{manageUser.username}</p>
             </div>
             <div className="admin-action-sheet-list">
+              <div className="admin-action-sheet-email">
+                <label className="field-label" htmlFor={`email-${manageUser.id}`}>
+                  邮箱（用于找回密码）
+                </label>
+                <div className="admin-action-sheet-email-row">
+                  <input
+                    id={`email-${manageUser.id}`}
+                    type="email"
+                    className="confirm-dialog-input"
+                    placeholder="未设置邮箱"
+                    value={manageEmail}
+                    onChange={(e) => setManageEmail(e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <button
+                    type="button"
+                    className="btn-secondary btn-sm"
+                    disabled={
+                      busyId === manageUser.id ||
+                      manageEmail.trim().toLowerCase() === (manageUser.email || "")
+                    }
+                    onClick={() =>
+                      patchUser(manageUser.id, {
+                        email: manageEmail.trim() || null,
+                      })
+                    }
+                  >
+                    保存邮箱
+                  </button>
+                </div>
+              </div>
               <button
                 type="button"
                 className="admin-action-sheet-item"
@@ -393,10 +435,10 @@ export default function AdminUsersPage() {
                   <input
                     type="password"
                     className="confirm-dialog-input"
-                    placeholder="至少 6 位"
+                    placeholder="至少 8 位"
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
-                    minLength={6}
+                    minLength={8}
                     required
                     autoFocus
                     autoComplete="new-password"
@@ -415,7 +457,7 @@ export default function AdminUsersPage() {
                 <button
                   type="submit"
                   className="confirm-dialog-btn confirm-dialog-btn-danger"
-                  disabled={newPassword.length < 6}
+                  disabled={newPassword.length < 8}
                 >
                   确认重置
                 </button>

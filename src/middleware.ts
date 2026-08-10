@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE } from "@/lib/auth-constants";
 
-const PUBLIC_PATHS = ["/login", "/register"];
+const PUBLIC_PATHS = ["/login", "/register", "/reset-password"];
+// 已登录用户访问这些页面时弹回首页；忘记/重置密码页任何时候都放行
+const LOGGED_IN_HOME_PATHS = ["/login", "/register"];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -31,7 +33,12 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (token && isPublic) {
+  if (
+    token &&
+    LOGGED_IN_HOME_PATHS.some(
+      (p) => pathname === p || pathname.startsWith(`${p}/`),
+    )
+  ) {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     url.search = "";

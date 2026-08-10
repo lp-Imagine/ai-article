@@ -8,14 +8,29 @@ import { markOnboardingPending } from "@/lib/onboarding";
 
 export default function RegisterPage() {
   const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [sendingCode, setSendingCode] = useState(false);
+  const [codeSent, setCodeSent] = useState(false);
+  const [countdown, setCountdown] = useState(0);
   const [captchaOk, setCaptchaOk] = useState(false);
   const [captchaReset, setCaptchaReset] = useState(0);
-  const credentialsReady = username.trim().length >= 3 && password.length >= 6;
+  const usernameReady = username.trim().length >= 3;
+  const emailReady = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  const codeReady = /^\d{6}$/.test(code);
+  const credentialsReady =
+    usernameReady && emailReady && password.length >= 8;
+
+  useEffect(() => {
+    if (countdown <= 0) return;
+    const t = setTimeout(() => setCountdown((n) => n - 1), 1000);
+    return () => clearTimeout(t);
+  }, [countdown]);
 
   useEffect(() => {
     if (credentialsReady) return;
@@ -27,7 +42,11 @@ export default function RegisterPage() {
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!credentialsReady) {
-      setError("请先填写符合要求的用户名和密码");
+      setError("请先填写符合要求的用户名、邮箱和密码");
+      return;
+    }
+    if (codeSent && !codeReady) {
+      setError("请输入收到的 6 位验证码");
       return;
     }
     if (!captchaOk) {
@@ -43,7 +62,9 @@ export default function RegisterPage() {
         credentials: "same-origin",
         body: JSON.stringify({
           username,
+          email: email.trim(),
           password,
+          code,
           displayName: displayName || undefined,
         }),
       });
@@ -62,6 +83,34 @@ export default function RegisterPage() {
       setCaptchaReset((n) => n + 1);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function sendCode() {
+    if (!usernameReady || !emailReady) {
+      setError("请先填写用户名和邮箱");
+      return;
+    }
+    setError("");
+    setSendingCode(true);
+    try {
+      const res = await fetch("/api/auth/register?action=send-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ username, email: email.trim() }),
+      });
+      const json = await res.json();
+      if (!res.ok || json.code !== 0) {
+        setError(json.message || "验证码发送失败");
+        return;
+      }
+      setCodeSent(true);
+      setCountdown(60);
+    } catch {
+      setError("网络错误，请重试");
+    } finally {
+      setSendingCode(false);
     }
   }
 
@@ -90,6 +139,68 @@ export default function RegisterPage() {
         </div>
 
         <div className="auth-field">
+          <label className="auth-label" htmlFor="email">
+            邮箱
+          </label>
+          <div className="auth-code-row">
+            <input
+              id="email"
+              className="auth-input"
+              type="email"
+              autoComplete="email"
+              enterKeyHint="next"
+              placeholder="用于接收验证码"
+              value={email}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                setCode("");
+                setCodeSent(false);
+                setCountdown(0);
+              }}
+              required
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+            />
+            <button
+              type="button"
+              className="auth-code-btn"
+              onClick={() => void sendCode()}
+              disabled={sendingCode || countdown > 0 || !usernameReady || !emailReady}
+            >
+              {countdown > 0
+                ? `${countdown}s 后重发`
+                : sendingCode
+                  ? "发送中…"
+                  : codeSent
+                    ? "重新发送"
+                    : "发送验证码"}
+            </button>
+          </div>
+        </div>
+
+        {codeSent ? (
+          <div className="auth-field">
+            <label className="auth-label" htmlFor="code">
+              验证码
+            </label>
+            <input
+              id="code"
+              className="auth-input"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              enterKeyHint="next"
+              placeholder="输入邮件中的 6 位验证码"
+              value={code}
+              onChange={(e) =>
+                setCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+              }
+              required
+            />
+          </div>
+        ) : null}
+
+        <div className="auth-field">
           <label className="auth-label" htmlFor="displayName">
             显示名 <span className="auth-label-optional">可选</span>
           </label>
@@ -115,11 +226,11 @@ export default function RegisterPage() {
               type={showPassword ? "text" : "password"}
               autoComplete="new-password"
               enterKeyHint="go"
-              placeholder="至少 6 位"
+              placeholder="至少 8 位"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              minLength={6}
+              minLength={8}
             />
             <button
               type="button"
@@ -149,7 +260,12 @@ export default function RegisterPage() {
         <button
           type="submit"
           className="auth-submit"
-          disabled={loading || !credentialsReady || !captchaOk}
+          disabled={
+            loading ||
+            !credentialsReady ||
+            (codeSent && !codeReady) ||
+            !captchaOk
+          }
         >
           {loading ? (
             <span className="auth-submit-loading">

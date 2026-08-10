@@ -89,6 +89,7 @@ async function runOneSchedule(schedule: ArticleSchedule) {
   const sessionUser: SessionUser = {
     id: user.id,
     username: user.username,
+    email: user.email,
     displayName: user.displayName,
     role: user.role,
   };

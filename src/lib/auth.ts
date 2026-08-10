@@ -16,6 +16,7 @@ export const SESSION_DAYS_SHORT = 1;
 export type SessionUser = {
   id: string;
   username: string;
+  email: string | null;
   displayName: string | null;
   role: UserRole;
 };
@@ -123,6 +124,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
         select: {
           id: true,
           username: true,
+          email: true,
           displayName: true,
           role: true,
           disabled: true,
@@ -141,6 +143,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   return {
     id: session.user.id,
     username: session.user.username,
+    email: session.user.email,
     displayName: session.user.displayName,
     role: session.user.role,
   };
