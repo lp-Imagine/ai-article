@@ -6,7 +6,10 @@ RUN apk add --no-cache libc6-compat openssl
 FROM base AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# better-sqlite3 等原生模块：预编译包下载超时（国内网络）时回退源码编译，需要 Python/编译工具链
+RUN apk add --no-cache python3 make g++ \
+  && npm ci \
+  && apk del --no-cache python3 make g++
 
 FROM base AS builder
 WORKDIR /app
