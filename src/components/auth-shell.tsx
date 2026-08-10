@@ -167,43 +167,34 @@ export function AuthShell({ mode, children }: AuthShellProps) {
       </div>
 
       <footer className="auth-beian">
-        <a
-          className="auth-beian-chip"
-          href={ICP_BEIAN_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          title="查询工信部备案信息"
-        >
-          <span className="auth-beian-mark" aria-hidden="true" />
-          <span className="auth-beian-meta">
-            <span className="auth-beian-label">ICP</span>
+        <div className="auth-beian-bar">
+          <a
+            className="auth-beian-link"
+            href={ICP_BEIAN_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="查询工信部备案信息"
+          >
+            <span className="auth-beian-mark" aria-hidden="true" />
             <span className="auth-beian-no">{ICP_BEIAN_NO}</span>
-          </span>
-          <span className="auth-beian-arrow" aria-hidden="true">
-            ↗
-          </span>
-        </a>
-        <a
-          className="auth-beian-chip"
-          href={PUBLIC_SECURITY_BEIAN_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          title="查询公安备案信息"
-        >
-          <img
-            className="auth-beian-gongan-mark"
-            src="/beian-gongan.png"
-            alt=""
-            aria-hidden="true"
-          />
-          <span className="auth-beian-meta">
-            <span className="auth-beian-label">公网安备</span>
+          </a>
+          <span className="auth-beian-divider" aria-hidden="true" />
+          <a
+            className="auth-beian-link"
+            href={PUBLIC_SECURITY_BEIAN_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="查询公安备案信息"
+          >
+            <img
+              className="auth-beian-gongan-mark"
+              src="/beian-gongan.png"
+              alt=""
+              aria-hidden="true"
+            />
             <span className="auth-beian-no">{PUBLIC_SECURITY_BEIAN_NO}</span>
-          </span>
-          <span className="auth-beian-arrow" aria-hidden="true">
-            ↗
-          </span>
-        </a>
+          </a>
+        </div>
       </footer>
     </div>
   );
