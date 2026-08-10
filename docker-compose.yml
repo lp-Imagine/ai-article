@@ -17,7 +17,10 @@ services:
       retries: 10
 
   app:
-    build: .
+    build:
+      context: .
+      args:
+        APK_MIRROR: ${APK_MIRROR:-dl-cdn.alpinelinux.org}
     image: ${IMAGE_NAME:-wechat-ai-writer}
     restart: unless-stopped
     depends_on:

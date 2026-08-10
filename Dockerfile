@@ -6,8 +6,10 @@ RUN apk add --no-cache libc6-compat openssl
 FROM base AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-# better-sqlite3 等原生模块：预编译包下载超时（国内网络）时回退源码编译，需要 Python/编译工具链
-RUN apk add --no-cache python3 make g++ \
+# 原生模块源码编译需要工具链；国内服务器可指定 APK_MIRROR（如 mirrors.tencentyun.com）加速
+ARG APK_MIRROR=dl-cdn.alpinelinux.org
+RUN sed -i "s#dl-cdn.alpinelinux.org#${APK_MIRROR}#g" /etc/apk/repositories \
+  && apk add --no-cache python3 make g++ \
   && npm ci \
   && apk del --no-cache python3 make g++
 
