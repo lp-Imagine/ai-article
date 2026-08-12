@@ -667,12 +667,11 @@ function PuzzlePanel({ onSuccess }: { onSuccess: () => void }) {
     }
 
     setFailed(true);
+    // 失败后自动更换一张新拼图（位置/形状/背景都会变），避免同一张反复试
     window.setTimeout(() => {
-      setOffset(0);
-      offsetRef.current = 0;
-      setFailed(false);
+      rebuild();
     }, 420);
-  }, []);
+  }, [rebuild]);
 
   function onThumbPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
     if (passedRef.current) return;
