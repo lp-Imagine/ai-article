@@ -17,6 +17,7 @@ const quickGenerateSchema = z.object({
   goal: z.string().max(100).optional(),
   outlineCount: z.number().int().min(2).max(6).optional(),
   autoPush: z.boolean().optional(),
+  autoPushBlog: z.boolean().optional(),
 });
 
 /**
@@ -47,7 +48,10 @@ export async function POST(request: Request) {
       user,
       articleId: article.id,
       type: "quick_generate",
-      payload: { autoPush: input.autoPush === true },
+      payload: {
+        autoPush: input.autoPush === true,
+        autoPushBlog: input.autoPushBlog === true,
+      },
     });
 
     const response = jobAcceptedResponse(job, "快捷生成任务已排队");

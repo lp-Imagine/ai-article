@@ -22,6 +22,7 @@ export async function GET(request: Request) {
   const refresh =
     searchParams.get("refresh") === "1" ||
     searchParams.get("refresh") === "true";
+  const category = searchParams.get("category") ?? undefined;
 
   // 注入用户级 AI 配置（设置页保存的 key），否则 LLM 热点生成读不到 key 只能降级
   return withAuthUserConfig(user, async () => {
@@ -34,6 +35,7 @@ export async function GET(request: Request) {
         mode,
         cursor,
         refresh,
+        category: category as Parameters<typeof getTopicIdeas>[0]["category"],
       });
       metrics.served += result.ideas.length;
       return NextResponse.json({

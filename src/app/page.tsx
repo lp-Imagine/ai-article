@@ -3,7 +3,18 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, FileUp, Lightbulb, Link2, RefreshCw, Sparkles, Zap } from "lucide-react";
+import {
+  ArrowRight,
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  FileUp,
+  Lightbulb,
+  Link2,
+  RefreshCw,
+  Sparkles,
+  Zap,
+} from "lucide-react";
 import { FieldLabel, PageHeader, SectionCard } from "@/components/app-shell";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useToast } from "@/components/toast";
@@ -38,6 +49,9 @@ type RecentArticle = {
   topic: string;
   status: string;
   updatedAt: string;
+  coverImageUrl: string | null;
+  summary: string | null;
+  wordCount: number | null;
 };
 
 const statusMap: Record<string, { label: string; color: string }> = {
@@ -103,8 +117,11 @@ export default function HomePage() {
     goal: "知识分享",
     outlineCount: 3,
   });
+  const [isNarrow, setIsNarrow] = useState(false);
   const [quickGenerateConfirm, setQuickGenerateConfirm] = useState<string | null>(null);
   const [quickAutoPush, setQuickAutoPush] = useState(false);
+  const [quickAutoPushBlog, setQuickAutoPushBlog] = useState(false);
+  const [blogSyncConfigured, setBlogSyncConfigured] = useState(false);
   const [importForm, setImportForm] = useState({
     title: "",
     content: "",
@@ -122,15 +139,63 @@ export default function HomePage() {
   // Topic Ideas state
   type TopicIdea = { topic: string; reason: string; source: string; score: number; tags?: string[] };
   type IdeasFilter = "all" | "history" | "hot";
+  type IdeasCategory =
+    | "all"
+    | "web"
+    | "ai"
+    | "backend"
+    | "career"
+    | "business"
+    | "life"
+    | "writing";
+  const IDEA_CATEGORY_OPTIONS: Array<{ id: IdeasCategory; label: string }> = [
+    { id: "all", label: "综合" },
+    { id: "web", label: "前端" },
+    { id: "ai", label: "AI · Agent" },
+    { id: "backend", label: "后端 · 系统" },
+    { id: "career", label: "职场成长" },
+    { id: "business", label: "商业副业" },
+    { id: "life", label: "生活健康" },
+    { id: "writing", label: "写作内容" },
+  ];
   const [ideas, setIdeas] = useState<TopicIdea[]>([]);
   const [ideasLoading, setIdeasLoading] = useState(false);
   const [ideasCursor, setIdeasCursor] = useState(0);
   const [ideasFilter, setIdeasFilter] = useState<IdeasFilter>("all");
+  const [ideasCategory, setIdeasCategory] = useState<IdeasCategory>("all");
   const [ideasOpen, setIdeasOpen] = useState(false);
   const [ideasEmptyReason, setIdeasEmptyReason] = useState<string | null>(null);
 
-  async function fetchIdeas(cursor = 0, filter: IdeasFilter = ideasFilter, opts?: { refresh?: boolean }) {
-    if (filter !== ideasFilter || opts?.refresh) {
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 479px)");
+    const update = () => setIsNarrow(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/configs/blog-sync", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((json) => {
+        if (!cancelled && json?.code === 0 && json?.data) {
+          setBlogSyncConfigured(Boolean(json.data.configured));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function fetchIdeas(
+    cursor = 0,
+    filter: IdeasFilter = ideasFilter,
+    opts?: { refresh?: boolean },
+    category: IdeasCategory = ideasCategory,
+  ) {
+    if (filter !== ideasFilter || category !== ideasCategory || opts?.refresh) {
       setIdeas([]);
       setIdeasEmptyReason(null);
     }
@@ -140,6 +205,7 @@ export default function HomePage() {
         count: "8",
         cursor: String(cursor),
         mode: filter,
+        category,
       });
       // 换一批：强制重新调模型生成热点（历史模式本身不走 LLM）
       if (opts?.refresh && filter !== "history") {
@@ -152,6 +218,7 @@ export default function HomePage() {
         setIdeas(nextIdeas);
         setIdeasCursor(cursor);
         setIdeasFilter(filter);
+        setIdeasCategory(category);
         setIdeasOpen(true);
         setIdeasEmptyReason(nextIdeas.length ? null : json.data.emptyReason || "暂时没有建议");
         if (!nextIdeas.length && !json.data.emptyReason) {
@@ -482,10 +549,11 @@ export default function HomePage() {
     const topic = (topicOverride ?? form.topic).trim();
     if (!topic || loading) return;
     setQuickAutoPush(false);
+    setQuickAutoPushBlog(false);
     setQuickGenerateConfirm(topic);
   }
 
-  async function handleQuickGenerate(topic: string, autoPush: boolean) {
+  async function handleQuickGenerate(topic: string, autoPush: boolean, autoPushBlog: boolean) {
     if (!topic || loading) return;
     setLoading(true);
 
@@ -502,6 +570,7 @@ export default function HomePage() {
           goal: form.goal,
           outlineCount: form.outlineCount,
           autoPush,
+          autoPushBlog,
         }),
       });
       const json = (await res.json()) as ApiResponse<{
@@ -594,8 +663,8 @@ export default function HomePage() {
         ))}
       </div>
 
-      <section className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(300px,1fr)] home-workspace">
-        <div data-tour="home-create">
+      <section className="home-studio">
+        <div data-tour="home-create" className="home-studio-create">
           <SectionCard
             title="快速开始"
             description={
@@ -634,10 +703,23 @@ export default function HomePage() {
             </div>
 
             {createMode === "ai" ? (
-              <form className="home-create-form space-y-6" onSubmit={handleSubmit}>
-                <div className="home-topic-block">
-                  <div className="home-topic-head">
-                    <FieldLabel>主题 / 标题</FieldLabel>
+              <form className="home-create-form space-y-6 home-studio-form" onSubmit={handleSubmit}>
+                <div className="home-studio-row">
+                  <div className="home-studio-topic">
+                    <div className="home-topic-block">
+                      <FieldLabel>主题 / 标题</FieldLabel>
+                      <div className="home-topic-input-wrap">
+                    <input
+                      type="text"
+                      value={form.topic}
+                      onChange={(e) => update("topic", e.target.value)}
+                      placeholder={
+                        isNarrow
+                          ? "例如：AI 对话界面 / 效率提升"
+                          : "例如：用 React 做流式 AI 对话界面 / 普通人如何用 AI 提升效率"
+                      }
+                      className="home-topic-input"
+                    />
                     <button
                       type="button"
                       disabled={ideasLoading}
@@ -653,16 +735,9 @@ export default function HomePage() {
                       <span>{ideasOpen ? "收起灵感" : "给我灵感"}</span>
                     </button>
                   </div>
-                  <input
-                    type="text"
-                    value={form.topic}
-                    onChange={(e) => update("topic", e.target.value)}
-                    placeholder="例如：用 React 做流式 AI 对话界面 / 普通人如何用 AI 提升效率"
-                    className="mt-2 w-full px-4 py-3.5 text-base"
-                  />
 
-                  {ideasOpen && (
-                    <div className="topic-ideas-panel" aria-live="polite">
+                      {ideasOpen && (
+                        <div className="topic-ideas-panel" aria-live="polite">
                       <div className="topic-ideas-toolbar">
                         <div className="topic-ideas-filters" role="tablist" aria-label="灵感筛选">
                           {(
@@ -689,24 +764,39 @@ export default function HomePage() {
                             </button>
                           ))}
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => void fetchIdeas(ideasCursor + 1, ideasFilter, { refresh: true })}
-                          disabled={ideasLoading || (ideasFilter === "history" && ideas.length === 0)}
-                          className="topic-ideas-refresh"
-                        >
-                          <RefreshCw size={12} className={ideasLoading ? "animate-spin" : ""} />
-                          换一批
-                        </button>
+                        <div className="topic-ideas-toolbar-side">
+                          {ideasFilter !== "history" ? (
+                            <label className="topic-ideas-category-field">
+                              <span className="topic-ideas-category-label">分类</span>
+                              <select
+                                value={ideasCategory}
+                                disabled={ideasLoading}
+                                onChange={(e) => {
+                                  const next = e.target.value as IdeasCategory;
+                                  if (next === ideasCategory) return;
+                                  void fetchIdeas(0, ideasFilter, undefined, next);
+                                }}
+                                className="topic-ideas-category-select"
+                              >
+                                {IDEA_CATEGORY_OPTIONS.map((c) => (
+                                  <option key={c.id} value={c.id}>
+                                    {c.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => void fetchIdeas(ideasCursor + 1, ideasFilter, { refresh: true })}
+                            disabled={ideasLoading || (ideasFilter === "history" && ideas.length === 0)}
+                            className="topic-ideas-refresh"
+                          >
+                            <RefreshCw size={12} className={ideasLoading ? "animate-spin" : ""} />
+                            换一批
+                          </button>
+                        </div>
                       </div>
-
-                      <p className="topic-ideas-caption">
-                        {ideasFilter === "history"
-                          ? "从你最近写过的主题延伸，不含通用热点。"
-                          : ideasFilter === "hot"
-                            ? "当下前端 / AI / 全栈热点，不含历史偏好。"
-                            : "历史延伸与技术热点混合，点选一条填入主题。"}
-                      </p>
 
                       {ideasLoading && ideas.length === 0 ? (
                         <div className="topic-ideas-loading">
@@ -794,47 +884,36 @@ export default function HomePage() {
                   )}
                 </div>
 
-                <div>
-                  <FieldLabel>关键词</FieldLabel>
-                  <input
-                    type="text"
-                    value={form.keywords}
-                    onChange={(e) => update("keywords", e.target.value)}
-                    placeholder="可选，多个用逗号分隔"
-                    className="mt-2 w-full px-4 py-2.5 text-sm"
-                  />
-                </div>
-
-                <div className="field-grid field-grid-2 home-create-primary-grid">
-                  <div>
-                    <FieldLabel>文章风格</FieldLabel>
-                    <select
-                      value={form.style}
-                      onChange={(e) => update("style", e.target.value)}
-                      className="mt-2 w-full px-4 py-2.5 text-sm"
-                    >
-                      <option>干货型</option>
-                      <option>观点型</option>
-                      <option>故事型</option>
-                    </select>
-                  </div>
-                  <div>
-                    <FieldLabel>目标字数</FieldLabel>
-                    <select
-                      value={form.wordCount}
-                      onChange={(e) => update("wordCount", Number(e.target.value))}
-                      className="mt-2 w-full px-4 py-2.5 text-sm"
-                    >
-                      <option value={800}>800</option>
-                      <option value={1200}>1,200</option>
-                      <option value={1500}>1,500</option>
-                      <option value={2000}>2,000</option>
-                      <option value={3000}>3,000</option>
-                      <option value={4000}>4,000</option>
-                      <option value={5000}>5,000</option>
-                    </select>
-                  </div>
-                </div>
+              <div className="home-studio-option">
+                <FieldLabel>文章风格</FieldLabel>
+                <select
+                  value={form.style}
+                  onChange={(e) => update("style", e.target.value)}
+                  className="mt-2 w-full px-4 py-2.5 text-sm"
+                >
+                  <option>干货型</option>
+                  <option>观点型</option>
+                  <option>故事型</option>
+                </select>
+              </div>
+              <div className="home-studio-option">
+                <FieldLabel>目标字数</FieldLabel>
+                <select
+                  value={form.wordCount}
+                  onChange={(e) => update("wordCount", Number(e.target.value))}
+                  className="mt-2 w-full px-4 py-2.5 text-sm"
+                >
+                  <option value={800}>800</option>
+                  <option value={1200}>1,200</option>
+                  <option value={1500}>1,500</option>
+                  <option value={2000}>2,000</option>
+                  <option value={3000}>3,000</option>
+                  <option value={4000}>4,000</option>
+                  <option value={5000}>5,000</option>
+                </select>
+              </div>
+            </div>
+            </div>
 
                 <input
                   type="checkbox"
@@ -842,10 +921,23 @@ export default function HomePage() {
                   className="home-create-more-toggle"
                 />
                 <label htmlFor="home-create-more-toggle" className="home-create-more-summary">
-                  更多选项
-                  <span className="home-create-more-hint">读者 / 目标 / 大纲数</span>
+                  <span className="home-create-more-summary-main">
+                    更多选项
+                    <span className="home-create-more-hint">关键词 / 读者 / 目标 / 大纲数</span>
+                  </span>
+                  <ChevronDown size={15} className="home-create-more-chevron" />
                 </label>
                 <div className="field-grid field-grid-2 home-create-more-grid">
+                  <div className="home-more-keywords">
+                    <FieldLabel>关键词</FieldLabel>
+                    <input
+                      type="text"
+                      value={form.keywords}
+                      onChange={(e) => update("keywords", e.target.value)}
+                      placeholder="可选，多个用逗号分隔"
+                      className="mt-2 w-full px-4 py-2.5 text-sm"
+                    />
+                  </div>
                   <div>
                     <FieldLabel>目标读者</FieldLabel>
                     <input
@@ -889,7 +981,7 @@ export default function HomePage() {
                   <button
                     type="submit"
                     disabled={loading || !form.topic.trim()}
-                    className="home-create-submit btn-primary py-3.5 text-sm"
+                    className="home-create-submit home-create-outline-btn py-3.5 text-sm"
                   >
                     {loading ? (
                       <span className="inline-flex items-center justify-center gap-2">
@@ -1120,12 +1212,15 @@ export default function HomePage() {
             )}
           </SectionCard>
         </div>
+      </section>
 
-        <SectionCard
-          title="最近文章"
-          description="未完成的继续改，已推送的也能回来改。"
-          className="home-recent-card"
-          headerExtra={
+      <section className="home-recent-section">
+        <div className="home-recent-head">
+          <div className="home-recent-head-copy">
+            <h2 className="home-recent-title">最近文章</h2>
+            <p className="home-recent-desc">未完成的继续改，已推送的也能回来改。</p>
+          </div>
+          <div className="home-recent-head-actions">
             <button
               onClick={fetchRecent}
               className="btn-ghost inline-flex items-center gap-1 text-xs"
@@ -1133,61 +1228,79 @@ export default function HomePage() {
               <RefreshCw size={12} />
               刷新
             </button>
-          }
-        >
+          </div>
+        </div>
+
+        <div className="home-recent-body">
           {recent.length === 0 ? (
             <div className="empty-state py-10">
-              <p className="text-sm text-[var(--muted)]">还没有文章，在左侧开始创作吧</p>
+              <p className="text-sm text-[var(--muted)]">还没有文章，先在上面开始创作吧</p>
             </div>
           ) : (
-            <ul className="space-y-3">
+            <ul className="home-recent-grid">
               {recent.slice(0, 6).map((item) => {
                 const s = statusMap[item.status] ?? statusMap.draft;
                 const backgroundTask = getArticleBackgroundTask(item.id);
                 const isRunning = runningTaskIds.has(item.id);
+                const title = item.title?.trim() || item.topic;
+                const sub =
+                  item.title?.trim() && item.title.trim() !== item.topic
+                    ? item.topic
+                    : (item.summary?.trim() || item.topic);
                 return (
                   <li key={item.id}>
                     <Link href={`/articles/${item.id}`} className="recent-item">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold">
-                          {item.title ?? item.topic}
-                        </p>
-                        <p className="mt-1 text-xs text-[var(--muted)]">
-                          {new Date(item.updatedAt).toLocaleString("zh-CN", {
-                            month: "2-digit",
-                            day: "2-digit",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </p>
+                      <div className="recent-item-thumb">
+                        {item.coverImageUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={item.coverImageUrl} alt="" />
+                        ) : (
+                          <FileText size={18} />
+                        )}
                       </div>
-                      <div className="flex shrink-0 flex-col items-end gap-1.5 sm:flex-row sm:items-center">
-                        {isRunning ? (
-                          <span className="badge badge-accent">
-                            {backgroundTask?.label ?? "生成中"}…
+                      <div className="recent-item-main">
+                        <p className="recent-item-title">{title}</p>
+                        <p className="recent-item-sub">{sub}</p>
+                        <div className="recent-item-meta">
+                          {isRunning ? (
+                            <span className="badge badge-accent">
+                              {backgroundTask?.label ?? "生成中"}…
+                            </span>
+                          ) : null}
+                          <span className={`badge ${s.color}`}>{s.label}</span>
+                          {item.wordCount ? (
+                            <span className="recent-item-words">{item.wordCount} 字</span>
+                          ) : null}
+                          <span className="recent-item-time">
+                            {new Date(item.updatedAt).toLocaleString("zh-CN", {
+                              month: "2-digit",
+                              day: "2-digit",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
                           </span>
-                        ) : null}
-                        <span className={`badge ${s.color}`}>{s.label}</span>
+                        </div>
                       </div>
+                      <ChevronRight size={16} className="recent-item-arrow" />
                     </Link>
                   </li>
                 );
               })}
             </ul>
           )}
-        </SectionCard>
+        </div>
       </section>
 
       <ConfirmDialog
         open={quickGenerateConfirm !== null}
         title="快捷生成全文"
-        description="将一键完成：大纲自动采用 → 生成正文（含精炼与封面）→ 可选推送微信草稿。"
+        description="将一键完成：大纲自动采用 → 生成正文（含精炼与封面）→ 可选推送微信/同步博客。"
         confirmLabel="开始生成"
         cancelLabel="取消"
         onConfirm={() => {
           const topic = quickGenerateConfirm;
           setQuickGenerateConfirm(null);
-          if (topic) void handleQuickGenerate(topic, quickAutoPush);
+          if (topic) void handleQuickGenerate(topic, quickAutoPush, quickAutoPushBlog);
         }}
         onCancel={() => setQuickGenerateConfirm(null)}
       >
@@ -1201,6 +1314,22 @@ export default function HomePage() {
             生成完成后<strong>自动推送到微信草稿箱</strong>
             <span className="confirm-dialog-check-hint">
               需已在「设置 → 微信公众号」配置 App ID / Secret
+            </span>
+          </span>
+        </label>
+        <label className="confirm-dialog-check-row">
+          <input
+            type="checkbox"
+            checked={quickAutoPushBlog}
+            disabled={!blogSyncConfigured}
+            onChange={(e) => setQuickAutoPushBlog(e.target.checked)}
+          />
+          <span>
+            生成完成后<strong>自动同步到博客</strong>
+            <span className="confirm-dialog-check-hint">
+              {blogSyncConfigured
+                ? "同步到已配置的 GitHub 博客仓库"
+                : "需先在「设置 → 博客同步」配置 GitHub Token"}
             </span>
           </span>
         </label>

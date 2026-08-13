@@ -7,6 +7,16 @@ export type TopicIdeaSource = "history" | "template" | "hot" | "mixed";
 
 export type TopicIdeasMode = "all" | "history" | "hot";
 
+export type TopicIdeasCategory =
+  | "all"
+  | "web"
+  | "ai"
+  | "backend"
+  | "career"
+  | "business"
+  | "life"
+  | "writing";
+
 export type TopicIdea = {
   topic: string;
   reason: string;
@@ -25,6 +35,8 @@ export type TopicIdeasRequest = {
   cursor?: number;
   /** 换一批：强制重新生成 LLM 热点，跳过热点缓存 */
   refresh?: boolean;
+  /** 选题分类（综合/前端/AI/后端/职场/商业/生活/写作），null 或 all 表示综合 */
+  category?: TopicIdeasCategory | null;
 };
 
 type Candidate = {
@@ -189,6 +201,183 @@ const HOT_TOPIC_SEEDS: Record<BlogSection | "all", string[]> = {
   ],
 };
 
+export const IDEA_CATEGORY_LABELS: Record<TopicIdeasCategory, string> = {
+  all: "综合",
+  web: "前端",
+  ai: "AI · Agent",
+  backend: "后端 · 系统",
+  career: "职场成长",
+  business: "商业副业",
+  life: "生活健康",
+  writing: "写作内容",
+};
+
+type CategoryConfig = {
+  label: string;
+  llmTags: string[];
+  seeds: string[];
+  templateTags: string[];
+  tech: boolean;
+};
+
+const IDEA_CATEGORIES: Record<TopicIdeasCategory, CategoryConfig> = {
+  all: {
+    label: "综合",
+    llmTags: ["前端", "全栈", "AI", "Agent", "TypeScript", "工程化", "React", "效率"],
+    seeds: HOT_TOPIC_SEEDS.all,
+    templateTags: [],
+    tech: true,
+  },
+  web: {
+    label: "前端",
+    llmTags: SECTION_TAGS.web,
+    seeds: [...HOT_TOPIC_SEEDS.web, ...HOT_TOPIC_SEEDS.all.slice(0, 8)],
+    templateTags: ["前端", "React", "Vue", "TypeScript", "组件", "工程化", "全栈", "性能"],
+    tech: true,
+  },
+  ai: {
+    label: "AI · Agent",
+    llmTags: ["AI", "Agent", "LLM", "MCP", "提示词", "工作流", "模型", "Cursor", "效率工具"],
+    seeds: [
+      ...HOT_TOPIC_SEEDS.tech,
+      ...HOT_TOPIC_SEEDS.agent,
+      "本地优先 AI：从云 API 到端侧小模型的迁移场景",
+      "RAG 之外：让 AI 真正用上你私有数据的几种工程方案",
+      "AI 编程助手用了一年，代码质量和习惯发生了什么变化",
+      "多模型路由与降级：怎么在成本和效果之间自动权衡",
+      "Agent 的记忆与状态管理：长任务不跑偏的工程手段",
+    ],
+    templateTags: ["AI", "工作流", "自动化", "工具链", "实践", "Agent", "Cursor", "提示词", "MCP"],
+    tech: true,
+  },
+  backend: {
+    label: "后端 · 系统",
+    llmTags: ["后端", "系统", "数据库", "架构", "性能", "网络", "调试", "Node", "Docker", "云原生"],
+    seeds: [
+      ...HOT_TOPIC_SEEDS.computer,
+      "从单体到模块化：什么时候拆、拆到什么程度",
+      "数据库连接池调优：一次线上抖动带来的参数级复盘",
+      "接口设计规范是怎么从文档变成团队共识的",
+      "服务无状态化改造：会话、缓存和扩展性的取舍",
+      "定时任务系统设计：分布式环境下如何保证只执行一次",
+    ],
+    templateTags: ["系统", "网络", "性能", "浏览器", "调试", "故障定位", "后端", "架构", "Node", "决策"],
+    tech: true,
+  },
+  career: {
+    label: "职场成长",
+    llmTags: ["职场", "成长", "管理", "沟通", "跳槽", "效率", "职业规划"],
+    seeds: [
+      "跳槽前想清楚这几件事，少走半年弯路",
+      "你的「忙」有多少是在创造价值：时间审计实操",
+      "会议太多怎么办：我砍掉 60% 会议后发生了什么",
+      "向上管理不是拍马屁：我怎么和老板同步预期",
+      "从执行者到带人：角色切换最难的那一步",
+      "工作三年后我才明白的 5 个职场真相",
+      "如何在高压环境下保持稳定输出",
+      "入职新公司第一个月，我做对了哪几件事",
+    ],
+    templateTags: ["职场"],
+    tech: false,
+  },
+  business: {
+    label: "商业副业",
+    llmTags: ["商业", "副业", "创业", "增长", "定价", "电商", "知识付费", "个人IP"],
+    seeds: [
+      "一个人能不能跑通一个小生意：我的尝试和数据",
+      "定价策略怎么定：我测试了 3 种方案后的结论",
+      "从 0 用户到 1000 付费：冷启动阶段做对了什么",
+      "小团队怎么做产品决策：资源有限时的取舍逻辑",
+      "我观察到的几个正在赚钱的小众赛道",
+      "小红书 / 公众号 / 视频号：选哪个平台起步更合理",
+      "知识付费还能做吗：一个小 IP 的真实收入结构",
+      "一个人的电商小闭环：选品、流量、复购",
+    ],
+    templateTags: ["商业", "创业", "定价", "赛道", "增长"],
+    tech: false,
+  },
+  life: {
+    label: "生活健康",
+    llmTags: ["生活", "健康", "效率", "习惯", "理财", "学习", "运动", "心态"],
+    seeds: [
+      "月薪一万五的理财策略：我的真实配置",
+      "基金定投两年后的真实收益和心得",
+      "极简生活不是扔东西：我的实践和边界",
+      "搬家 5 次后总结的租房避坑清单",
+      "久坐程序员的身体管理：我的最小可行方案",
+      "从跑不动 1 公里到完成半马：我用了多久",
+      "睡眠质量真的能优化吗：我试了这些方法",
+      "自学一门新技能，从入门到能用要多久",
+    ],
+    templateTags: ["生活", "习惯", "健康", "运动", "理财", "投资", "教育", "学习", "效率"],
+    tech: false,
+  },
+  writing: {
+    label: "写作内容",
+    llmTags: ["写作", "内容", "选题", "公众号", "复盘", "IP", "方法论"],
+    seeds: [
+      "写了 100 篇公众号后，我对选题的理解变了",
+      "为什么同样的干货，有的阅读量差 10 倍",
+      "个人 IP 冷启动：不花钱的前 1000 个关注者",
+      "高信息密度写作：把 1 篇讲清楚比 5 篇更重要",
+      "技术博客怎么写才不像 AI 水文",
+      "从写周报到写决策记录：让文档真正有用",
+      "内容复利：一篇旧文如何持续带来新读者",
+      "公众号排版与完读率：被低估的几个细节",
+    ],
+    templateTags: ["内容"],
+    tech: false,
+  },
+};
+
+function toCategory(v: string | null | undefined): TopicIdeasCategory {
+  if (v && v in IDEA_CATEGORIES) return v as TopicIdeasCategory;
+  return "all";
+}
+
+/** 近期已展示选题记忆：同一用户短期内不重复推同一批 */
+const SEEN_TTL_MS = 12 * 60 * 60 * 1000;
+const SEEN_MAX_PER_USER = 120;
+const seenStore = new Map<string, { topic: string; at: number }[]>();
+
+function pruneSeen(now = Date.now()) {
+  for (const [userId, list] of seenStore) {
+    const alive = list.filter((item) => now - item.at < SEEN_TTL_MS);
+    if (alive.length === 0) seenStore.delete(userId);
+    else if (alive.length !== list.length) seenStore.set(userId, alive);
+  }
+}
+
+function getSeenTopics(userId: string, now = Date.now()): string[] {
+  pruneSeen(now);
+  const list = seenStore.get(userId);
+  if (!list) return [];
+  return list
+    .slice()
+    .sort((a, b) => b.at - a.at)
+    .slice(0, 40)
+    .map((item) => item.topic);
+}
+
+function recordSeenTopics(userId: string, topics: string[], now = Date.now()) {
+  if (!userId || topics.length === 0) return;
+  pruneSeen(now);
+  const prev = seenStore.get(userId) ?? [];
+  const seen = new Set(prev.map((item) => normalizeTopic(item.topic)));
+  const next = [...prev];
+  for (const topic of topics) {
+    const key = normalizeTopic(topic);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    next.push({ topic: key, at: now });
+  }
+  if (next.length > SEEN_MAX_PER_USER) {
+    seenStore.set(userId, next.slice(next.length - SEEN_MAX_PER_USER));
+  } else if (next.length !== prev.length) {
+    seenStore.set(userId, next);
+  }
+}
+
 const HISTORY_TEMPLATES: Array<{ suffix: string; reason: string; tag: string; score: number }> = [
   { suffix: "\uff1a\u6211\u4f1a\u5148\u505a\u7684 3 \u4e2a\u5173\u952e\u52a8\u4f5c", reason: "\u5ef6\u5c55\u6210\u53ef\u6267\u884c\u6e05\u5355\u3002", tag: "\u6e05\u5355", score: 0.82 },
   { suffix: "\u91cc\u6700\u5bb9\u6613\u5ffd\u7565\u7684\u4e00\u4e2a\u7cfb\u7edf\u6027\u95ee\u9898", reason: "\u6362\u6210\u95ee\u9898\u5b9a\u4f4d\u89d2\u5ea6\u3002", tag: "\u95ee\u9898\u5bfc\u5411", score: 0.79 },
@@ -304,14 +493,22 @@ function buildHistoryCandidates(
   return ideas;
 }
 
-function buildTemplateCandidates(section: BlogSection | null, rnd: () => number): Candidate[] {
+function buildTemplateCandidates(
+  section: BlogSection | null,
+  rnd: () => number,
+  category?: TopicIdeasCategory,
+): Candidate[] {
   const sectionTags = section ? new Set(SECTION_TAGS[section]) : null;
+  const categoryTags =
+    category && category !== "all" ? new Set(IDEA_CATEGORIES[category].templateTags) : null;
   let pool = TEMPLATE_TOPICS.filter(
-    (item) => !sectionTags || item.tags.some((t) => sectionTags.has(t)),
+    (item) =>
+      (!sectionTags || item.tags.some((t) => sectionTags.has(t))) &&
+      (!categoryTags || item.tags.some((t) => categoryTags.has(t))),
   );
 
   // 综合入口：技术模板占主体，综合类只留少量
-  if (!section) {
+  if (!section && (!category || category === "all")) {
     const tech = pool.filter((item) => isTechHeavyCandidate({ topic: item.topic, tags: item.tags }));
     const general = pool.filter((item) => !isTechHeavyCandidate({ topic: item.topic, tags: item.tags }));
     const generalPick = [...general].sort(() => rnd() - 0.5).slice(0, Math.max(3, Math.floor(general.length * 0.2)));
@@ -329,11 +526,7 @@ function buildTemplateCandidates(section: BlogSection | null, rnd: () => number)
   }));
 }
 
-function buildHotCandidates(section: BlogSection | null, rnd: () => number): Candidate[] {
-  const seeds = [
-    ...(section ? HOT_TOPIC_SEEDS[section] : []),
-    ...HOT_TOPIC_SEEDS.all,
-  ];
+function buildHotCandidates(seeds: string[], rnd: () => number): Candidate[] {
   const shuffledSeeds = [...seeds].sort(() => rnd() - 0.5);
   return shuffledSeeds.map((topic) => ({
     topic,
@@ -444,11 +637,12 @@ const llmHotInflight = new Map<string, Promise<LlmHotTopic[]>>();
 async function fetchLlmHotTopics(
   section: BlogSection | null,
   count: number,
-  opts?: { force?: boolean; batch?: number },
+  opts?: { force?: boolean; batch?: number; category?: TopicIdeasCategory; avoid?: string[] },
 ): Promise<LlmHotTopic[]> {
-  const key = section ?? "all";
+  const key = `${section ?? "all"}:${opts?.category ?? "all"}`;
   const force = Boolean(opts?.force);
   const batch = opts?.batch ?? 0;
+  const avoid = opts?.avoid ?? [];
 
   if (!force) {
     const cached = llmHotCache.get(key);
@@ -468,7 +662,14 @@ async function fetchLlmHotTopics(
     try {
       const topics = await generateHotTopics({
         section,
-        sectionTags: section ? SECTION_TAGS[section] : DEFAULT_FOCUS_TAGS,
+        sectionTags:
+          opts?.category && opts.category !== "all"
+            ? IDEA_CATEGORIES[opts.category].llmTags
+            : section
+              ? SECTION_TAGS[section]
+              : DEFAULT_FOCUS_TAGS,
+        categoryLabel: opts?.category ? IDEA_CATEGORIES[opts.category].label : undefined,
+        avoid,
         count: Math.min(10, count + 2),
         batch,
       });
@@ -557,9 +758,17 @@ function dedupeAndRank(
   historyTopics: string[],
   count: number,
   seed: number,
+  opts?: { general?: boolean; seen?: Set<string> },
 ): TopicIdea[] {
+  let pool = candidates;
+  if (opts?.seen && opts.seen.size > 0) {
+    const fresh = candidates.filter((c) => !opts.seen!.has(normalizeTopic(c.topic)));
+    // 全新候选不足时，才允许回补已看过的，避免列表空掉
+    pool = fresh.length >= Math.min(count, 4) ? fresh : [...fresh, ...candidates];
+  }
+
   const deduped = new Map<string, Candidate>();
-  for (const c of candidates) {
+  for (const c of pool) {
     const topic = normalizeTopic(c.topic);
     if (!topic || topic.length < 6) continue;
     const key = topic.toLowerCase();
@@ -573,7 +782,7 @@ function dedupeAndRank(
     const maxSim = historyTopics.reduce((m, h) => Math.max(m, similarity(c.topic, h)), 0);
     const noveltyBonus = Math.max(0, 0.18 - maxSim * 0.22);
     const jitter = (rnd() - 0.5) * 0.08;
-    const affinity = techAffinityBonus(c);
+    const affinity = opts?.general ? -techAffinityBonus(c) : techAffinityBonus(c);
     const score = Math.max(0.25, Math.min(0.99, c.baseScore + noveltyBonus + jitter + affinity));
     return {
       topic: c.topic,
@@ -587,7 +796,7 @@ function dedupeAndRank(
 
   scored.sort((a, b) => b.score - a.score);
 
-  const generalCap = Math.max(1, Math.floor(count * 0.25));
+  const generalCap = opts?.general ? Infinity : Math.max(1, Math.floor(count * 0.25));
   const result: TopicIdea[] = [];
   let generalCount = 0;
 
@@ -634,8 +843,9 @@ function makeCacheKey(input: {
   mode: TopicIdeasMode;
   cursor: number;
   section: BlogSection | "all";
+  category: TopicIdeasCategory;
 }) {
-  return `${input.userId}|${input.section}|${input.count}|${input.mode}|${input.cursor}`;
+  return `${input.userId}|${input.section}|${input.count}|${input.mode}|${input.cursor}|${input.category}`;
 }
 
 function toBlogSection(v: string | null | undefined): BlogSection | null {
@@ -658,12 +868,15 @@ export async function getTopicIdeas(input: TopicIdeasRequest): Promise<TopicIdea
   const refresh = Boolean(input.refresh);
   const section = toBlogSection(input.section ?? null);
   const cursor = Number.isFinite(input.cursor) ? Math.max(0, Number(input.cursor)) : 0;
+  const category = toCategory(input.category ?? null);
+  const seenTopics = getSeenTopics(input.userId);
   const key = makeCacheKey({
     userId: input.userId,
     count,
     mode,
     section: section ?? "all",
     cursor,
+    category,
   });
 
   // 换一批强制走新生成，不吃结果缓存
@@ -693,6 +906,8 @@ export async function getTopicIdeas(input: TopicIdeasRequest): Promise<TopicIdea
         ? fetchLlmHotTopics(section, mode === "hot" ? 10 : 6, {
             force: refresh,
             batch: cursor,
+            category,
+            avoid: seenTopics,
           })
         : Promise.resolve([]),
     ]);
@@ -703,15 +918,15 @@ export async function getTopicIdeas(input: TopicIdeasRequest): Promise<TopicIdea
       .slice(0, 24);
 
     const seed = seededHash(
-      `${input.userId}-${Date.now()}-${cursor}-${mode}-${section ?? "all"}-${refresh ? "r" : "c"}`,
+      `${input.userId}-${Date.now()}-${cursor}-${mode}-${section ?? "all"}-${category}-${refresh ? "r" : "c"}`,
     );
     const rnd = seededRandom(seed);
 
     const history = buildHistoryCandidates(historyTopics, section, rnd);
-    const templates = buildTemplateCandidates(section, rnd);
+    const templates = buildTemplateCandidates(section, rnd, category);
     const mixed = buildMixedCandidates(historyTopics, includeHot, rnd);
     const llmHot = includeHot ? buildLlmHotCandidates(llmHotTopics) : [];
-    const hot = includeHot ? buildHotCandidates(section, rnd) : [];
+    const hot = includeHot ? buildHotCandidates(IDEA_CATEGORIES[category].seeds, rnd) : [];
 
     let pool: Candidate[] = [];
     let emptyReason: string | null = null;
@@ -733,10 +948,17 @@ export async function getTopicIdeas(input: TopicIdeasRequest): Promise<TopicIdea
       pool = [...llmHot, ...history, ...templates, ...mixed, ...hot];
     }
 
+    const general = !IDEA_CATEGORIES[category].tech;
+    const seen = new Set(seenTopics);
     const ideas =
       pool.length === 0
         ? []
-        : dedupeAndRank(pool, historyTopics, count, seed);
+        : dedupeAndRank(pool, historyTopics, count, seed, { general, seen });
+
+    recordSeenTopics(
+      input.userId,
+      ideas.map((i) => i.topic),
+    );
 
     const result: TopicIdeasResult = {
       ideas,

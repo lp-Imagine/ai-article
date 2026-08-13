@@ -16,6 +16,7 @@ import { generateCoverImage, generateSectionImage } from "@/lib/image-gen";
 import { mapWithConcurrency } from "@/lib/map-with-concurrency";
 import { withRetry } from "@/lib/retry";
 import { pushArticleToWechatDraft } from "@/lib/push-draft";
+import { syncArticleToBlog } from "@/lib/blog-sync";
 import { withUserConfig } from "@/lib/config-bridge";
 
 type OutlineRecord = {
@@ -583,7 +584,7 @@ async function runExpand(job: GenerationJob, update: ProgressUpdater) {
 /**
  * 快捷生成：一键完成 大纲 → 自动采用第 1 套 → 正文（含精炼 + 封面）→（可选）推送微信草稿。
  * 全程无需用户中途选择大纲或手动触发各步骤。
- * payload: { autoPush?: boolean }
+ * payload: { autoPush?: boolean; autoPushBlog?: boolean }
  */
 async function runQuickGenerate(job: GenerationJob, update: ProgressUpdater) {
   await update(3, "读取文章");
@@ -592,7 +593,7 @@ async function runQuickGenerate(job: GenerationJob, update: ProgressUpdater) {
   });
   if (!article) throw new Error("文章不存在");
 
-  const payload = (job.payload ?? {}) as { autoPush?: boolean };
+  const payload = (job.payload ?? {}) as { autoPush?: boolean; autoPushBlog?: boolean };
 
   // 1) 生成大纲（自动采用第 1 套方案）
   await update(8, "生成大纲");
@@ -743,6 +744,35 @@ async function runQuickGenerate(job: GenerationJob, update: ProgressUpdater) {
     }
   }
 
+  // 4) 可选：自动同步到博客（GitHub 源仓库），失败不阻断任务
+  let blogSync:
+    | { pushed: true; url: string; path: string }
+    | { pushed: false; warning: string | null }
+    | null = null;
+  if (payload.autoPushBlog) {
+    await update(94, "同步到博客");
+    try {
+      const result = await syncArticleToBlog(
+        {
+          id: updated.id,
+          title: updated.title,
+          topic: updated.topic,
+          summary: updated.summary,
+          content: updated.content,
+          coverImageUrl: updated.coverImageUrl,
+          keywords: updated.keywords,
+          createdAt: updated.createdAt,
+        },
+        {},
+      );
+      blogSync = { pushed: true, url: result.url, path: result.path };
+    } catch (err) {
+      const warning = err instanceof Error ? err.message : "自动同步博客失败";
+      console.error("[job:quick_generate] blog sync failed:", warning);
+      blogSync = { pushed: false, warning };
+    }
+  }
+
   await update(100, "完成");
   return {
     articleId: updated.id,
@@ -750,9 +780,11 @@ async function runQuickGenerate(job: GenerationJob, update: ProgressUpdater) {
     coverImageUrl: updated.coverImageUrl,
     coverWarning,
     autoPush: payload.autoPush === true,
+    autoPushBlog: payload.autoPushBlog === true,
     push: pushed
       ? { pushed: true, draftMediaId: pushed.draftMediaId, warnings: pushed.warnings }
       : { pushed: false, warning: pushWarning },
+    blog: blogSync ?? { pushed: false, warning: null },
     qualityScore: analyzeContentQuality({
       title: generated.title,
       summary: generated.summary,
