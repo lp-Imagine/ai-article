@@ -80,3 +80,78 @@ export function extractSectionHtml(raw: string, jsonMode: boolean): string {
   }
   return extractHtmlFromPlainReply(raw);
 }
+
+/** 会出现在正文里的块级标签（未闭合即视为半截） */
+const BLOCK_TAGS = new Set([
+  "p",
+  "div",
+  "ul",
+  "ol",
+  "li",
+  "table",
+  "thead",
+  "tbody",
+  "tfoot",
+  "tr",
+  "td",
+  "th",
+  "blockquote",
+  "pre",
+  "section",
+  "figure",
+  "figcaption",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "dl",
+  "dt",
+  "dd",
+  "details",
+  "summary",
+]);
+
+/** HTML 空元素：无闭合标签是合法的，跳过 */
+const VOID_TAGS = new Set([
+  "br",
+  "hr",
+  "img",
+  "input",
+  "meta",
+  "link",
+  "source",
+  "wbr",
+  "area",
+  "base",
+  "col",
+  "embed",
+  "track",
+]);
+
+/**
+ * 检测 HTML 片段是否被截断：存在未闭合的块级标签。
+ * 模型在 max_tokens 截断时常停在半句话（如 `<p>…前300字是`），
+ * 这类半截内容不能当完整章节发布，应判定为截断交给重试逻辑。
+ * 兼容：属性值里的 `>`、自闭合 `<br/>`、空元素 `<img>` 等。
+ */
+export function isTruncatedHtmlFragment(html: string): boolean {
+  if (!html) return false;
+  const stack: string[] = [];
+  // 引号内的属性值（可含 >）优先匹配；标签名后可选属性；可选自闭合斜杠
+  const tagRe = /<\/?([a-zA-Z][a-zA-Z0-9]*)(?:"[^"]*"|'[^']*'|[^>"'])*\s*\/?>/g;
+  let m: RegExpExecArray | null;
+  while ((m = tagRe.exec(html))) {
+    const full = m[0];
+    const name = m[1].toLowerCase();
+    if (VOID_TAGS.has(name)) continue;
+    if (full.startsWith("</")) {
+      const idx = stack.lastIndexOf(name);
+      if (idx >= 0) stack.splice(idx); // 闭合它（及其内部未闭合的标签）
+    } else if (!full.endsWith("/>")) {
+      stack.push(name);
+    }
+  }
+  return stack.length > 0;
+}

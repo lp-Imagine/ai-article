@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractSectionHtml,
+  isTruncatedHtmlFragment,
   salvageTruncatedJsonHtml,
 } from "@/lib/ai/extract-html";
 
@@ -44,5 +45,58 @@ describe("extractSectionHtml", () => {
       false,
     );
     expect(html).toContain("选型决策");
+  });
+});
+
+describe("isTruncatedHtmlFragment", () => {
+  it("flags a paragraph cut off mid-sentence", () => {
+    expect(
+      isTruncatedHtmlFragment("<h2>标题</h2><p>前300字是"),
+    ).toBe(true);
+  });
+
+  it("passes complete well-formed sections", () => {
+    expect(
+      isTruncatedHtmlFragment(
+        "<h2>标题</h2><p>第一段。</p><p>第二段。</p><ul><li>a</li><li>b</li></ul>",
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores void elements like img/hr/br", () => {
+    expect(
+      isTruncatedHtmlFragment(
+        '<h2>标题</h2><p>配图：<img src="https://x/y.png"><br>换行</p><hr>',
+      ),
+    ).toBe(false);
+  });
+
+  it("handles self-closing tags and attributes containing >", () => {
+    expect(
+      isTruncatedHtmlFragment(
+        '<h2>标题</h2><p title="a > b">正文</p><br/>',
+      ),
+    ).toBe(false);
+  });
+
+  it("passes pre/code blocks", () => {
+    expect(
+      isTruncatedHtmlFragment(
+        "<h2>标题</h2><pre><code>SELECT 1;</code></pre><p>结束。</p>",
+      ),
+    ).toBe(false);
+  });
+
+  it("flags unclosed table/list", () => {
+    expect(
+      isTruncatedHtmlFragment("<h2>标题</h2><table><tr><td>x"),
+    ).toBe(true);
+    expect(
+      isTruncatedHtmlFragment("<h2>标题</h2><ul><li>a"),
+    ).toBe(true);
+  });
+
+  it("returns false for empty input", () => {
+    expect(isTruncatedHtmlFragment("")).toBe(false);
   });
 });

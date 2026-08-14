@@ -73,7 +73,21 @@ import { SECTION_ATTEMPTS } from "@/lib/ai/constants";
 import {
   extractHtmlFromLlmJson,
   extractSectionHtml,
+  isTruncatedHtmlFragment,
 } from "@/lib/ai/extract-html";
+
+/**
+ * LLM 输出被 max_tokens 截断（finish_reason=length）。
+ * 半截 JSON/HTML 不是交付物：直接当作完整内容发布，会出现
+ * 章节正文停在半句话、<p> 未闭合这类格式事故。调用方捕获后应
+ * 提高 token 预算重试，而不是把截断输出写进正文。
+ */
+export class LlmOutputTruncatedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LlmOutputTruncatedError";
+  }
+}
 
 
 function readConfig(key: string, fallback: string): string {
@@ -245,6 +259,15 @@ async function callChat(
           `out=${outTokens}tok${outTokens ? ` ${(outTokens / seconds).toFixed(1)}tok/s` : ""} cap=${maxTokens}` +
           `${finish ? ` finish=${finish}` : ""}${truncated ? " truncated" : ""}`,
       );
+
+      if (truncated) {
+        // 截断输出不能作为交付物：半截 JSON/HTML 会被下游误当作完整内容发布
+        // （线上出现过章节正文停在半句话、<p> 未闭合的格式事故）。抛给调用方
+        // 决定是提高预算重试还是报错，而不是静默返回残缺内容。
+        throw new LlmOutputTruncatedError(
+          `LLM 输出被 max_tokens 截断（finish=${finish || "length"} out=${outTokens}/${maxTokens}）`,
+        );
+      }
 
       return pickChatMessageContent(json);
     } catch (error) {
@@ -819,7 +842,7 @@ async function generateContentSectionHtml(input: {
   blueprint: ArticleBlueprint;
 }): Promise<string> {
   const { section } = input;
-  const maxTokens = computeSectionMaxTokens(input.perSection, input.engineering);
+  let maxTokens = computeSectionMaxTokens(input.perSection, input.engineering);
   let lastError = "模型未返回有效内容";
   let forcePlain = false;
 
@@ -874,13 +897,20 @@ ${sectionDirective(input.blueprint, input.sectionIndex - 1)}`,
       } else {
         const html = extractSectionHtml(sectionRaw, !plainMode);
         if (html.length >= 60) {
-          // 防线：即使 content 里混入思考规划文本（reasoning 泄漏），
-          // 也不让它进入正文，改为重试/失败，而不是发布垃圾章节。
-          if (!looksLikeModelReasoning(html)) return html;
-          lastError = "模型输出了思考规划而非正文（疑似 reasoning 泄漏）";
+          // 防线1：即使 content 里混入思考规划文本（reasoning 泄漏），
+          //       也不让它进入正文，改为重试/失败，而不是发布垃圾章节。
+          // 防线2：半截 HTML（块级标签未闭合，疑似被 max_tokens 截断）同样
+          //       不得发布——线上出现过章节正文停在半句话的格式事故。
+          if (!looksLikeModelReasoning(html) && !isTruncatedHtmlFragment(html)) {
+            return html;
+          }
+          const reason = looksLikeModelReasoning(html)
+            ? "模型输出了思考规划而非正文（疑似 reasoning 泄漏）"
+            : "输出不完整（块级标签未闭合，疑似被 max_tokens 截断）";
+          lastError = reason;
           forcePlain = true;
           console.warn(
-            `[generateContentBySections] section ${input.sectionIndex} reasoning leak`,
+            `[generateContentBySections] section ${input.sectionIndex} rejected: ${reason}`,
             sectionRaw.slice(0, 200),
           );
         } else {
@@ -895,6 +925,12 @@ ${sectionDirective(input.blueprint, input.sectionIndex - 1)}`,
     } catch (error) {
       lastError = error instanceof Error ? error.message : "章节生成失败";
       forcePlain = true;
+      if (error instanceof LlmOutputTruncatedError) {
+        // 内容超长被 max_tokens 截断：提高 token 预算重试（纯 HTML 模式），
+        // 而不是发布半截正文。budget 提高后模型能写完剩余段落。
+        maxTokens = Math.min(16384, Math.round(maxTokens * 1.6));
+        lastError = "模型输出被 token 上限截断，已提高预算重试";
+      }
       if (attempt === SECTION_ATTEMPTS - 1) throw error;
     }
 
