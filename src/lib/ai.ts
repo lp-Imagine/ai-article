@@ -280,11 +280,15 @@ function pickChatMessageContent(json: {
 }): string {
   const choice = json.choices?.[0];
   const msg = choice?.message;
-  const candidates = [msg?.content, msg?.reasoning_content, msg?.reasoning, choice?.text];
-  for (const value of candidates) {
-    if (typeof value === "string" && value.trim()) return value;
-  }
-  return typeof msg?.content === "string" ? msg.content : "";
+  // 只认 content（最终答案）。reasoning_content / reasoning 是模型思考过程，
+  // 绝不是交付物：模型在 max_tokens 截断时常返回「空 content + 长思考」，
+  // 若回退到思考过程，会被当成章节正文/JSON 发布（线上出现过章节内容变成
+  // 「写作规划」的泄漏事故）。content 为空时返回空串，交给调用方的重试/失败逻辑。
+  const content = typeof msg?.content === "string" ? msg.content : "";
+  if (content.trim()) return content;
+  // 兼容非 chat 形态的 OpenAI 兼容端点（answer 在顶层 text 字段）
+  if (typeof choice?.text === "string" && choice.text.trim()) return choice.text;
+  return "";
 }
 
 function getLlmTimeoutMs(role: TextRole): number {
@@ -774,6 +778,32 @@ function finalizeGeneratedContent(
   };
 }
 
+/** 模型思考/写作规划文本的特征（出现在泄漏事故里，正常正文几乎不会命中） */
+const REASONING_LEAK_PATTERNS: RegExp[] = [
+  /需要(?:写出|给出|控制|注意|合理|整合|定义)/,
+  /注意[:：]?HTML/,
+  /不能重复前/,
+  /我们(?:需|要|可以|还)/,
+  /约\d+(?:字|个)/,
+  /先写HTML|输出推荐方案|可以返回/,
+];
+
+/**
+ * 判断提取出的"章节 HTML"是否其实是模型的思考规划文本。
+ * 正常章节正文不会出现「需要控制字数」「注意：HTML格式」「不能重复前四章」
+ * 这类写作指令；命中 2 个以上特征即视为泄漏，应拒绝并重试。
+ */
+export function looksLikeModelReasoning(html: string): boolean {
+  const plain = html.replace(/<[^>]+>/g, "").replace(/\s+/g, "");
+  if (!plain) return false;
+  let hits = 0;
+  for (const re of REASONING_LEAK_PATTERNS) {
+    if (re.test(plain)) hits += 1;
+    if (hits >= 2) return true;
+  }
+  return false;
+}
+
 async function generateContentSectionHtml(input: {
   systemCore: string;
   topic: string;
@@ -843,14 +873,24 @@ ${sectionDirective(input.blueprint, input.sectionIndex - 1)}`,
         forcePlain = true;
       } else {
         const html = extractSectionHtml(sectionRaw, !plainMode);
-        if (html.length >= 60) return html;
-
-        lastError = `输出过短或字段缺失（${html.length} 字）`;
-        forcePlain = true;
-        console.warn(
-          `[generateContentBySections] section ${input.sectionIndex} attempt ${attempt + 1} short output`,
-          sectionRaw.slice(0, 200),
-        );
+        if (html.length >= 60) {
+          // 防线：即使 content 里混入思考规划文本（reasoning 泄漏），
+          // 也不让它进入正文，改为重试/失败，而不是发布垃圾章节。
+          if (!looksLikeModelReasoning(html)) return html;
+          lastError = "模型输出了思考规划而非正文（疑似 reasoning 泄漏）";
+          forcePlain = true;
+          console.warn(
+            `[generateContentBySections] section ${input.sectionIndex} reasoning leak`,
+            sectionRaw.slice(0, 200),
+          );
+        } else {
+          lastError = `输出过短或字段缺失（${html.length} 字）`;
+          forcePlain = true;
+          console.warn(
+            `[generateContentBySections] section ${input.sectionIndex} attempt ${attempt + 1} short output`,
+            sectionRaw.slice(0, 200),
+          );
+        }
       }
     } catch (error) {
       lastError = error instanceof Error ? error.message : "章节生成失败";
