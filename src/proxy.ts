@@ -5,7 +5,7 @@ const PUBLIC_PATHS = ["/login", "/register", "/reset-password"];
 // 已登录用户访问这些页面时弹回首页；忘记/重置密码页任何时候都放行
 const LOGGED_IN_HOME_PATHS = ["/login", "/register"];
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   if (
