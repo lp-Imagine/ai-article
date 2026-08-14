@@ -20,11 +20,12 @@ export async function POST(
     const existing = await findOwnedArticle(id, user.id);
     if (!existing) return notFound("文章不存在");
 
-    // 同一篇文章的选择操作做最低限度限频，避免用户狂点导致无效 DB 写
+    // 同一篇文章的选择操作做最低限度限频，避免脚本刷接口；
+    // 窗口放宽到 2 秒 3 次，正常「切换对比几个大纲方案」不会被误伤。
     const throttle = hitRateLimit({
       key: `select-outline:article:${id}`,
-      windowMs: 5_000,
-      max: 1,
+      windowMs: 2_000,
+      max: 3,
     });
     if (!throttle.ok) {
       return NextResponse.json(
