@@ -74,6 +74,7 @@ import {
   extractHtmlFromLlmJson,
   extractSectionHtml,
   isTruncatedHtmlFragment,
+  salvageTruncatedJsonHtml,
 } from "@/lib/ai/extract-html";
 
 /**
@@ -83,9 +84,13 @@ import {
  * 提高 token 预算重试，而不是把截断输出写进正文。
  */
 export class LlmOutputTruncatedError extends Error {
-  constructor(message: string) {
+  /** 截断前已返回的部分内容（供调用方抢救可用的片段） */
+  readonly partialContent: string;
+
+  constructor(message: string, partialContent = "") {
     super(message);
     this.name = "LlmOutputTruncatedError";
+    this.partialContent = partialContent;
   }
 }
 
@@ -269,6 +274,7 @@ async function callChat(
         if (role === "content") {
           throw new LlmOutputTruncatedError(
             `LLM 输出被 max_tokens 截断（finish=${finish || "length"} out=${outTokens}/${maxTokens}）`,
+            pickChatMessageContent(json),
           );
         }
       }
@@ -996,42 +1002,79 @@ async function generateContentBySections(
   };
 
   await report("生成标题与开篇（0/" + sections.length + " 章）");
-  const metaRaw = await callChat(
-    [
-      {
-        role: "system",
-        content: `${systemCore}
+  const metaSystemPrompt = `${systemCore}
 
 【本次任务：标题 + 摘要 + 开篇 + 全篇蓝图】
 输出 JSON：{ "title": string, "summary": string, "openingHtml": string, "blueprint": object }
 - title ≤ 20 字；summary 80-120 字
 - openingHtml：开篇 2-4 段 <p>（直接点题），**不要** <h2>，不要写正文章节
 
-${BLUEPRINT_JSON_INSTRUCTION}`,
-      },
+${BLUEPRINT_JSON_INSTRUCTION}`;
+  const metaUserPayload = {
+    ...buildWritingUserPayload({
+      topic: input.topic,
+      style,
+      wordCount,
+      audience: input.audience,
+      goal: input.goal,
+      keywords: input.keywords,
+      outline: input.outline,
+    }),
+    task: "meta",
+  };
+  const metaMaxTokens = Math.min(4096, 1600 + sections.length * 320);
+
+  // meta（标题+开篇）截断不能拖垮整篇：先提高预算重试一次，
+  // 仍截断则抢救已写出的开篇，其余字段走 fallback，正文照常生成。
+  let metaRaw: string | null = null;
+  try {
+    metaRaw = await callChat(
+      [
+        { role: "system", content: metaSystemPrompt },
+        { role: "user", content: JSON.stringify(metaUserPayload) },
+      ],
       {
-        role: "user",
-        content: JSON.stringify({
-          ...buildWritingUserPayload({
-            topic: input.topic,
-            style,
-            wordCount,
-            audience: input.audience,
-            goal: input.goal,
-            keywords: input.keywords,
-            outline: input.outline,
-          }),
-          task: "meta",
-        }),
+        jsonMode: true,
+        maxTokens: metaMaxTokens,
+        role: "content",
+        temperature: 0.65,
       },
-    ],
-    {
-      jsonMode: true,
-      maxTokens: Math.min(4096, 1600 + sections.length * 320),
-      role: "content",
-      temperature: 0.65,
-    },
-  );
+    );
+  } catch (error) {
+    if (!(error instanceof LlmOutputTruncatedError)) throw error;
+    console.warn(
+      `[generateContentBySections] meta truncated (${error.message}), retrying with larger budget`,
+    );
+    try {
+      metaRaw = await callChat(
+        [
+          { role: "system", content: metaSystemPrompt },
+          { role: "user", content: JSON.stringify(metaUserPayload) },
+        ],
+        {
+          jsonMode: true,
+          maxTokens: Math.min(8192, Math.round(metaMaxTokens * 1.6)),
+          role: "content",
+          temperature: 0.65,
+        },
+      );
+    } catch (error2) {
+      if (!(error2 instanceof LlmOutputTruncatedError)) throw error2;
+      // 仍截断：从已写出的部分抢救 openingHtml，标题/摘要/蓝图走 fallback，
+      // 开篇缺失总比整篇失败好——正文章节照常生成。
+      const partialOpening = salvageTruncatedJsonHtml(error2.partialContent, [
+        "openingHtml",
+        "opening",
+      ]);
+      console.warn(
+        `[generateContentBySections] meta truncated twice, ` +
+          `salvaged opening ${partialOpening.length} chars, continuing with fallback title/summary`,
+      );
+      metaRaw = partialOpening
+        ? JSON.stringify({ openingHtml: partialOpening })
+        : "{}";
+    }
+  }
   const meta = safeParse<Record<string, unknown>>(metaRaw, {});
   const blueprint = normalizeBlueprint(meta.blueprint, blueprintFallback);
   const title =
