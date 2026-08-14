@@ -87,6 +87,15 @@ async function runOneSchedule(schedule: ArticleSchedule) {
     return;
   }
 
+  // 先推进 nextRunAt（tick 的 5 分钟占位 → 真实下次时间），再执行本轮任务：
+  // 即使本实例在「创建文章/入队成功之后、更新 lastRunAt 之前」崩溃，
+  // 其它实例 5 分钟后接管占位时也不会重复触发本轮到期的任务。
+  // 代价是崩溃时可能漏跑一次——对定时发文而言，漏跑远好于重复推草稿。
+  await db.articleSchedule.update({
+    where: { id: schedule.id },
+    data: { nextRunAt: computeNextRunAt(schedule, now) },
+  });
+
   const sessionUser: SessionUser = {
     id: user.id,
     username: user.username,
@@ -127,7 +136,6 @@ async function runOneSchedule(schedule: ArticleSchedule) {
         runCount: { increment: 1 },
         lastArticleId: article.id,
         lastError: null,
-        nextRunAt: computeNextRunAt(schedule, now),
       },
     });
     log.info("scheduler triggered", {
@@ -138,13 +146,12 @@ async function runOneSchedule(schedule: ArticleSchedule) {
   } catch (err) {
     const message = err instanceof Error ? err.message : "执行失败";
     log.error("scheduler schedule failed", { scheduleId: schedule.id, error: message });
+    // nextRunAt 已在开头推进，这里只记录失败状态，避免重复执行
     await db.articleSchedule.update({
       where: { id: schedule.id },
       data: {
         lastRunAt: now,
         lastError: message,
-        // 失败也要推进 nextRunAt，避免死循环重试
-        nextRunAt: computeNextRunAt(schedule, now),
       },
     });
   }

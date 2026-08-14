@@ -246,6 +246,11 @@ model GenerationJob {
   @@index([articleId, type, status])
   @@index([status, createdAt])
   @@index([userId, createdAt])
+
+  // 注：DB 上另有部分唯一索引 "GenerationJob_active_unique"
+  // （(articleId, type) WHERE status IN ('queued','running')，迁移
+  // 20260814000000_add_unique_active_generation_jobs 创建）。
+  // Prisma schema 无法表达部分索引，故不在此声明；enqueueGenerationJob 依赖它做并发去重。
 }
 
 model ArticleSchedule {
