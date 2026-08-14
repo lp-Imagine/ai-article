@@ -261,12 +261,16 @@ async function callChat(
       );
 
       if (truncated) {
-        // 截断输出不能作为交付物：半截 JSON/HTML 会被下游误当作完整内容发布
-        // （线上出现过章节正文停在半句话、<p> 未闭合的格式事故）。抛给调用方
-        // 决定是提高预算重试还是报错，而不是静默返回残缺内容。
-        throw new LlmOutputTruncatedError(
-          `LLM 输出被 max_tokens 截断（finish=${finish || "length"} out=${outTokens}/${maxTokens}）`,
-        );
+        // 内容生成（章节正文 / 整篇 / 标题开篇）必须完整：半截输出不能作为交付物，
+        // 否则会把停在半句话、<p> 未闭合的章节当正文发布（线上格式事故）。
+        // 抛给调用方决定是否提高预算重试。其余任务（refine/polish/prompt/ideas/
+        // outline 等）的输出截断时由 safeParse/fallback 兜底，保持原有降级行为，
+        // 避免把「截断但可用」变成「直接失败」。
+        if (role === "content") {
+          throw new LlmOutputTruncatedError(
+            `LLM 输出被 max_tokens 截断（finish=${finish || "length"} out=${outTokens}/${maxTokens}）`,
+          );
+        }
       }
 
       return pickChatMessageContent(json);
