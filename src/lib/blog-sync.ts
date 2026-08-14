@@ -4,6 +4,8 @@
  */
 import { downloadToBuffer } from "@/lib/image-gen";
 import { log } from "@/lib/log";
+import { fetchWithTimeout } from "@/lib/retry";
+import { assertSafeImportUrl } from "@/lib/import-content";
 import {
   collectImageSrcs,
   guessImageExt,
@@ -13,6 +15,11 @@ import { BLOG_SECTIONS, type BlogSection, inferBlogGroup, inferBlogPlacement, is
 import { getEnvValue } from "@/lib/config-bridge";
 
 export { BLOG_SECTIONS, type BlogSection };
+
+/** 抓取正文图片的单次超时：卡住的 CDN 不应拖垮整个同步任务 */
+const IMAGE_FETCH_TIMEOUT_MS = 30_000;
+/** 单张正文图片大小上限（8MB）：防止超大图拖慢同步与撑爆仓库 */
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 export type BlogSyncArticle = {
   id: string;
@@ -345,9 +352,31 @@ async function uploadImages(
 
   for (const src of allSrcs) {
     try {
-      const res = await fetch(src);
+      // 只允许公开 http(s) 图片：拦截内网/本机地址，避免同步正文时服务端被诱导抓取内网资源（SSRF）
+      let safeUrl: URL;
+      try {
+        safeUrl = assertSafeImportUrl(src);
+      } catch {
+        log.warn("blog-sync image skipped (unsafe url)", { src });
+        continue;
+      }
+
+      const res = await fetchWithTimeout(
+        safeUrl.href,
+        {
+          headers: { "User-Agent": "DraftlyBlogSync/1.0" },
+        },
+        IMAGE_FETCH_TIMEOUT_MS,
+        "博客图片下载",
+      );
       if (!res.ok) continue;
+
+      const declaredLength = Number(res.headers.get("content-length") ?? "0");
+      if (declaredLength > MAX_IMAGE_BYTES) continue;
+
       const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.byteLength > MAX_IMAGE_BYTES) continue;
+
       const ext = guessImageExt(src, res.headers.get("content-type"));
       imgIndex += 1;
       const filename = `img-${imgIndex}.${ext}`;

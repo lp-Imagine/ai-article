@@ -1,4 +1,5 @@
 import { getEnvValue } from "@/lib/config-bridge";
+import { assertSafeImportUrl } from "@/lib/import-content";
 import {
   fetchWithTimeout,
   isRetryableHttpStatus,
@@ -130,6 +131,13 @@ export async function generateCoverImage(
 
 export async function downloadToBuffer(url: string): Promise<Buffer | null> {
   if (!url || url.startsWith("https://placehold.co")) return null;
+  // SSRF 防护：只允许公开 http(s) 图片。封面 URL 来自用户可写入的文章字段，
+  // 若不校验，服务端可能被诱导去抓内网/云元数据地址。
+  try {
+    assertSafeImportUrl(url);
+  } catch {
+    return null;
+  }
   const res = await fetchWithTimeout(url, {}, getImageTimeoutMs(), "图片下载");
   if (!res.ok) return null;
   const arrayBuffer = await res.arrayBuffer();
