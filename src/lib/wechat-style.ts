@@ -775,6 +775,22 @@ export function convertToWechatHtml(html: string): string {
     result = result.replace(replacements[i].original, replacements[i].replacement);
   }
 
+  // ====== 12b. 数据表格 → 内联样式（跳过已有 style 的列表卡片/提示卡片）======
+  // 微信对无样式的 <table> 渲染简陋：默认无边框、宽度不撑满、表头无区分，
+  // 与文章整体的卡片风格（蓝色竖线、圆角）脱节。正文里的数据表格（QPS 对比、
+  // 参数表等）在此统一加内联样式；thead/tbody/tfoot 一并移除——微信编辑器
+  // 对它们的支持不稳定，th/td 足以表达表头与数据行。
+  result = result.replace(/<\/?(?:thead|tbody|tfoot)>/gi, "");
+  result = result.replace(/<table(?![^>]*style=)/gi, () => {
+    return `<table style="width:100%;border-collapse:collapse;margin:20px 0;border:1px solid #e5e7eb;"`;
+  });
+  result = result.replace(/<th(?![^>]*style=)/gi, () => {
+    return `<th style="background-color:${ACCENT};color:#ffffff;padding:10px 12px;font-size:14px;font-weight:600;text-align:left;border:1px solid #c7d2fe;white-space:nowrap;"`;
+  });
+  result = result.replace(/<td(?![^>]*style=)/gi, () => {
+    return `<td style="padding:10px 12px;font-size:14px;line-height:1.7;color:#3d3d3d;border:1px solid #e5e7eb;"`;
+  });
+
   // ====== 13. pre 代码块（老格式降级处理） ——
   // 如果数据库里有 <pre> 残留（手动编辑未经过 code-highlight），做一次换行转换
   result = result.replace(

@@ -142,6 +142,38 @@ describe("convertToWechatHtml", () => {
     expect(wechat).toContain("────────");
     expect(wechat).toContain("#b9a88c");
   });
+
+  it("styles bare data tables with inline styles and drops thead/tbody", () => {
+    const html =
+      "<table><thead><tr><th>场景</th><th>QPS</th></tr></thead><tbody><tr><td>A</td><td>1850</td></tr></tbody></table>";
+
+    const wechat = convertToWechatHtml(html);
+
+    expect(wechat).not.toMatch(/<thead|<\/thead|<tbody|<\/tbody/i);
+    expect(wechat).toMatch(
+      /<table style="width:100%;border-collapse:collapse;margin:20px 0;border:1px solid #e5e7eb;">/,
+    );
+    expect(wechat).toMatch(
+      /<th style="background-color:#3e7bfa;color:#ffffff;padding:10px 12px;/,
+    );
+    expect(wechat).toMatch(
+      /<td style="padding:10px 12px;font-size:14px;line-height:1.7;color:#3d3d3d;border:1px solid #e5e7eb;">/,
+    );
+    expect(wechat).toContain("场景");
+    expect(wechat).toContain("1850");
+  });
+
+  it("does not double-style list-card tables that already carry inline styles", () => {
+    const card =
+      '<table style="width:100%;border-collapse:collapse;margin:0 0 12px;border:1px solid #dbeafe;"><tr><td style="padding:14px 16px;border:none;">正文</td></tr></table>';
+
+    const wechat = convertToWechatHtml(card);
+
+    // 已有 style 的 table/td 保持原样，不被 12b 覆盖
+    expect(wechat).toContain('border:1px solid #dbeafe;');
+    expect(wechat).not.toContain("border:1px solid #e5e7eb;");
+    expect(wechat).not.toMatch(/<td style="padding:10px 12px;font-size:14px;/);
+  });
 });
 
 describe("normalizeArticleMarkup", () => {
