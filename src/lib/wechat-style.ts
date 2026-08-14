@@ -130,7 +130,7 @@ function parseListItemTitleBody(inner: string): { title: string; body: string } 
   if (!match) return null;
 
   const title = stripTags(match[1]);
-  let body = match[2].trim().replace(/^[：:]\s*/, "");
+  const body = match[2].trim().replace(/^[：:]\s*/, "");
   if (!title || stripTags(body).length < 2) return null;
 
   return { title, body };
@@ -185,7 +185,7 @@ export function enforceArticleHtmlFormat(html: string): string {
   });
 
   result = result.replace(/<div class="mp-warning">([\s\S]*?)<\/div>/gi, (_full, inner: string) => {
-    let body = inner.trim();
+    const body = inner.trim();
     if (!/<(?:ol|ul)\b/i.test(body)) {
       return `<div class="mp-warning">${body}</div>`;
     }

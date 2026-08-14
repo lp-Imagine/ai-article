@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { findOwnedArticle, notFound, requireUser } from "@/lib/api-auth";
+import { hitRateLimit } from "@/lib/rate-limit";
 
 const bodySchema = z.object({
   outlineIndex: z.number().int().min(0),
@@ -18,6 +19,19 @@ export async function POST(
     const { id } = await context.params;
     const existing = await findOwnedArticle(id, user.id);
     if (!existing) return notFound("文章不存在");
+
+    // 同一篇文章的选择操作做最低限度限频，避免用户狂点导致无效 DB 写
+    const throttle = hitRateLimit({
+      key: `select-outline:article:${id}`,
+      windowMs: 5_000,
+      max: 1,
+    });
+    if (!throttle.ok) {
+      return NextResponse.json(
+        { code: 1002, message: "操作过于频繁，请稍后再试", data: null },
+        { status: 429 },
+      );
+    }
 
     const json = await request.json();
     const input = bodySchema.parse(json);

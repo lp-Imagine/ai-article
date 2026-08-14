@@ -13,6 +13,7 @@ import {
   sendEmailCode,
   verifyEmailCode,
 } from "@/lib/email-code";
+import { getClientIp, hitRateLimit } from "@/lib/rate-limit";
 
 const baseSchema = z.object({
   username: z
@@ -44,6 +45,40 @@ async function sendRegisterCode(request: Request) {
   await ensureBootstrapAdmin();
   const input = sendCodeSchema.parse(await request.json());
   const email = input.email.toLowerCase();
+  const ip = getClientIp(request);
+
+  // 双层限流：同 IP 每分钟 3 次，同邮箱每小时 10 次。
+  // email-code.ts 自带 60 秒重发冷却，这里只补 IP 维度和更宽窗口。
+  const ipLimit = hitRateLimit({
+    key: `register:ip:${ip}`,
+    windowMs: 60_000,
+    max: 3,
+  });
+  if (!ipLimit.ok) {
+    return NextResponse.json(
+      {
+        code: 1002,
+        message: `发送过于频繁，请 ${Math.ceil(ipLimit.retryAfterMs / 1000)} 秒后再试`,
+        data: null,
+      },
+      { status: 429 },
+    );
+  }
+  const emailLimit = hitRateLimit({
+    key: `register:email:${email}`,
+    windowMs: 60 * 60_000,
+    max: 10,
+  });
+  if (!emailLimit.ok) {
+    return NextResponse.json(
+      {
+        code: 1002,
+        message: `该邮箱 1 小时内请求次数过多，请 ${Math.ceil(emailLimit.retryAfterMs / 60_000)} 分钟后再试`,
+        data: null,
+      },
+      { status: 429 },
+    );
+  }
 
   await ensureEmailAvailable(input.username, email);
   await sendEmailCode({ email, purpose: "register" });

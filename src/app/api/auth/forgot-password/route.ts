@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { ensureBootstrapAdmin } from "@/lib/auth";
 import { EmailCodeError, sendEmailCode } from "@/lib/email-code";
+import { getClientIp, hitRateLimit } from "@/lib/rate-limit";
 
 const schema = z.object({
   account: z
@@ -15,6 +16,25 @@ const schema = z.object({
 export async function POST(request: Request) {
   try {
     await ensureBootstrapAdmin();
+    const ip = getClientIp(request);
+
+    // 同 IP 每分钟 3 次，避免重置密码接口被用来轰炸 / 探测账号存在
+    const ipLimit = hitRateLimit({
+      key: `reset:ip:${ip}`,
+      windowMs: 60_000,
+      max: 3,
+    });
+    if (!ipLimit.ok) {
+      return NextResponse.json(
+        {
+          code: 1002,
+          message: `请求过于频繁，请 ${Math.ceil(ipLimit.retryAfterMs / 1000)} 秒后再试`,
+          data: null,
+        },
+        { status: 429 },
+      );
+    }
+
     const input = schema.parse(await request.json());
     const rawAccount = input.account.trim();
     const email = rawAccount.toLowerCase();

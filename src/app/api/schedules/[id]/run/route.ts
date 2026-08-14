@@ -3,7 +3,6 @@ import { db } from "@/lib/db";
 import { requireUser } from "@/lib/api-auth";
 import { withAuthUserConfig } from "@/lib/api-auth";
 import { enqueueGenerationJob } from "@/lib/jobs/enqueue";
-import { computeNextRunAt } from "@/lib/scheduler";
 import { getTopicIdeas } from "@/lib/topic-ideas";
 
 /** 手动立即执行一次定时任务（不影响原有调度计划） */

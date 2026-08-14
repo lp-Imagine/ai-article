@@ -279,3 +279,18 @@ model ArticleSchedule {
   @@index([userId, enabled])
   @@index([enabled, nextRunAt])
 }
+
+/// LLM 热点选题缓存：跨实例共享，避免每个 Docker 容器都重复调用模型。
+/// section / category 组成主键，TTL 1 小时，由 topic-ideas 模块维护。
+model HotTopicCache {
+  id          String   @id @default(cuid())
+  cacheKey    String   @unique // "{section}:{category}"
+  section     String?
+  category    String?
+  topicsJson  Json
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([expiresAt])
+}

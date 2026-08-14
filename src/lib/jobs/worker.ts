@@ -1,10 +1,19 @@
 import { db } from "@/lib/db";
 import { getStaleRunningJobMs } from "@/lib/jobs/limits";
 import { runGenerationJob } from "@/lib/jobs/runners";
+import { log } from "@/lib/log";
 
 const POLL_INTERVAL_MS = 1500;
-const MAX_PARALLEL_JOBS = 1;
 const RECOVER_INTERVAL_MS = 30_000;
+
+/** 全局同时执行的生成任务上限。
+ * 原来硬编码为 1，会导致 100 个用户并发时全部串行等待；
+ * 改为通过 JOB_GLOBAL_CONCURRENCY 配置，默认 4，可按 LLM 配额上调。
+ */
+function getMaxParallelJobs(): number {
+  const raw = Number(process.env.JOB_GLOBAL_CONCURRENCY ?? "4");
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 4;
+}
 
 let started = false;
 let claiming = false;
@@ -25,7 +34,7 @@ async function recoverOrphanedJobsOnStartup() {
     },
   });
   if (result.count > 0) {
-    console.warn(`[job-worker] requeued ${result.count} orphaned running job(s) after startup`);
+    log.warn("job-worker requeued orphans", { count: result.count });
   }
 }
 
@@ -44,7 +53,7 @@ async function recoverStaleJobs() {
     },
   });
   if (result.count > 0) {
-    console.warn(`[job-worker] recovered ${result.count} stale running job(s)`);
+    log.warn("job-worker recovered stale jobs", { count: result.count });
   }
 }
 
@@ -92,7 +101,7 @@ async function runClaimedJob(job: NonNullable<Awaited<ReturnType<typeof claimNex
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "任务执行失败";
-    console.error(`[job-worker] job ${job.id} failed:`, message);
+    log.error("job-worker job failed", { jobId: job.id, error: message });
     const current = await db.generationJob.findUnique({ where: { id: job.id } }).catch(() => null);
     if (current?.status === "cancelled") return;
     await db.generationJob
@@ -111,14 +120,20 @@ async function runClaimedJob(job: NonNullable<Awaited<ReturnType<typeof claimNex
   }
 }
 
-async function processOne() {
-  if (activeCount >= MAX_PARALLEL_JOBS) return;
+/**
+ * 每轮尽量把并发额度填满。
+ * 一次 tick 只领一个任务时，积压 N 个任务要等 N 轮轮询（N×1.5s）才全部跑起来。
+ * runClaimedJob 会在首个 await 前同步自增 activeCount，因此循环条件可靠。
+ */
+async function fillJobSlots() {
+  const max = getMaxParallelJobs();
+  for (let claimed = 0; claimed < max && activeCount < max; claimed += 1) {
+    const job = await claimNextJob();
+    if (!job) return;
 
-  const job = await claimNextJob();
-  if (!job) return;
-
-  // 不阻塞 tick：否则一次卡住的 LLM 请求会挡住超时回收
-  void runClaimedJob(job);
+    // 不阻塞 tick：否则一次卡住的 LLM 请求会挡住超时回收
+    void runClaimedJob(job);
+  }
 }
 
 async function tick() {
@@ -130,9 +145,9 @@ async function tick() {
       lastRecoverAt = now;
       await recoverStaleJobs();
     }
-    await processOne();
+    await fillJobSlots();
   } catch (error) {
-    console.error("[job-worker] tick error:", error);
+    log.error("job-worker tick error", { error: error instanceof Error ? error.message : String(error) });
   } finally {
     claiming = false;
   }
@@ -141,12 +156,12 @@ async function tick() {
 export function startJobWorker() {
   if (started) return;
   started = true;
-  console.log("[job-worker] started");
+  log.info("job-worker started");
   void recoverOrphanedJobsOnStartup()
     .then(() => recoverStaleJobs())
     .then(() => tick())
     .catch((err) => {
-      console.error("[job-worker] startup recover failed:", err);
+      log.error("job-worker startup recover failed", { error: err instanceof Error ? err.message : String(err) });
     });
   timer = setInterval(() => {
     void tick();

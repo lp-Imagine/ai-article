@@ -22,6 +22,7 @@ export async function GET(
       stepLabel: true,
       error: true,
       payload: true,
+      resultJson: true,
       createdAt: true,
       startedAt: true,
       finishedAt: true,

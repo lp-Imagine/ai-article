@@ -630,9 +630,63 @@ const LLM_HOT_CACHE_TTL_MS = 60 * 60 * 1000;
 const llmHotCache = new Map<string, { expiresAt: number; topics: LlmHotTopic[] }>();
 const llmHotInflight = new Map<string, Promise<LlmHotTopic[]>>();
 
+type DbHotRow = { topicsJson: unknown; expiresAt: Date };
+
+/**
+ * 从 DB 读热点缓存；行不存在 / 过期 / JSON 解析失败都返回 null。
+ * 一并返回 expiresAt，调用方回填内存缓存时要沿用它，不能重置成完整 TTL。
+ */
+async function readDbHotCache(
+  key: string,
+): Promise<{ topics: LlmHotTopic[]; expiresAt: number } | null> {
+  try {
+    const row = await db.hotTopicCache.findUnique({
+      where: { cacheKey: key },
+      select: { topicsJson: true, expiresAt: true },
+    }) as DbHotRow | null;
+    if (!row) return null;
+    const expiresAt = row.expiresAt.getTime();
+    if (expiresAt <= Date.now()) return null;
+    const parsed = row.topicsJson;
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+    return { topics: parsed as LlmHotTopic[], expiresAt };
+  } catch {
+    return null;
+  }
+}
+
+async function writeDbHotCache(
+  key: string,
+  section: BlogSection | null,
+  category: TopicIdeasCategory | null,
+  topics: LlmHotTopic[],
+): Promise<void> {
+  await db.hotTopicCache.upsert({
+    where: { cacheKey: key },
+    create: {
+      cacheKey: key,
+      section: section ?? null,
+      category: category ?? null,
+      topicsJson: topics,
+      expiresAt: new Date(Date.now() + LLM_HOT_CACHE_TTL_MS),
+    },
+    update: {
+      topicsJson: topics,
+      expiresAt: new Date(Date.now() + LLM_HOT_CACHE_TTL_MS),
+    },
+  });
+}
+
 /**
  * 拉取 LLM 生成的当下热点选题。
  * 默认命中 1 小时缓存；`force` 时强制重新调用模型（用于「换一批」）。
+ *
+ * 缓存分两层：
+ * - 进程内 Map：本地热点命中，避免一次请求里的多次重复查询
+ * - DB HotTopicCache：跨实例共享，避免多容器各调一次 LLM
+ *
+ * 查库放在 inflight Promise 内部：查库是异步的，若放在外面，同实例的并发请求
+ * 会在 await 处交错、各自 miss inflight，最后各调一次 LLM。
  */
 async function fetchLlmHotTopics(
   section: BlogSection | null,
@@ -645,11 +699,12 @@ async function fetchLlmHotTopics(
   const avoid = opts?.avoid ?? [];
 
   if (!force) {
-    const cached = llmHotCache.get(key);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.topics.slice(0, count);
+    // 1) 进程内热点
+    const memCached = llmHotCache.get(key);
+    if (memCached && memCached.expiresAt > Date.now()) {
+      return memCached.topics.slice(0, count);
     }
-
+    // 2) 同实例的并发请求合并（必须在任何 await 之前判断）
     const pending = llmHotInflight.get(key);
     if (pending) {
       const topics = await pending;
@@ -660,6 +715,18 @@ async function fetchLlmHotTopics(
   const inflightKey = force ? `${key}:force:${batch}:${Date.now()}` : key;
   const task = (async (): Promise<LlmHotTopic[]> => {
     try {
+      // 3) DB 跨实例热点：命中则沿用 DB 行的剩余有效期，不重置 TTL
+      if (!force) {
+        const dbCached = await readDbHotCache(key);
+        if (dbCached) {
+          llmHotCache.set(key, {
+            expiresAt: dbCached.expiresAt,
+            topics: dbCached.topics,
+          });
+          return dbCached.topics;
+        }
+      }
+
       const topics = await generateHotTopics({
         section,
         sectionTags:
@@ -674,7 +741,20 @@ async function fetchLlmHotTopics(
         batch,
       });
       if (topics.length > 0) {
-        llmHotCache.set(key, { expiresAt: Date.now() + LLM_HOT_CACHE_TTL_MS, topics });
+        const expiresAt = Date.now() + LLM_HOT_CACHE_TTL_MS;
+        llmHotCache.set(key, { expiresAt, topics });
+        // DB 写入失败也不应阻断返回（其它实例下一轮再补）
+        writeDbHotCache(
+          key,
+          section,
+          opts?.category ?? null,
+          topics,
+        ).catch((err) => {
+          console.warn(
+            "[topic-ideas] writeDbHotCache failed:",
+            err instanceof Error ? err.message : err,
+          );
+        });
         return topics;
       }
       // 强制刷新失败时，尽量回退到旧缓存，避免整页空掉
@@ -725,12 +805,13 @@ function buildMixedCandidates(
   const allHot = [...HOT_TOPIC_SEEDS.all].sort(() => rnd() - 0.5);
   const out: Candidate[] = [];
 
-  const mixTemplates = [
-    (a: string, h: string) => `${a}\u5728\u4eca\u5e74\u65b0\u8d8b\u52bf\u4e0b\uff0c\u5e94\u8be5\u600e\u4e48\u8c03\u6574`,
-    (a: string, h: string) => `\u7528\u300c${h.slice(0, 14)}\u300d\u7684\u601d\u8def\u91cd\u65b0\u5ba1\u89c6${a}`,
-    (a: string, h: string) => `${a}\u548c${h.slice(0, 12)}\u7684\u4ea4\u53c9\u70b9\u5728\u54ea`,
-    (a: string, _h: string) => `\u5982\u679c\u8ba9\u6211\u91cd\u65b0\u505a\u4e00\u6b21${a}`,
-    (a: string, _h: string) => `${a}\u7684\u4e0b\u4e00\u6b65\uff1a\u6211\u8ba1\u5212\u600e\u4e48\u8fed\u4ee3`,
+  // 统一签名 (已有主题, 热点) => 标题；部分模板只用到主题，省略第二个参数
+  const mixTemplates: Array<(a: string, h: string) => string> = [
+    (a) => `${a}\u5728\u4eca\u5e74\u65b0\u8d8b\u52bf\u4e0b\uff0c\u5e94\u8be5\u600e\u4e48\u8c03\u6574`,
+    (a, h) => `\u7528\u300c${h.slice(0, 14)}\u300d\u7684\u601d\u8def\u91cd\u65b0\u5ba1\u89c6${a}`,
+    (a, h) => `${a}\u548c${h.slice(0, 12)}\u7684\u4ea4\u53c9\u70b9\u5728\u54ea`,
+    (a) => `\u5982\u679c\u8ba9\u6211\u91cd\u65b0\u505a\u4e00\u6b21${a}`,
+    (a) => `${a}\u7684\u4e0b\u4e00\u6b65\uff1a\u6211\u8ba1\u5212\u600e\u4e48\u8fed\u4ee3`,
   ];
 
   for (let i = 0; i < base.length; i++) {

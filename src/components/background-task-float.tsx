@@ -89,12 +89,13 @@ export function BackgroundTaskFloat() {
     [pathname, tasks],
   );
 
-  useEffect(() => {
-    if (visibleTasks.length <= 1) setPanelOpen(false);
-  }, [visibleTasks.length]);
+  const primaryTask = visibleTasks[0];
+  const hasMultiple = visibleTasks.length > 1;
+  // 只剩一个任务时面板没有意义，直接在渲染期判定，避免用 effect 回写 panelOpen
+  const panelVisible = panelOpen && hasMultiple;
 
   useEffect(() => {
-    if (!panelOpen || pendingCancel) return;
+    if (!panelVisible || pendingCancel) return;
 
     const onPointerDown = (event: MouseEvent | TouchEvent) => {
       const target = event.target as Node | null;
@@ -114,10 +115,7 @@ export function BackgroundTaskFloat() {
       document.removeEventListener("touchstart", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [panelOpen, pendingCancel]);
-
-  const primaryTask = visibleTasks[0];
-  const hasMultiple = visibleTasks.length > 1;
+  }, [panelVisible, pendingCancel]);
 
   function goToTask(task: ArticleBackgroundTask) {
     setPanelOpen(false);
@@ -163,7 +161,7 @@ export function BackgroundTaskFloat() {
 
       {!primaryTask ? null : (
         <div ref={wrapRef} className="background-task-float-wrap">
-          {panelOpen && hasMultiple ? (
+          {panelVisible ? (
             <div className="background-task-float-panel" role="dialog" aria-label="进行中的任务">
               <div className="background-task-float-panel-head">
                 <p className="background-task-float-panel-title">进行中的任务</p>
@@ -208,7 +206,7 @@ export function BackgroundTaskFloat() {
                   ? `查看 ${visibleTasks.length} 个进行中的任务`
                   : `查看进行中的任务：${primaryTask.label}`
               }
-              aria-expanded={hasMultiple ? panelOpen : undefined}
+              aria-expanded={hasMultiple ? panelVisible : undefined}
               onClick={handleFloatClick}
             >
               <span className="background-task-float-spinner" aria-hidden="true">
@@ -219,7 +217,7 @@ export function BackgroundTaskFloat() {
                   {hasMultiple ? `${visibleTasks.length} 个任务进行中` : primaryTask.label}
                 </span>
                 <span className="background-task-float-hint">
-                  {hasMultiple ? (panelOpen ? "选择要查看的任务" : "点击选择任务") : "点击查看进度"}
+                  {hasMultiple ? (panelVisible ? "选择要查看的任务" : "点击选择任务") : "点击查看进度"}
                 </span>
               </span>
               {hasMultiple ? (

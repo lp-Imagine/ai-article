@@ -106,6 +106,20 @@ export async function verifyEmailCode(options: {
   code: string;
 }): Promise<{ userId: string | null } | null> {
   const email = options.email.trim().toLowerCase();
+
+  // 顺手清理过期记录，防止 EmailVerificationCode 表长期膨胀。
+  // 与查询并行执行，命中过期行的概率很低；偶尔写一下无副作用。
+  void db.emailVerificationCode
+    .deleteMany({
+      where: { expiresAt: { lt: new Date() } },
+    })
+    .catch((err) => {
+      console.warn(
+        "[email-code] cleanup expired failed:",
+        err instanceof Error ? err.message : err,
+      );
+    });
+
   const row = await db.emailVerificationCode.findFirst({
     where: {
       email,

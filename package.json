@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "check": "npm run lint && npm run build",
     "test": "vitest run",
+    "eval:prompts": "node --import tsx scripts/eval-prompts.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:migrate:sqlite-to-pg": "tsx scripts/migrate-sqlite-to-postgres.ts",

@@ -28,7 +28,6 @@ export async function POST(
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "推送失败";
-      const code = error instanceof PushDraftError ? error.code : 1501;
 
       // 业务校验类错误（文章不存在/正文为空/未配置微信）按原行为返回对应状态码
       if (error instanceof PushDraftError && error.code !== 1501) {

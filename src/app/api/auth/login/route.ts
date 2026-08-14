@@ -9,6 +9,7 @@ import {
   sessionCookieOptions,
 } from "@/lib/auth";
 import { verifyPassword } from "@/lib/password";
+import { getClientIp, hitRateLimit } from "@/lib/rate-limit";
 
 const schema = z.object({
   username: z.string().trim().min(1, "请输入用户名"),
@@ -16,10 +17,38 @@ const schema = z.object({
   remember: z.boolean().optional(),
 });
 
+function tooManyAttempts(retryAfterMs: number) {
+  return NextResponse.json(
+    {
+      code: 1002,
+      message: `登录尝试过于频繁，请 ${Math.ceil(retryAfterMs / 1000)} 秒后再试`,
+      data: null,
+    },
+    { status: 429 },
+  );
+}
+
 export async function POST(request: Request) {
   try {
     await ensureBootstrapAdmin();
+
+    // 双层限流抵御撞库：同 IP 每分钟 20 次（容忍办公网 NAT 共享出口），
+    // 同账号 10 分钟 10 次（真正卡住针对单个账号的密码爆破）。
+    const ipLimit = hitRateLimit({
+      key: `login:ip:${getClientIp(request)}`,
+      windowMs: 60_000,
+      max: 20,
+    });
+    if (!ipLimit.ok) return tooManyAttempts(ipLimit.retryAfterMs);
+
     const input = schema.parse(await request.json());
+
+    const accountLimit = hitRateLimit({
+      key: `login:account:${input.username.toLowerCase()}`,
+      windowMs: 10 * 60_000,
+      max: 10,
+    });
+    if (!accountLimit.ok) return tooManyAttempts(accountLimit.retryAfterMs);
 
     const user = await db.user.findUnique({ where: { username: input.username } });
     if (!user || !verifyPassword(input.password, user.passwordHash)) {

@@ -10,7 +10,7 @@ import {
   Copy,
   Eye,
   FileText,
-  Image,
+  Image as ImageIcon,
   ListTree,
   RefreshCw,
   Save,
@@ -39,6 +39,7 @@ import {
   reconcileBackgroundTaskAfterRequestFailure,
   waitForGenerationJob,
   type ArticleBackgroundTaskFinishedDetail,
+  type GenerationJobSnapshot,
 } from "@/lib/article-task-tracker";
 
 type PublishRecord = {
@@ -392,7 +393,7 @@ export default function ArticlePage({
       setBusy((current) => current ?? task.label);
     };
 
-    const finishSucceeded = async (label: string) => {
+    const finishSucceeded = async (label: string, job?: GenerationJobSnapshot) => {
       if (finishing) return;
       finishing = true;
       clearArticleBackgroundTask(id);
@@ -417,11 +418,31 @@ export default function ArticlePage({
         ).map((s) => ({ ...s, status: "done" as const })),
       }));
       setBusy(null);
-      toast.show({
-        title: "后台任务已完成",
-        message: `${label}已完成`,
-        variant: "success",
-      });
+      // 任务 succeeded 但有部分步骤被跳过（例如：3/6 个章节未生成成功）——
+      // 用 warning toast 提示用户，让用户知道正文里少了东西，
+      // 而不是被默认的"已完成"误导。
+      const resultJson =
+        job && typeof job.resultJson === "object" && job.resultJson !== null
+          ? (job.resultJson as { contentWarning?: unknown })
+          : null;
+      const contentWarning =
+        resultJson && typeof resultJson.contentWarning === "string"
+          ? resultJson.contentWarning
+          : null;
+      if (contentWarning) {
+        toast.show({
+          title: `${label}已完成（部分内容跳过）`,
+          message: contentWarning,
+          variant: "warning",
+          duration: 8000,
+        });
+      } else {
+        toast.show({
+          title: "后台任务已完成",
+          message: `${label}已完成`,
+          variant: "success",
+        });
+      }
       window.setTimeout(() => {
         if (mountedRef.current) setProgress(resetProgressState());
       }, 800);
@@ -488,7 +509,7 @@ export default function ArticlePage({
         if (!job) return;
 
         if (job.status === "succeeded") {
-          await finishSucceeded(task.label);
+          await finishSucceeded(task.label, job);
           return;
         }
 
@@ -1733,7 +1754,7 @@ export default function ArticlePage({
                   ) : (
                     <div className="md:col-span-2">
                       <div className="info-banner">
-                        <Image size={18} className="info-banner-icon" />
+                        <ImageIcon size={18} className="info-banner-icon" />
                         <p>尚未生成封面图，可使用下方「生成封面图」快捷工具。</p>
                       </div>
                     </div>

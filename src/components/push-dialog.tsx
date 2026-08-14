@@ -68,12 +68,18 @@ export default function PushDialog({
   const [pushWechat, setPushWechat] = useState(true);
   const [pushBlog, setPushBlog] = useState(false);
   const [section, setSection] = useState<BlogSection>("web");
-  const [group, setGroup] = useState("javascript");
+  const [pickedGroup, setGroup] = useState("javascript");
   const [tagsInput, setTagsInput] = useState(defaultTags);
   const [draft, setDraft] = useState(false);
   const [manualOverride, setManualOverride] = useState(false);
 
   const groups = SECTION_GROUPS[section] ?? SECTION_GROUPS.misc;
+  // 切换 section 后旧分组可能不在新分组列表里，渲染期回落到首项，
+  // 不用 effect 回写 state（那会多一次级联渲染，且中间帧是非法组合）
+  const group = groups.some((g) => g.id === pickedGroup)
+    ? pickedGroup
+    : (groups[0]?.id ?? "misc");
+
   const hintBlob = useMemo(
     () => [title, summary ?? "", tagsInput || defaultTags],
     [title, summary, tagsInput, defaultTags],
@@ -97,13 +103,6 @@ export default function PushDialog({
     setSection(placed.section);
     setGroup(placed.group);
   }, [open, hintBlob, manualOverride, pushBlog]);
-
-  useEffect(() => {
-    const allowed = SECTION_GROUPS[section] ?? SECTION_GROUPS.misc;
-    if (!allowed.some((g) => g.id === group)) {
-      setGroup(allowed[0]?.id ?? "misc");
-    }
-  }, [section, group]);
 
   const previewTags = useMemo(() => parseTags(tagsInput), [tagsInput]);
   const sectionLabel = SECTION_LABELS[section];

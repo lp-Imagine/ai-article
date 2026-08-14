@@ -8,6 +8,8 @@ import {
 } from "@/lib/wechat";
 import { convertToWechatHtml, prependWechatDigest } from "@/lib/wechat-style";
 import { findOwnedArticle } from "@/lib/api-auth";
+import { mapWithConcurrency } from "@/lib/map-with-concurrency";
+import { log } from "@/lib/log";
 
 export class PushDraftError extends Error {
   readonly code: number;
@@ -54,36 +56,56 @@ async function uploadInlineImage(
   return json.url;
 }
 
-/** 将正文中所有 <img src="..."> 的图片上传到微信并替换 URL */
+/**
+ * 将正文中所有 <img src="..."> 的图片上传到微信并替换 URL。
+ * 多张图片并发上传（默认 3 并发），单张失败不影响整体流程。
+ */
 async function replaceInlineImages(
   content: string,
   token: string,
 ): Promise<string> {
   const imgRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
-  const matches = [...content.matchAll(imgRegex)];
+  const srcs = [...content.matchAll(imgRegex)].map((m) => m[1]);
 
-  if (matches.length === 0) return content;
+  if (srcs.length === 0) return content;
 
-  let result = content;
-  for (const match of matches) {
-    const originalSrc = match[1];
-    // 跳过已经是微信域名的图片
-    if (
-      originalSrc.includes("mmbiz.qpic.cn") ||
-      originalSrc.includes("mp.weixin.qq.com")
-    ) {
-      continue;
-    }
-    try {
-      const wechatUrl = await uploadInlineImage(token, originalSrc);
-      result = result.replace(originalSrc, wechatUrl);
-    } catch (err) {
-      console.error(`[inline-image] upload failed for ${originalSrc}:`, err);
-      // 单张图片上传失败不阻断整体流程，保留原 URL
-    }
+  // 同一张图可能在正文里出现多次（如章节配图复用），去重后只上传一次
+  const pendingSrcs = [...new Set(srcs)].filter(
+    (src) => !src.includes("mmbiz.qpic.cn") && !src.includes("mp.weixin.qq.com"),
+  );
+  if (pendingSrcs.length === 0) return content;
+
+  // 并发上传（微信文档未限制并发；3 是经验值，避免一次拉满 DNS/连接池）
+  const uploaded = await mapWithConcurrency(
+    pendingSrcs,
+    3,
+    async (src): Promise<{ src: string; wechatUrl: string | null }> => {
+      try {
+        const wechatUrl = await uploadInlineImage(token, src);
+        return { src, wechatUrl };
+      } catch (err) {
+        log.warn("inline image upload failed", {
+          src,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        // 单张图片上传失败不阻断整体流程，保留原 URL
+        return { src, wechatUrl: null };
+      }
+    },
+  );
+
+  const urlBySrc = new Map<string, string>();
+  for (const item of uploaded) {
+    if (item.wechatUrl) urlBySrc.set(item.src, item.wechatUrl);
   }
+  if (urlBySrc.size === 0) return content;
 
-  return result;
+  // 逐个 img 标签替换：若直接对 src 做全文替换，
+  // 当一个 src 是另一个的前缀（a.png 与 a.png?v=2）时会互相破坏。
+  return content.replace(imgRegex, (tag, src: string) => {
+    const wechatUrl = urlBySrc.get(src);
+    return wechatUrl ? tag.replace(src, () => wechatUrl) : tag;
+  });
 }
 
 export type PushDraftResult = {

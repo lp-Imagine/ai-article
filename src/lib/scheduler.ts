@@ -4,6 +4,7 @@ import type { ArticleSchedule } from "@prisma/client";
 import { withUserConfig } from "@/lib/config-bridge";
 import { enqueueGenerationJob } from "@/lib/jobs/enqueue";
 import { getTopicIdeas } from "@/lib/topic-ideas";
+import { log } from "@/lib/log";
 
 const TICK_MS = 60_000; // 每 60 秒检查一次到期任务
 const MAX_BATCH_PER_TICK = 5; // 每轮最多触发的任务数，避免雪崩
@@ -61,10 +62,10 @@ async function pickTopicForSchedule(schedule: ArticleSchedule): Promise<string> 
       const idea = result.ideas[0];
       if (idea?.topic) return idea.topic;
     } catch (err) {
-      console.warn(
-        `[scheduler] schedule=${schedule.id} ideas pick failed:`,
-        err instanceof Error ? err.message : err,
-      );
+      log.warn("scheduler ideas pick failed", {
+        scheduleId: schedule.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
   if (schedule.fixedTopic?.trim()) return schedule.fixedTopic.trim();
@@ -129,12 +130,14 @@ async function runOneSchedule(schedule: ArticleSchedule) {
         nextRunAt: computeNextRunAt(schedule, now),
       },
     });
-    console.log(
-      `[scheduler] schedule=${schedule.id} triggered article=${article.id} job=${job.id}`,
-    );
+    log.info("scheduler triggered", {
+      scheduleId: schedule.id,
+      articleId: article.id,
+      jobId: job.id,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "执行失败";
-    console.error(`[scheduler] schedule=${schedule.id} failed:`, message);
+    log.error("scheduler schedule failed", { scheduleId: schedule.id, error: message });
     await db.articleSchedule.update({
       where: { id: schedule.id },
       data: {
@@ -150,23 +153,43 @@ async function runOneSchedule(schedule: ArticleSchedule) {
 async function tick() {
   try {
     const now = new Date();
-    const due = await db.articleSchedule.findMany({
-      where: {
-        enabled: true,
-        nextRunAt: { lte: now },
-      },
-      orderBy: { nextRunAt: "asc" },
-      take: MAX_BATCH_PER_TICK,
+
+    // 集群互斥：用 SELECT ... FOR UPDATE SKIP LOCKED 一次性拿一批到期的 schedule，
+    // 同时把它们 nextRunAt 推进到 5 分钟后的「临时占位」，让其他实例的 tick 看不到。
+    // 后续 runOneSchedule 成功 / 失败时再覆盖为真正的 nextRunAt。
+    //
+    // 这样多实例部署时：N 个实例同时 tick，但只有先抢到行锁的那个实例会执行；
+    // 5 分钟是兜底，万一某个实例在 runOneSchedule 阶段崩溃/重启，其它实例
+    // 最迟 5 分钟后会接管它（视为失败一次并按 schedule 规则计算下一次）。
+    const placeholder = new Date(now.getTime() + 5 * 60_000);
+    const claimed = await db.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM "ArticleSchedule"
+        WHERE "enabled" = true AND "nextRunAt" <= ${now}
+        ORDER BY "nextRunAt" ASC
+        LIMIT ${MAX_BATCH_PER_TICK}
+        FOR UPDATE SKIP LOCKED
+      `;
+      if (rows.length === 0) return [];
+      const ids = rows.map((r) => r.id);
+      await tx.articleSchedule.updateMany({
+        where: { id: { in: ids } },
+        data: { nextRunAt: placeholder },
+      });
+      // 再读一次拿到完整字段
+      return tx.articleSchedule.findMany({
+        where: { id: { in: ids } },
+      });
     });
-    for (const schedule of due) {
+
+    for (const schedule of claimed) {
       // 串行执行，避免同 tick 多任务争抢 LLM 配额
       await runOneSchedule(schedule);
     }
   } catch (err) {
-    console.error(
-      "[scheduler] tick failed:",
-      err instanceof Error ? err.message : err,
-    );
+    log.error("scheduler tick failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -177,7 +200,7 @@ async function tick() {
 export function ensureSchedulerStarted() {
   if (g.__articleSchedulerStarted) return;
   g.__articleSchedulerStarted = true;
-  console.log("[scheduler] started, tick every", TICK_MS / 1000, "s");
+  log.info("scheduler started", { tickMs: TICK_MS });
   // 启动后先延迟一个 tick 再执行，避免启动期 DB 未就绪
   setTimeout(() => {
     void tick();

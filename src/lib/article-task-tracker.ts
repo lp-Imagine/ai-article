@@ -27,6 +27,12 @@ export type GenerationJobSnapshot = {
   stepLabel?: string | null;
   error?: string | null;
   label?: string;
+  /**
+   * 任务完成后的结构化结果（仅 succeeded 状态有意义）。
+   * 典型内容：{ contentWarning?: string; qualityScore?: number; coverWarning?: string | null }。
+   * 用于在 UI 上展示「部分章节被跳过」之类的提示，而不是被吞掉。
+   */
+  resultJson?: unknown;
 };
 
 export function isOutlineBackgroundTaskLabel(label: string) {

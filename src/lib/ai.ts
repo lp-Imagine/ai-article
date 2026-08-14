@@ -19,7 +19,7 @@ type TextRole =
   | "reformat"
   | "refine";
 
-const PRIMARY_TEXT_ROLES = new Set<TextRole>([
+const PRIMARY_TEXT_ROLES: ReadonlySet<TextRole> = new Set<TextRole>([
   "outline",
   "content",
   "polish",
@@ -33,6 +33,49 @@ type ChatMessage = {
   content: string;
 };
 
+// 抽到子模块的 prompt / 常量
+import {
+  buildAccountPersonaBlock,
+  buildDomainAdaptationBlock,
+  buildStyleGuide,
+  buildWritingUserPayload,
+  isEngineeringTopic,
+  ARTICLE_HTML_FORMAT_RULES_BRIEF,
+} from "@/lib/ai/prompts/common";
+import {
+  buildOutlinePrompt,
+  type OutlinePromptInput,
+} from "@/lib/ai/prompts/outline";
+// 抽到子模块的 prompt builder
+import { buildContentSystemPromptCore } from "@/lib/ai/prompts/content";
+import { buildRefineSystemPrompt } from "@/lib/ai/prompts/refine";
+import { buildPolishSystemPrompt } from "@/lib/ai/prompts/polish";
+import { buildExpandSystemPrompt } from "@/lib/ai/prompts/expand";
+import {
+  buildInfographicPrompt,
+  type SectionStoryPanel,
+  type SectionStoryboard,
+} from "@/lib/ai/prompts/cover";
+import {
+  BLUEPRINT_JSON_INSTRUCTION,
+  CONTENT_SKILL,
+  fallbackBlueprint,
+  normalizeBlueprint,
+  sectionDirective,
+  type ArticleBlueprint,
+} from "@/lib/ai/skills/content";
+import {
+  assessOutlineDiversity,
+  outlineAngleAt,
+} from "@/lib/ai/skills/outline";
+import { buildQualityRepairBrief } from "@/lib/ai/skills/refine";
+import { SECTION_ATTEMPTS } from "@/lib/ai/constants";
+import {
+  extractHtmlFromLlmJson,
+  extractSectionHtml,
+} from "@/lib/ai/extract-html";
+
+
 function readConfig(key: string, fallback: string): string {
   const value = getEnvValue(key) ?? process.env[key];
   return value && value.trim() ? value : fallback;
@@ -40,14 +83,6 @@ function readConfig(key: string, fallback: string): string {
 
 function isAiConfigured() {
   return Boolean(getEnvValue("AI_API_KEY") || process.env.AI_API_KEY);
-}
-
-function resolveModelForRole(role: TextRole): string {
-  const primaryModel = readConfig("TEXT_MODEL_NAME", "gpt-4o-mini");
-  if (PRIMARY_TEXT_ROLES.has(role)) return primaryModel;
-
-  const auxiliaryModel = readConfig("AUXILIARY_TEXT_MODEL_NAME", "");
-  return auxiliaryModel || primaryModel;
 }
 
 /** 按任务类型解析模型名、Base URL、API Key（辅助任务可独立配置厂商） */
@@ -189,18 +224,29 @@ async function callChat(
       }
 
       const json = (await res.json()) as {
-        choices: { message: { content: string } }[];
+        choices?: Array<{
+          finish_reason?: string | null;
+          text?: string | null;
+          message?: {
+            content?: string | null;
+            reasoning_content?: string | null;
+            reasoning?: string | null;
+          };
+        }>;
         usage?: { completion_tokens?: number };
       };
 
       const seconds = (Date.now() - startedAt) / 1000;
       const outTokens = json.usage?.completion_tokens ?? 0;
+      const finish = json.choices?.[0]?.finish_reason ?? "";
+      const truncated = finish === "length" || outTokens >= maxTokens * 0.98;
       console.log(
         `[llm] role=${role} ${seconds.toFixed(1)}s inflight=${inFlightAtStart} ` +
-          `out=${outTokens}tok${outTokens ? ` ${(outTokens / seconds).toFixed(1)}tok/s` : ""} cap=${maxTokens}`,
+          `out=${outTokens}tok${outTokens ? ` ${(outTokens / seconds).toFixed(1)}tok/s` : ""} cap=${maxTokens}` +
+          `${finish ? ` finish=${finish}` : ""}${truncated ? " truncated" : ""}`,
       );
 
-      return json.choices[0]?.message?.content ?? "";
+      return pickChatMessageContent(json);
     } catch (error) {
       const normalized = normalizeLlmError(error, role, timeoutMs);
       console.warn(
@@ -222,11 +268,28 @@ async function callChat(
   throw lastError ?? new Error("LLM 请求失败");
 }
 
+function pickChatMessageContent(json: {
+  choices?: Array<{
+    text?: string | null;
+    message?: {
+      content?: string | null;
+      reasoning_content?: string | null;
+      reasoning?: string | null;
+    };
+  }>;
+}): string {
+  const choice = json.choices?.[0];
+  const msg = choice?.message;
+  const candidates = [msg?.content, msg?.reasoning_content, msg?.reasoning, choice?.text];
+  for (const value of candidates) {
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return typeof msg?.content === "string" ? msg.content : "";
+}
+
 function getLlmTimeoutMs(role: TextRole): number {
   const raw = Number(process.env.LLM_REQUEST_TIMEOUT_MS ?? "");
   if (Number.isFinite(raw) && raw > 0) return Math.floor(raw);
-  // 工程长主题 + 多套大纲时，模型常需 2～5 分钟；超时过紧会误杀
-  // reformat 与 polish 同量级：整篇 HTML 输出，不能用短任务超时
   if (
     role === "content" ||
     role === "polish" ||
@@ -234,11 +297,11 @@ function getLlmTimeoutMs(role: TextRole): number {
     role === "reformat" ||
     role === "refine"
   ) {
-    return 480_000; // 8 分钟
+    return 180_000;
   }
-  if (role === "outline") return 420_000; // 7 分钟
+  if (role === "outline") return 180_000;
   if (role === "topic-ideas") return 25_000; // 灵感热点：命中缓存秒回；冷启动等模型，超时降级静态库
-  return 180_000; // 其它短任务 3 分钟
+  return 120_000;
 }
 
 function safeParse<T>(value: string | null, fallback: T): T {
@@ -250,265 +313,15 @@ function safeParse<T>(value: string | null, fallback: T): T {
   }
 }
 
-type WritingParams = {
-  topic: string;
-  style?: string | null;
-  audience?: string | null;
-  goal?: string | null;
-  keywords?: string | null;
-  wordCount?: number | null;
-};
-
-function getAccountPersona(): string {
-  return getEnvValue("ACCOUNT_PERSONA")?.trim() ?? "";
-}
-
-function parseKeywords(keywords?: string | null): string[] {
-  if (!keywords?.trim()) return [];
-  return keywords
-    .split(/[,，]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function buildAccountPersonaBlock(): string {
-  const persona = getAccountPersona();
-  if (!persona) return "";
-
-  return (
-    `【账号背景（软约束，不覆盖主题领域）】\n` +
-    `${persona}\n` +
-    `- 以上只影响叙述口吻、举例偏好和读者关系；**文章写什么仍完全由「主题」决定**\n` +
-    `- 若主题与账号主领域不同（如账号偏技术、主题是育儿/理财），按主题领域写，不要硬扯技术\n` +
-    `- 若主题与账号领域一致，可自然带入实践细节（代码、工程、Agent 等），但仍需服务主题本身`
-  );
-}
-
-function buildDomainAdaptationBlock(): string {
-  return (
-    `【领域适配（通用，跨行业）】\n` +
-    `- **主题决定领域**：写什么由用户输入的主题/关键词决定，不要默认所有文章都是技术文或职场文\n` +
-    `- 技术/编程类：以可运行代码、接口约定、边界与踩坑为主；术语用 <code> 标注；少写「意义/趋势」空话\n` +
-    `- 产品/商业类：用决策过程、对比选项、具体数字或结果；少堆术语正确但无用的正确废话\n` +
-    `- 成长/生活/科普类：用可核对的场景、人物动作、前后对比；道理从事实里长出来，不要先贴标签再硬凑例子\n` +
-    `- 判断领域时看主题语义，不看账号名称`
-  );
-}
-
-/** 从主题/关键词判断是否工程实现向（组件封装、上传、API 等） */
-function isEngineeringTopic(topic: string, keywords?: string | null): boolean {
-  const text = `${topic} ${keywords ?? ""}`.toLowerCase();
-  const signals = [
-    /前端|后端|全栈|工程|封装|组件|hooks?|react|vue|angular|svelte|typescript|javascript|node\.?js/,
-    /上传|下载|分片|断点续传|并发|sdk|api|接口|cli|docker|k8s|数据库|sql|redis/,
-    /代码|源码|实现|重构|架构|中间件|插件|npm|webpack|vite|bundler|css|html/,
-    /component|upload|chunk|resume|typescript|javascript|python|golang|rust|java/,
-  ];
-  return signals.some((re) => re.test(text));
-}
-
-function buildOnTopicBlock(topic: string, keywords?: string | null): string {
-  const kw = parseKeywords(keywords);
-  const kwHint = kw.length > 0 ? `关键词（可自然融入，勿生硬堆砌）：${kw.join("、")}` : "无额外关键词";
-  return `
-【紧扣主题（硬性）】
-- 用户主题是写作边界的圆心：「${topic}」。可以在主题内深挖、举例、对比、拆步骤，**禁止跑到无关赛道**
-- ${kwHint}
-- 允许扩展：同一主题下的前置条件、边界情况、常见误区、可执行下一步——但每段读完应能回答「这和主题有什么关系」
-- 禁止借题发挥：不要用主题当引子，后文滑向成功学、行业趋势、空洞励志或账号人设广告
-- 若某章节写着写着偏了：删掉偏题部分，回到主题的一个具体问题
-`.trim();
-}
-
-function buildEvidenceBlock(engineering: boolean): string {
-  if (engineering) {
-    return `
-【论据与干货（工程向）】
-- 凡主张「该怎么做」，必须落到代码、接口字段、状态、命令或可复现步骤之一
-- 禁止只有「要注意并发 / 要做好封装」这类正确但无法下手的句子；要么给代码/伪代码，要么给检查清单
-- 案例优先写「我当时怎么做的 / 错在哪 / 改完长什么样」，少写「业界普遍认为」
-- 事实合规：无可核验来源时，禁止虚构具体人名/公司名、无出处的百分比与日期；可改成匿名角色、区间或量级
-- **技术指标除外**：对比/压测语境下的 P50/P90/P99、ms、req/s、吞吐等应保留原样，不要改成「延迟指标」「较短时间」
-`.trim();
-  }
-  return `
-【论据与干货（通用）】
-- 凡给出建议、判断、方法，至少配一种支撑：具体案例、前后对比、可核对数字、真实场景片段、步骤清单
-- 科普/生活/观点文不要求代码；但**不能只有定义和态度**——读者读完要带走能用的东西（怎么判断、怎么试、会踩什么坑）
-- 若某章偏实践（教程、操作、避坑）：必须有可跟随步骤或真实情境，禁止纯概念铺陈
-- 若某章偏认知（观点、科普）：用一个具体现象/故事钉住论点，再讲机制；不要反过来先空讲大词
-- 事实合规：如无法提供可核验来源，不得写具体人名/公司名、无出处的百分比/金额/日期；改为匿名案例与近似表达（如「约三成」「近一周」）
-- **技术指标除外**：选型/压测对比里的 P50/P90/P99、ms、req/s 等保留原样
-`.trim();
-}
-
-function buildQualityArticleBlock(): string {
-  return `
-【向优质文章靠拢（写作标准）】
-优质公众号/专栏常见共性，请按此自检：
-1. **一句主线**：全文只打穿一个核心问题；小节都是主线的分支，不是百科条目拼盘
-2. **先问题后展开**：开篇直接点出读者真正卡的问题或核心结论，再展开概念（需要多少讲多少）；不要用虚构闲聊铺垫
-3. **信息密度**：删掉后不影响理解的句子一律删；同一意思不换词再说一遍
-4. **可感知细节**：时间、数量、报错原文、界面状态、代码行为——比「很重要/很关键」更有说服力
-5. **诚实边界**：写清适用条件与做不到的部分；夸大承诺会立刻像营销稿
-6. **结尾给带走物**：一个可执行动作、一张检查表、或一个判断标准——不要升华成口号
-7. **创作度**：切入角、案例选择、判断要像「为本题现写」，不要像批量模板填空
-
-禁止的空洞写法：
-- 只抛概念不下定义也不举例
-- 「本质上是认知问题」「关键在于体系化」却不说具体改哪一步
-- 排比正确废话、假装深刻的对立（旧时代 vs 新时代）却无事实
-- 用「和朋友聊天 / 有人问我 / 上周同事说」这类虚构闲聊当万能开头
-- 段段正确但无法下手的「建议」（要重视、要体系化、要持续迭代）
-`.trim();
-}
-
-/** 对齐微信对低创作度 / 低质 AIGC 的治理口径 */
-function buildWechatPlatformValueBlock(): string {
-  return `
-【微信公众号内容价值（硬性，平台合规）】
-平台会限流「低创作度」内容：高度同质化、搬运抄袭、内容空洞、低质 AIGC。
-你必须写出「信息含量高、有阅读价值、有创作度」的稿：
-
-1. **信息增量**：每段至少贡献一件新信息（事实、步骤、判断依据、边界、反例）；删掉后读者应少懂一件事
-2. **创作度**：独特切入角 + 可核对判断；禁用「定义→重要性→方法论→注意事项→总结」百科骨架
-3. **可核对**：优先可观察细节（场景、数字、报错原文、前后对比）；不写无法证伪的正确废话
-4. **反同质化**：开篇、章节顺序、案例选择要服务「这一篇主题」，禁止万能模板换词
-5. **反空洞 AIGC**：禁止排比鸡汤、无主体的「我们需要…」、段段正确但无用的建议
-6. **诚实**：不确定就标明；不编造数据、论文、权威背书或虚假对话
-7. **事实可核验**：没有来源支撑时，禁止写真实人物姓名、具体公司名、无出处的百分比/金额/日期；可用匿名角色+区间（如「某内容团队」「约 20%-30%」）。技术对比表里的 P50/P99、ms、req/s 等指标可保留。
-
-段落自检（任一项为否 → 重写该段）：
-- 读者读完能否多知道/会做一件具体事？
-- 把主题换成别的标题，这段是否还通顺？（通顺=空泛）
-- 是否像随处可见的 AI 水文？（是 → 换成案例/步骤/代码）
-- 是否出现了无法核验的具体人物/公司/无出处百分比？（是 → 匿名化并改成区间/量级；技术分位数标签除外）
-`.trim();
-}
-
-function buildFactualComplianceBlock(): string {
-  return `
-【事实与案例（硬性，高于故事感）】
-- **禁止无来源编造「人物故事数字」**：不得用张磊/林薇 + 精确百分比假装真实案例
-- **技术对比表除外**：吞吐、延迟分位数（P50/P90/P99）、ms、req/s 等指标可保留原样，用于选型对比
-- **禁止对话引语**：不得写「他说：「……」」；改为间接叙述（团队提到 / 复盘发现）
-- 需要案例时用**匿名场景**，不要用姓名假装真实
-
-错误：「内容团队的张磊把接口升级后，成本涨了 60%。」
-正确：「某内容团队升级接口后，平均延迟下降，但尾部延迟恶化，后来回滚并补了评估标准。」
-正确（对比表）：用 <table> 列出旧模型 / 新模型 A / 新模型 B 的吞吐与 P50/P99。
-`.trim();
-}
-
-function buildEngineeringOutlineBlock(enabled: boolean): string {
-  if (!enabled) return "";
-  return `
-【工程/封装类主题——大纲硬性要求】
-- 标题若含「实战 / 手册 / 封装 / 手把手 / 从 0 到 1」，章节必须对应**可交付物**（接口、代码片段、目录结构、边界用例），禁止只有概念章节
-- 至少 3 个章节的 summary 要写清「本章会给出什么」：如 Props 设计、分片队列伪代码、错误码表、断点续传时序——不要写「全面介绍XXX」
-- 禁止整篇大纲落成：重要性 → 原理 → 方法论 → 注意事项 → 总结（教科书骨架）
-- 鼓励差异化骨架（可混用，勿套固定句式）：
-  · 先接口后实现（对外 API → 内部状态机 → 边界）
-  · 先翻车后正解（真实坑 → 根因 → 最终实现）
-  · 最小可用切片（先跑通一条路径，再补并发/续传）
-  · 对比选型（原生 / 库 / 自研，各给一段关键代码）
-- 章节标题要像工程师笔记：可含具体名词（\`File\`、\`Blob\`、\`concurrent\`、\`etag\`），少用「赋能认知」「底层逻辑」
-`.trim();
-}
-
-function buildEngineeringContentBlock(enabled: boolean): string {
-  if (!enabled) return "";
-  return `
-【工程/封装类主题——正文硬性要求】
-- **标题承诺必须兑现**：标题/大纲写「实战、手册、封装」，正文必须有可运行或可粘贴的代码；禁止通篇概念与鸡汤
-- **代码量**：全文至少 **2** 个 \`<pre><code>\` 代码块（建议 TypeScript/JS）；至少 1 个展示核心 API 或关键流程（≥8 行）
-- **少说多写**：用代码、类型定义、调用示例代替「首先要理解…」「本质上是…」长段空论
-- 每个涉及实现的 <h2>：先给一段可落地的代码或接口，再用 1-2 段说明「为什么这样写 / 边界」
-- 允许省略完整工程脚手架，但关键逻辑（分片、并发池、重试、进度、取消）必须有代码或清晰伪代码
-- 禁止用「步骤一/二/三」空壳凑字：每一步都要落到函数名、参数或状态字段
-- 若字数与信息密度冲突：**优先信息密度**，宁可略短，也不要注水重复
-`.trim();
-}
-
-function buildAntiAiVoiceBlock(): string {
-  return `
-【去 AI 腔与夸夸其谈（硬性）】
-- 禁止套话：在当今/随着…发展/赋能/抓手/闭环/底层逻辑/降维/颗粒度/对齐/沉淀方法论/打造闭环/深度思考/认知升级/众所周知/毋庸置疑/值得注意的是
-- 禁止每个大纲都长成：痛点引入 → 三大误解 → 三步方法论 → 注意事项 → 总结（换词不算创新）
-- 标题禁止批量套用同一公式；「XXX实战手册」最多在全部方案里出现 1 次，且该方案必须可落地
-- 少用抽象形容词（赋能、卓越、全面、系统性）；改用可观察事实
-- 允许不完美与取舍：真实感强于完美教条
-- **禁止「闲聊代入」开篇模板**：如「周一/上周和一个朋友聊天」「同事问我」「有读者留言说最近在XXX上花了很多时间，进展却不大」——再接「方向对但顺序要调整」这类万能转折
-- 禁止段首机械排比（「首先要明白」「其次需要注意」「最后别忘了」连用）；节奏要像人写的笔记
-- 同一句式开头不得连续出现 3 次以上
-`.trim();
-}
-
-function buildStyleGuide(style: string): string {
-  switch (style) {
-    case "观点型":
-      return (
-        `【风格：观点型】\n` +
-        `- 开篇亮明核心判断，全文围绕一条主线论证\n` +
-        `- 案例和数据服务于论点，不做教程式步骤罗列\n` +
-        `- 允许有态度，但每个判断都要有依据`
-      );
-    case "故事型":
-      return (
-        `【风格：故事型】\n` +
-        `- 用具体经历串联信息，场景描写优先于概念定义\n` +
-        `- 道理从故事里自然浮现，避免教科书式「首先/其次/最后」\n` +
-        `- 仍要给出读者可带走的一个结论或小行动`
-      );
-    default:
-      return (
-        `【风格：干货型】\n` +
-        `- 结构清晰，扫读能抓到可执行点\n` +
-        `- 步骤、清单、对比、代码优先；概念点到为止\n` +
-        `- 每个建议尽量可验证；技术文用接口/代码作证，非技术文用场景/数字作证`
-      );
-  }
-}
-
-function buildWritingUserPayload(input: WritingParams & { outline?: unknown; outlineCount?: number; sectionsPerOutline?: number }) {
-  const style = input.style || "干货型";
-  return {
-    topic: input.topic,
-    style,
-    audience: input.audience?.trim() || "公众号读者",
-    goal: input.goal?.trim() || "知识分享",
-    keywords: parseKeywords(input.keywords),
-    wordCount: input.wordCount ?? 1200,
-    ...(input.outline !== undefined ? { outline: input.outline } : {}),
-    ...(input.outlineCount !== undefined ? { outlineCount: input.outlineCount } : {}),
-    ...(input.sectionsPerOutline !== undefined ? { sectionsPerOutline: input.sectionsPerOutline } : {}),
-  };
-}
-
-/** 正文生成 / 润色共用的微信 HTML 格式规范（违反会导致推送排版错乱） */
-const ARTICLE_HTML_FORMAT_RULES = `
-【微信 HTML 格式（硬性）】
-文章推送微信公众号，只允许下列结构；禁止 Markdown、inline style、自创 class、figure/img/section。
-允许简单对比表：<table><tr><th>…</th></tr><tr><td>…</td></tr></table>（无嵌套、无样式）。
-
-- 正文步骤：<ol><li><strong>标题</strong>说明</li></ol>
-- 并列要点：<ul><li><strong>标题</strong>说明</li></ul>
-- mp-tip：div 内只能有单个 <ol>，li 结构与正文 ol 完全相同；禁止 ul、多个 p、嵌套 li、写「实用技巧」等标题
-- mp-warning：div 内只用 <p>...</p>；禁止列表和「注意」标题
-- 总结：<h2>总结</h2> + <div class="mp-summary"><p>...</p></div>
-- 引用：<blockquote><p>...</p></blockquote>
-
-列表项统一写法：<li><strong>2-8字标题</strong>说明正文</li>（标题与说明同一行，不用 br，li 内不用 p）
-`.trim();
-
-/** 润色 / 扩写用的精简版，避免占用过多上下文 */
-const ARTICLE_HTML_FORMAT_RULES_BRIEF = `
-【HTML 格式】保留现有结构；mp-tip 内仅单个 <ol>；mp-warning/mp-summary 内仅 <p>；列表项用 <li><strong>标题</strong>说明</li>；允许简单对比 <table>；禁止新增 figure/img/section/自创 class。
-`.trim();
-
 function computeContentMaxTokens(wordCount: number): number {
   // 中文 + HTML + JSON 包装，约 2 token/字，留生成余量
   return Math.min(8192, Math.max(4096, Math.ceil(wordCount * 2.2)));
+}
+
+/** 单章输出上限。工程章带代码块，2048 会把 JSON 截断导致整章作废。 */
+function computeSectionMaxTokens(perSection: number, engineering: boolean): number {
+  const floor = engineering ? 4096 : 3072;
+  return Math.min(8192, Math.max(floor, Math.ceil(perSection * 3.2) + 1200));
 }
 
 function countPlainTextChars(html: string): number {
@@ -645,16 +458,6 @@ function buildSections(topic: string, sectionCount: number = 3, variant: number 
   return selected.slice(0, Math.min(sectionCount, selected.length));
 }
 
-/** 拆分并发生成时，为每套方案指定不同切入角，替代「同一次调用里互相错开」 */
-const OUTLINE_ANGLES = [
-  "问题现场切入：从一个具体的翻车/卡住场景开始，再一步步给出正解",
-  "对比选型：在 2-3 个可选做法之间做取舍，给出判断标准与适用边界",
-  "最小可用切片：从零搭一个能跑起来的最小版本，再逐步加码",
-  "清单式手册：给可直接照做的步骤清单、参数与踩坑边界",
-  "认知纠偏：先钉住一个常见误解，用事实和例子逐条拆解",
-  "复盘式：按时间线讲一次完整实践，突出关键决策点与代价",
-];
-
 function getOutlineConcurrency(count: number): number {
   const raw = Number(process.env.OUTLINE_CONCURRENCY ?? "");
   const configured = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 3;
@@ -672,11 +475,21 @@ function normalizeOutlineOption(
     index: idx,
     title: opt.title ?? `${topic}：方案 ${idx + 1}`,
     positioning: opt.positioning ?? `${style}向，约 ${wordCount} 字。`,
-    sections: (opt.sections ?? []).map((s) => ({
-      heading: s.heading ?? "未命名章节",
-      summary: s.summary ?? "",
+    sections: (opt.sections ?? []).map((section) => ({
+      heading: section.heading ?? "未命名章节",
+      summary: section.summary ?? "",
     })),
   };
+}
+
+function reportOutlineDiversity(outlines: OutlineOption[]): OutlineOption[] {
+  const diversity = assessOutlineDiversity(outlines);
+  if (diversity.issues.length > 0) {
+    console.warn(
+      `[generateOutline] diversity=${diversity.score}: ${diversity.issues.join("；")}`,
+    );
+  }
+  return outlines;
 }
 
 export async function generateOutline(input: {
@@ -693,15 +506,9 @@ export async function generateOutline(input: {
   const wordCount = input.wordCount || 1200;
   const count = Math.min(6, Math.max(2, input.outlineCount ?? 3));
   const engineering = isEngineeringTopic(input.topic, input.keywords);
-
-  // 根据字数决定每个大纲的章节数
   const sectionCount =
-    wordCount <= 1200 ? 3 :
-    wordCount <= 2000 ? 4 :
-    wordCount <= 3000 ? 5 :
-    6;
+    wordCount <= 1200 ? 3 : wordCount <= 2000 ? 4 : wordCount <= 3000 ? 5 : 6;
 
-  // 一次吐 N 套 × 多章节的长响应最容易被上游 ~60s 网关掐断，默认拆成每套一个请求并发
   if ((process.env.OUTLINE_GENERATION_MODE ?? "parallel") !== "monolithic") {
     const parallel = await generateOutlinesInParallel({
       ...input,
@@ -712,140 +519,59 @@ export async function generateOutline(input: {
       sectionCount,
       engineering,
     });
-    if (parallel.length > 0) return parallel;
-    return buildFallbackOutlines(input.topic, style, audience, wordCount, count, engineering);
+    if (parallel.length > 0) return reportOutlineDiversity(parallel);
+    return reportOutlineDiversity(buildFallbackOutlines(
+      input.topic,
+      style,
+      audience,
+      wordCount,
+      count,
+      engineering,
+    ));
   }
 
-  const prompt = buildOutlinePrompt({
-    ...input,
+  const raw = await callChat(
+    buildOutlinePrompt({
+      ...input,
+      style,
+      audience,
+      wordCount,
+      count,
+      sectionCount,
+      engineering,
+      angle: null,
+    }),
+    {
+      jsonMode: true,
+      maxTokens: Math.min(8192, 1600 + count * sectionCount * 220),
+      role: "outline",
+    },
+  );
+  const parsed = safeParse<{ outlines?: OutlineOption[] }>(raw, {});
+  if (parsed.outlines?.length) {
+    return reportOutlineDiversity(parsed.outlines
+      .slice(0, count)
+      .map((option, index) =>
+        normalizeOutlineOption(option, index, input.topic, style, wordCount),
+      ));
+  }
+
+  return reportOutlineDiversity(buildFallbackOutlines(
+    input.topic,
     style,
     audience,
     wordCount,
     count,
-    sectionCount,
     engineering,
-    angle: null,
-  });
-
-  const maxTokens = Math.min(8192, 1600 + count * sectionCount * 220);
-  const raw = await callChat(prompt, { jsonMode: true, maxTokens, role: "outline" });
-  const parsed = safeParse<{ outlines?: OutlineOption[] }>(raw, {});
-
-  if (parsed.outlines && parsed.outlines.length > 0) {
-    return parsed.outlines
-      .slice(0, count)
-      .map((opt, idx) => normalizeOutlineOption(opt, idx, input.topic, style, wordCount));
-  }
-
-  return buildFallbackOutlines(input.topic, style, audience, wordCount, count, engineering);
+  ));
 }
 
-type OutlinePromptInput = {
-  topic: string;
-  style: string;
-  audience: string;
-  wordCount: number;
-  goal?: string | null;
-  keywords?: string | null;
-  count: number;
-  sectionCount: number;
-  engineering: boolean;
-  /** 非空时表示本次只生成一套方案，并锁定该切入角 */
-  angle: string | null;
-};
-
-function buildOutlinePrompt(input: OutlinePromptInput): ChatMessage[] {
-  const { topic, style, audience, wordCount, count, sectionCount, engineering, angle } = input;
-  const single = angle !== null;
-
-  return [
-    {
-      role: "system",
-      content: `你是一位资深公众号主编：既懂选题策划，也懂「读者为什么愿意读完」。${
-        single
-          ? `请基于用户输入生成 **1 个**大纲，并严格采用指定切入角。`
-          : `请基于用户输入生成 ${count} 个**真正不同骨架**的大纲——不是同一篇文章换标题。`
-      }
-
-${buildDomainAdaptationBlock()}
-
-${buildAccountPersonaBlock()}
-
-${buildOnTopicBlock(input.topic, input.keywords)}
-
-${buildQualityArticleBlock()}
-
-${buildWechatPlatformValueBlock()}
-
-${buildFactualComplianceBlock()}
-
-${buildEvidenceBlock(engineering)}
-
-${buildAntiAiVoiceBlock()}
-
-${buildEngineeringOutlineBlock(engineering)}
-
-【核心要求】
-${
-  single
-    ? `- **本方案必须采用这个切入角**：${angle}\n- 切入角决定骨架：标题、章节顺序都要体现它，不要写成通用百科目录`
-    : `- 方案之间要有选题张力（选 A 还是选 B），禁止同一骨架换词`
-}
-- 必须服务同一主题「${topic}」，差异在切入角与论证路径，不在换赛道
-- 目标读者：${audience}，写作风格：${style}，文章目标：${input.goal?.trim() || "知识分享"}，目标字数：约 ${wordCount} 字
-- 内容真实可信，不做夸大承诺；宁可信息密度高略短，也不做空洞长文
-- positioning 要写清「这篇独特价值是什么」（读者为什么读这篇而不是百科）
-
-${buildStyleGuide(style)}
-
-【标题要求】
-- title ≤ 20 字，含主题关键词；自然口语或笔记感均可
-- 禁止标题党、震惊体；少用「：从入门到精通」冒号模板
-- **不要**硬套「悬念/数字/对比/场景/手册/态度」六种公式${single ? "" : `；${count} 个标题句式与切入点必须不同`}
-- 实践向标题必须能对应后文干货（代码/步骤/案例），禁止空喊「实战手册」
-
-【章节要求】
-- 每个大纲约 ${sectionCount} 个章节；heading 避免「什么是XXX」「XXX的重要性」「总结与展望」
-- 优先：具体问题、可验证动作、案例现场、对比取舍
-- 各章 summary **不得重叠**：写清本章**新增的信息或交付物**（读者读完能带走什么），禁止「全面介绍」
-- 至少一半章节的 summary 应暗示「有案例 / 有步骤 / 有代码或清单」中的一种（按领域选）
-- positioning：15-30 字，说明适合谁、偏认知还是偏动手
-
-【输出格式】
-${
-  single
-    ? "- outlines 数组长度必须为 1"
-    : `- **必须恰好返回 ${count} 个大纲**（outlines 数组长度 = ${count}），少一个都不合格；禁止只给 2～3 个就收工`
-}
-- JSON：{ "outlines": [ { "title", "positioning", "sections": [ { "heading", "summary" } ] } ] }`,
-    },
-    {
-      role: "user",
-      content: JSON.stringify({
-        ...buildWritingUserPayload({
-          topic,
-          style,
-          wordCount,
-          audience,
-          goal: input.goal,
-          keywords: input.keywords,
-          outlineCount: single ? 1 : count,
-          sectionsPerOutline: sectionCount,
-        }),
-        contentMode: engineering ? "engineering-hands-on" : "general",
-        mustIncludeCodeInArticle: engineering,
-        requiredOutlineCount: single ? 1 : count,
-        ...(single ? { requiredAngle: angle } : {}),
-      }),
-    },
-  ];
-}
 
 /** 每套方案一个短请求并发生成：单次响应更小，几乎不会撞上网关超时 */
 async function generateOutlinesInParallel(
   input: Omit<OutlinePromptInput, "angle">,
 ): Promise<OutlineOption[]> {
-  const { topic, style, audience, wordCount, count, sectionCount } = input;
+  const { topic, style, wordCount, count, sectionCount } = input;
   const maxTokens = Math.min(4096, 1200 + sectionCount * 260);
 
   const results = await mapWithConcurrency(
@@ -854,7 +580,7 @@ async function generateOutlinesInParallel(
     async (i) => {
       try {
         const raw = await callChat(
-          buildOutlinePrompt({ ...input, angle: OUTLINE_ANGLES[i % OUTLINE_ANGLES.length] }),
+          buildOutlinePrompt({ ...input, angle: outlineAngleAt(i) }),
           { jsonMode: true, maxTokens, role: "outline" },
         );
         const parsed = safeParse<{ outlines?: OutlineOption[] }>(raw, {});
@@ -1021,56 +747,18 @@ export type ContentProgressCallback = (
   stepTotal: number,
 ) => void | Promise<void>;
 
-function buildContentSystemPromptCore(input: {
-  topic: string;
-  style: string;
-  wordCount: number;
-  perSection: number;
-  engineering: boolean;
-  keywords?: string | null;
-  accountBlock: string;
-  domainBlock: string;
-  styleGuide: string;
-  sectional?: boolean;
-}): string {
-  const { topic, style, wordCount, perSection, engineering, accountBlock, domainBlock, styleGuide, sectional } =
-    input;
-  return `你是一位写了 8 年公众号的资深主笔。读者评价你的文章「每段都有信息量，读完能动手或能想明白一件事」。${sectional ? "本次只写指定片段，不要写其他章节。" : "请严格按大纲写——每章只写一次，禁止同义反复凑字。"}
-
-${domainBlock}
-
-${accountBlock}
-
-${styleGuide}
-
-${buildOnTopicBlock(topic, input.keywords)}
-
-${buildQualityArticleBlock()}
-
-${buildWechatPlatformValueBlock()}
-
-${buildFactualComplianceBlock()}
-
-${buildEvidenceBlock(engineering)}
-
-${buildAntiAiVoiceBlock()}
-
-${buildEngineeringContentBlock(engineering)}
-
-${ARTICLE_HTML_FORMAT_RULES_BRIEF}
-
-【写作人格】清楚、直接、有判断；没把握时用「常见情况是」，不要装权威。
-【开头】禁止闲聊叙事开篇；${engineering ? "工程文先落到接口/流程/卡点。" : ""}
-【结构】章节用 <h2>，章间 <hr />；列表项 <li><strong>标题</strong>说明</li>
-【反注水】目标约 ${wordCount} 字全文${sectional ? `，本章约 ${perSection} 字` : ""}；宁可偏短也不要空话
-【严禁】赋能/抓手/闭环/认知升级/编造数据/结尾引流`;
-}
 
 function finalizeGeneratedContent(
   content: string,
   fallbackTitle: string,
   fallbackSummary: string,
-): { title: string; summary: string; content: string; missingSections: string[] } {
+): {
+  title: string;
+  summary: string;
+  content: string;
+  missingSections: string[];
+  promptVersions: { content: string };
+} {
   const safeContent = content
     .replace(/<h1[^>]*>[\s\S]*?<\/h1>/g, "")
     .replace(/<div class="mp-signature">[\s\S]*?<\/div>/g, "");
@@ -1082,31 +770,9 @@ function finalizeGeneratedContent(
     summary: fallbackSummary,
     content: highlightedContent,
     missingSections: [],
+    promptVersions: { content: CONTENT_SKILL.version },
   };
 }
-
-function extractHtmlFromLlmJson(
-  parsed: Record<string, unknown>,
-  keys: string[],
-): string {
-  for (const key of keys) {
-    const val = parsed[key];
-    if (typeof val === "string" && val.trim().length > 0) {
-      return val.trim();
-    }
-  }
-  return "";
-}
-
-/** 从模型的非 JSON 回复里取出正文 HTML（去掉 markdown 代码围栏与前后解释） */
-function extractHtmlFromPlainReply(raw: string): string {
-  const fenced = raw.match(/```(?:html)?\s*([\s\S]*?)```/i);
-  const body = (fenced ? fenced[1] : raw).trim();
-  const firstTag = body.search(/<(h2|p|ul|ol|pre|blockquote|div)\b/i);
-  return firstTag > 0 ? body.slice(firstTag).trim() : body;
-}
-
-const SECTION_ATTEMPTS = 3;
 
 async function generateContentSectionHtml(input: {
   systemCore: string;
@@ -1120,17 +786,16 @@ async function generateContentSectionHtml(input: {
   perSection: number;
   engineering: boolean;
   isLastSummary: boolean;
+  blueprint: ArticleBlueprint;
 }): Promise<string> {
   const { section } = input;
-  const maxTokens = Math.min(
-    4096,
-    Math.max(2048, Math.ceil(input.perSection * 2.4) + 600),
-  );
+  const maxTokens = computeSectionMaxTokens(input.perSection, input.engineering);
   let lastError = "模型未返回有效内容";
+  let forcePlain = false;
 
   for (let attempt = 0; attempt < SECTION_ATTEMPTS; attempt++) {
-    // 最后一次改用纯 HTML 输出：JSON 模式偶发返回空字段/截断
-    const plainMode = attempt === SECTION_ATTEMPTS - 1;
+    // JSON 被截断或返回空内容后，后续轮次改纯 HTML，避免反复撞同一个 json_object 上限
+    const plainMode = forcePlain || attempt === SECTION_ATTEMPTS - 1;
 
     try {
       const sectionRaw = await callChat(
@@ -1149,7 +814,9 @@ ${
 - 必须以 <h2>${section.heading}</h2> 开头
 - 本章目标：${section.summary}
 - 本章约 ${input.perSection} 字（去标签）；禁止重复其他章节内容
-${input.isLastSummary ? '- 最后一章可用 <div class="mp-summary"><p>...</p></div>' : ""}`,
+${input.isLastSummary ? '- 最后一章可用 <div class="mp-summary"><p>...</p></div>' : ""}
+
+${sectionDirective(input.blueprint, input.sectionIndex - 1)}`,
           },
           {
             role: "user",
@@ -1163,28 +830,23 @@ ${input.isLastSummary ? '- 最后一章可用 <div class="mp-summary"><p>...</p>
               previousHeadings: input.previousHeadings,
               suggestedWords: input.perSection,
               engineering: input.engineering,
+              articleAngle: input.blueprint.angle,
+              articleThesis: input.blueprint.thesis,
             }),
           },
         ],
-        // 本函数自带 3 次尝试，内层不再重试，否则最坏会变成 9 次串起来的长等待
-        { jsonMode: !plainMode, maxTokens, role: "content", temperature: 0.65, retries: 1 },
+        { jsonMode: !plainMode, maxTokens, role: "content", temperature: 0.65, retries: 2 },
       );
 
       if (!sectionRaw) {
-        lastError = "模型未返回内容（请检查 API Key）";
+        lastError = "模型返回空内容（输出可能被 token 上限截断）";
+        forcePlain = true;
       } else {
-        const html = plainMode
-          ? extractHtmlFromPlainReply(sectionRaw)
-          : extractHtmlFromLlmJson(safeParse<Record<string, unknown>>(sectionRaw, {}), [
-              "sectionHtml",
-              "content",
-              "html",
-              "section",
-            ]);
-
+        const html = extractSectionHtml(sectionRaw, !plainMode);
         if (html.length >= 60) return html;
 
         lastError = `输出过短或字段缺失（${html.length} 字）`;
+        forcePlain = true;
         console.warn(
           `[generateContentBySections] section ${input.sectionIndex} attempt ${attempt + 1} short output`,
           sectionRaw.slice(0, 200),
@@ -1192,10 +854,7 @@ ${input.isLastSummary ? '- 最后一章可用 <div class="mp-summary"><p>...</p>
       }
     } catch (error) {
       lastError = error instanceof Error ? error.message : "章节生成失败";
-      if (!isTransientLlmError(error) && attempt < SECTION_ATTEMPTS - 1) {
-        // 非网络类错误（如鉴权、配额）重试无意义
-        throw error;
-      }
+      forcePlain = true;
       if (attempt === SECTION_ATTEMPTS - 1) throw error;
     }
 
@@ -1243,6 +902,11 @@ async function generateContentBySections(
     styleGuide,
     sectional: true,
   });
+  const blueprintFallback = fallbackBlueprint({
+    topic: input.topic,
+    outline: input.outline,
+    engineering,
+  });
 
   const totalSteps = 1 + sections.length;
   let step = 0;
@@ -1258,10 +922,12 @@ async function generateContentBySections(
         role: "system",
         content: `${systemCore}
 
-【本次任务：标题 + 摘要 + 开篇】
-输出 JSON：{ "title": string, "summary": string, "openingHtml": string }
+【本次任务：标题 + 摘要 + 开篇 + 全篇蓝图】
+输出 JSON：{ "title": string, "summary": string, "openingHtml": string, "blueprint": object }
 - title ≤ 20 字；summary 80-120 字
-- openingHtml：开篇 2-4 段 <p>（直接点题），**不要** <h2>，不要写正文章节`,
+- openingHtml：开篇 2-4 段 <p>（直接点题），**不要** <h2>，不要写正文章节
+
+${BLUEPRINT_JSON_INSTRUCTION}`,
       },
       {
         role: "user",
@@ -1279,9 +945,15 @@ async function generateContentBySections(
         }),
       },
     ],
-    { jsonMode: true, maxTokens: 1200, role: "content", temperature: 0.65 },
+    {
+      jsonMode: true,
+      maxTokens: Math.min(4096, 1600 + sections.length * 320),
+      role: "content",
+      temperature: 0.65,
+    },
   );
   const meta = safeParse<Record<string, unknown>>(metaRaw, {});
+  const blueprint = normalizeBlueprint(meta.blueprint, blueprintFallback);
   const title =
     (typeof meta.title === "string" && meta.title) ||
     input.outline.title ||
@@ -1313,6 +985,7 @@ async function generateContentBySections(
           previousHeadings: allHeadings.filter((_, idx) => idx !== i),
           perSection,
           engineering,
+          blueprint,
           isLastSummary:
             i === sections.length - 1 && /总结|收尾|带走/.test(section.heading),
         });
@@ -1331,7 +1004,7 @@ async function generateContentBySections(
   );
 
   // 少量章节失败时保留其余成果，避免整篇几分钟的生成被一章拖垮
-  if (failedHeadings.length > 0 && failedHeadings.length * 2 >= sections.length) {
+  if (sections.length > 0 && failedHeadings.length === sections.length) {
     throw new Error(
       `正文生成失败：${failedHeadings.length}/${sections.length} 个章节未生成成功，请重试`,
     );
@@ -1391,92 +1064,54 @@ export async function generateContent(
     input.topic,
     input.keywords ?? input.outline?.title ?? null,
   );
+  const monolithicOutline: OutlineOption = input.outline ?? {
+    index: 0,
+    title: input.topic,
+    positioning: `${style}文章，围绕一个核心判断展开。`,
+    sections,
+  };
+  const blueprint = fallbackBlueprint({
+    topic: input.topic,
+    outline: monolithicOutline,
+    engineering,
+  });
+  const systemCore = buildContentSystemPromptCore({
+    topic: input.topic,
+    style,
+    wordCount,
+    perSection,
+    engineering,
+    keywords: input.keywords,
+    accountBlock,
+    domainBlock,
+    styleGuide,
+    sectional: false,
+  });
 
   const prompt: ChatMessage[] = [
     {
       role: "system",
-      content: `你是一位写了 8 年公众号的资深主笔。读者评价你的文章「每段都有信息量，读完能动手或能想明白一件事」。请严格按大纲写——每章只写一次，禁止同义反复凑字。
+      content: `${systemCore}
 
-${domainBlock}
-
-${accountBlock}
-
-${styleGuide}
-
-${buildOnTopicBlock(input.topic, input.keywords)}
-
-${buildQualityArticleBlock()}
-
-${buildWechatPlatformValueBlock()}
-
-${buildFactualComplianceBlock()}
-
-${buildEvidenceBlock(engineering)}
-
-${buildAntiAiVoiceBlock()}
-
-${buildEngineeringContentBlock(engineering)}
-
-${ARTICLE_HTML_FORMAT_RULES}
-
-【标题要求】
-- title ≤ 20 字，含核心关键词；不用震惊体；少用「：从入门到精通」
-- 标题承诺与正文一致：写「实战/手册/步骤」就必须有对应干货（代码、步骤或案例）
-
-【写作人格】
-- 像写技术笔记/专栏：清楚、直接、有判断；第一人称可用，但不要扮演「懂行的朋友拉家常」
-- 没把握时用「常见情况是」「我更倾向」，不要装权威
-- 允许写取舍与做不到的部分——这比完美教条更有创作度
-
-【开头要求】
-- 禁止「在当今时代」「随着XX发展」「近年来」「众所周知」
-- **禁止闲聊叙事开篇**：不要「和朋友/同事聊天」「他说最近在做XXX却进展不大」「我听完觉得方向对但顺序要调」这类套式
-- 开篇 2-3 句直接进入主题：点明要解决的问题、核心结论，或一个与主题绑定的具体技术现象（报错、卡点、错误实现）
-- 开头只负责立题，不要剧透后文每一章；必须仍在主题范围内
-${engineering ? "- 工程文优先：第一段就落到接口/流程/卡点，不要情感铺垫" : ""}
-
-【逻辑结构】
-- 章节用 <h2>，章间 <hr />；全文最多 2 个 <h3>
-- 每章一个新论点；步骤用 <ol>，并列用 <ul>；列表项 <li><strong>标题</strong>说明</li>
-- 叙述以 <p> 为主；mp-tip / mp-warning / blockquote 全篇各 ≤ 2
-
-【HTML 白名单】
-- 允许：p/h2/h3/hr/strong/code/pre+code/blockquote/ul/ol/li、mp-tip/mp-warning/mp-summary
-- 禁止：figure/img/section/自创 class、Markdown；对比数据可用简单 <table>
-
-【内容层次】
-- 案例与判断全文分布即可，不要求每章机械凑齐「道理+案例+数据」
-- 同一案例全文最多 1 次
-- 实践章：先给可跟随的步骤/代码/清单，再补「为什么」
-- 认知章：先钉住一个具体现象，再解释机制；理论不超过该章必要篇幅
-${engineering ? "- 工程章：代码优先，解释为辅；理论段不超过该章篇幅的 40%" : ""}
-
-【段落节奏】
-- 长短句交替；每段 ≤ 4 句
-- 用 <strong> 标关键判断（禁止 Markdown **）
-- 不要段段「但真正的问题是…」
-
-【反重复 / 反注水 / 反低质 AIGC】
-- 禁止同义词复读；禁止开头/正文/结尾讲同一故事三遍
-- **禁止为凑字数注水**：目标约 ${wordCount} 字，允许 75%～110%；宁可偏短也不要空话
-- 写完自检：删掉任何离开主题「${input.topic}」仍通顺的段落
-- 写完再自检：若整段换成其他主题标题仍成立，必须重写为带细节的段落
-
-【严禁】
-- 夸夸其谈、绝对化、「赋能/抓手/闭环/底层逻辑/降维/颗粒度/认知升级」
-- 结尾引流关注点赞
-- 编造对话、数据、论文或「某大厂内部」传闻
-
-【代码与术语】
-- 术语、API、命令用 <code>
-- 多行代码必须 <pre><code>...</code></pre>，前后 <hr />
-${engineering ? "- 至少 2 个代码块；关键流程 ≥ 8 行；语言优先 TypeScript/JavaScript" : "- 主题涉及实现/操作时给代码或逐步操作；纯生活/科普可用案例与步骤代替代码，但不可空谈"}
+【全篇蓝图】
+- 切入角：${blueprint.angle}
+- 核心判断：${blueprint.thesis}
+- 读者冲突：${blueprint.readerTension}
+- 开篇方式：${blueprint.openingMode}
+- 结尾交付：${blueprint.endingMode}
+- 逐章合同：
+${blueprint.sectionPlans
+  .map(
+    (plan, index) =>
+      `${index + 1}. ${plan.heading}：只交付「${plan.uniqueContribution}」；证据用 ${plan.evidenceMode}（${plan.evidencePlan}）`,
+  )
+  .join("\n")}
 
 【输出】
 JSON：{ "title", "summary", "content" }
 - summary：80-120 字，写清读者能带走什么（一个动作/判断标准/清单）
 - content：完整 HTML（无 h1、无签名引流）
-- 篇幅参考 ${wordCount} 字（去标签后），建议每章约 ${perSection} 字，**质量与切题优先于凑满字数**`,
+- title 不超过 20 字；篇幅参考 ${wordCount} 字，质量与切题优先于凑字数`,
     },
     {
       role: "user",
@@ -1605,33 +1240,6 @@ function getRefineMinScore(): number {
   return Number.isFinite(raw) ? raw : 78;
 }
 
-function buildRefineSystemPrompt(topic: string, scope: "whole" | "block"): string {
-  return `你是公众号终审编辑，专治「低创作度 / 空洞 / 低质 AIGC」。把用户稿件精炼成信息密度更高、更有阅读价值的版本。
-
-${ARTICLE_HTML_FORMAT_RULES_BRIEF}
-
-${buildWechatPlatformValueBlock()}
-
-${buildAntiAiVoiceBlock()}
-
-${buildFactualComplianceBlock()}
-
-【精炼动作（必须执行）】
-1. 删除套话、正确废话、同义反复；合并重复段落
-2. 空泛判断 → 改成具体场景 / 步骤 / 对比 / 代码或边界条件（不编造精确数据）
-3. 开篇若是闲聊模板，改成直接点题
-4. 保留原有 HTML 结构与代码块；可微调 <strong> 标注关键判断
-5. 保持主题「${topic}」与标题承诺；不改成另一篇文章
-6. 字数允许略减（到原文的 85%～105%），**宁短勿水**
-7. 结尾只留可带走动作/清单/判断标准，不要口号升华
-
-【输出】
-${
-  scope === "whole"
-    ? 'JSON：{ "content": string, "summary"?: string }\n- content：精炼后的完整 HTML\n- summary：可选，80-120 字，若原摘要空泛则重写'
-    : 'JSON：{ "content": string }\n- content：只返回本片段精炼后的 HTML，保留原有 <h2> 标题文字\n- 不要补写其他章节，不要加导语或过渡到下一章的句子'
-}`;
-}
 
 /** 单块精炼；任何异常/异常输出都回退原文 */
 async function refineHtmlBlock(input: {
@@ -1641,6 +1249,7 @@ async function refineHtmlBlock(input: {
   html: string;
   wantSummary: boolean;
   summary?: string | null;
+  repairBrief?: string;
 }): Promise<{ content: string; summary?: string; refined: boolean }> {
   const plainLen = countPlainTextChars(input.html);
   const maxTokens = Math.min(8192, Math.max(1024, Math.ceil(plainLen * 2.2) + 600));
@@ -1650,7 +1259,11 @@ async function refineHtmlBlock(input: {
       [
         {
           role: "system",
-          content: buildRefineSystemPrompt(input.topic, input.wantSummary ? "whole" : "block"),
+          content: buildRefineSystemPrompt(
+            input.topic,
+            input.wantSummary ? "whole" : "block",
+            input.repairBrief,
+          ),
         },
         {
           role: "user",
@@ -1661,6 +1274,7 @@ async function refineHtmlBlock(input: {
             ...(input.wantSummary ? { summary: input.summary ?? "" } : {}),
             content: input.html,
             goal: "raise-information-density-and-originality",
+            repairBrief: input.repairBrief || undefined,
           }),
         },
       ],
@@ -1710,6 +1324,7 @@ export async function refineContentQuality(input: {
     summary: input.summary,
     content: input.content,
   });
+  const repairBrief = buildQualityRepairBrief(preCheck);
   if (preCheck.score >= getRefineMinScore()) {
     const hasHighFactual = preCheck.factualFindings.some((f) => f.severity === "high");
     if (!hasHighFactual) {
@@ -1729,6 +1344,7 @@ export async function refineContentQuality(input: {
       html: input.content,
       wantSummary: true,
       summary: input.summary,
+      repairBrief,
     });
     return single.refined
       ? { ...single, content: normalize(single.content) }
@@ -1737,6 +1353,19 @@ export async function refineContentQuality(input: {
 
   let newSummary: string | undefined;
   const { merged, changed } = await processHtmlBlocksInParallel(input.content, async (html, i) => {
+    const blockCheck = analyzeContentQuality({
+      title: i === 0 ? input.title : null,
+      summary: i === 0 ? input.summary : null,
+      content: html,
+    });
+    const blockRepairBrief = buildQualityRepairBrief({
+      // 单个章节天然可能少于 400 字，不把整篇的长度门槛当成章节缺陷。
+      issues: blockCheck.issues.filter((issue) => issue.code !== "too_short"),
+      suggestions: [],
+    });
+    if (!blockRepairBrief) {
+      return { content: html, changed: false };
+    }
     const result = await refineHtmlBlock({
       topic: input.topic,
       title: input.title,
@@ -1744,6 +1373,7 @@ export async function refineContentQuality(input: {
       html,
       wantSummary: i === 0,
       summary: input.summary,
+      repairBrief: blockRepairBrief,
     });
     if (i === 0 && result.summary) newSummary = result.summary;
     return { content: result.content, changed: result.refined };
@@ -1762,27 +1392,6 @@ export async function refineContentQuality(input: {
   return { content: normalized, summary: newSummary, refined: true };
 }
 
-function buildPolishSystemPrompt(mode: string, scope: "whole" | "block"): string {
-  return `你是公众号润色助手。把用户给的 HTML ${scope === "whole" ? "文章" : "片段"}润色成「${mode}」风格。要求保留 HTML 结构，输出 JSON：{ "content": string }。
-
-${ARTICLE_HTML_FORMAT_RULES_BRIEF}
-
-${buildWechatPlatformValueBlock()}
-
-【润色原则】
-- 提升信息密度，**合并或删除重复段落**，同一观点只保留表达最清晰的一处
-- 去掉 AI 套话与空洞过渡句，换成具体细节；不编造数据来源
-- 保留并适当补充 \`<strong>\` 重点标注：每段至少 1 处，标注核心判断或关键术语（2-10 字），禁止删除已有 strong 却不补回
-- 润色时不得改变 mp-tip / mp-warning / mp-summary 的固定结构（见上方格式规范）
-- 案例不够具体时补充细节，但不可虚构数据来源
-- 禁止绝对化表述、空洞鸡汤、夸大承诺、无依据断言
-- 「更营销」也只强调真实价值，不用震惊体或虚假宣传
-- 「更简洁」优先删水，不要靠压缩把干货删没${
-    scope === "block"
-      ? "\n- 只返回本片段，保留原有 <h2> 标题文字；不要补写其他章节或过渡句"
-      : ""
-  }`;
-}
 
 /** 润色单块；失败或产出异常时回退原片段，不牵连整篇 */
 async function polishHtmlBlock(
@@ -1973,25 +1582,6 @@ export async function reformatArticleHtml(input: {
   );
 }
 
-function buildExpandSystemPrompt(scope: "whole" | "block"): string {
-  return `你是公众号扩写助手。把用户给出的${scope === "whole" ? "整篇 HTML 正文" : "HTML 片段"}扩写得更充实，然后输出${scope === "whole" ? "完整 HTML" : "该片段的 HTML"}。
-
-${ARTICLE_HTML_FORMAT_RULES_BRIEF}
-
-【扩写要求】
-- 输出 JSON：{ "content": string }，content 必须是扩写后的**${scope === "whole" ? "完整正文" : "完整片段"} HTML**（不是增量片段）
-- 在${scope === "whole" ? "各章节" : "本章"}内部补充具体案例、步骤、对比或细节，保持原有结构与风格
-- 禁止只在末尾追加一段；禁止重复粘贴「总结核心动作 / 小练习」等模板套话
-- 禁止把原文原样复制后再拼接一遍
-- 扩写要有实质信息增量，不注水、不鸡汤、不堆 AI 套话；有判断处可自然用 <strong> 标注 2-8 字核心词
-- 每补一段都要能通过：删掉后读者是否少懂一件具体事
-- 禁止绝对化表述和无依据断言；不得引入格式规范以外的 HTML 结构
-- 扩写后字数应明显多于原文，但宁可少扩也不要空话${
-    scope === "block" ? "\n- 只返回本片段，保留原有 <h2> 标题文字；不要补写其他章节" : ""
-  }
-
-${buildWechatPlatformValueBlock()}`;
-}
 
 /** 扩写单块；失败或没变长时回退原片段 */
 async function expandHtmlBlock(
@@ -2311,12 +1901,6 @@ const DOODLE_LOOKBOOK = [
 ].join(" ");
 
 /** 章节配图：手绘科普信息图 */
-const SECTION_INFOGRAPHIC_STYLE =
-  `${DOODLE_LOOKBOOK} Friendly teaching comic infographic with cute simplified icons. High readability Chinese labels painted clearly and completely. One simple stick-figure without photoreal face is OK for the outcome.`;
-
-/** 章节分区用色（固定参考图配色） */
-const SECTION_COLOR_ROLES =
-  "Color roles: title chip cream with brown outline; cause/left area pale sky-blue; middle mechanism boxes blush pink (top) and soft apricot (bottom); result area mint green with coral ribbon; bottom summary is a thick lavender arrow. Keep the cream-beige paper showing around all panels.";
 
 const SECTION_FLOW_LAYOUTS = [
   "LEFT_TO_RIGHT STORY: left cause panel → middle 1-2 mechanism boxes → right result; large summary arrow band across the bottom",
@@ -2336,18 +1920,6 @@ const COVER_LAYOUT_VARIANTS = [
   "DIAGONAL_SPLIT: soft peach/pink wash diagonally divides canvas; headline on the cream-beige side, doodle tech object on the pastel side",
 ] as const;
 
-type SectionStoryPanel = {
-  role: "cause" | "step" | "flaw" | "result";
-  label: string;
-  caption: string;
-  visual: string;
-};
-
-type SectionStoryboard = {
-  title: string;
-  panels: SectionStoryPanel[];
-  summary: string;
-};
 
 function pickSectionFlowLayout(sectionIndex: number): string {
   return SECTION_FLOW_LAYOUTS[sectionIndex % SECTION_FLOW_LAYOUTS.length];
@@ -2465,34 +2037,6 @@ function fallbackStoryboard(sectionHeading: string, plainSection: string): Secti
   return { title, panels, summary };
 }
 
-function buildInfographicPrompt(
-  story: SectionStoryboard,
-  layout: string,
-  sectionIndex: number,
-  totalSections: number,
-): string {
-  const panelLines = story.panels
-    .map((p, i) => {
-      const cap = p.caption ? ` caption 「${p.caption}」` : "";
-      return `Panel ${i + 1} (${p.role}): label 「${p.label}」${cap}; draw ${p.visual}.`;
-    })
-    .join(" ");
-
-  return [
-    // lookbook 放最前，提高生图模型对颜色/背景的权重
-    SECTION_INFOGRAPHIC_STYLE,
-    SECTION_COLOR_ROLES,
-    `Layout: ${layout}.`,
-    `Section illustration ${sectionIndex + 1} of ${totalSections}.`,
-    `Top-left title chip exactly 「${story.title}」 in dark brown ink on cream.`,
-    panelLines,
-    `Bottom thick lavender arrow with summary text exactly 「${story.summary}」.`,
-    "Must feel like a warm sketchbook teaching page: latte-beige paper everywhere, pastel pink/apricot/mint blocks, brown doodle outlines. Background stays clean — no warning triangles, no scattered dots.",
-    "All Chinese text must be complete — never truncate mid-phrase.",
-    "FORBIDDEN: pure white studio background, cool gray wash, navy cyber background, neon glow, frosted glass, photoreal 3D, keyword chip rows.",
-    "No Midjourney/SD syntax. No aspect ratio or pixel size mentions.",
-  ].join(" ");
-}
 
 /** 为文章章节生成配图提示词 - 手绘科普信息图：讲清本章原理/流程 */
 export async function generateSectionImagePrompt(

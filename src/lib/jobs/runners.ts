@@ -4,7 +4,6 @@ import {
   generateContent,
   generateCoverPrompt,
   generateOutline,
-  generateTitles,
   polishContent,
   reformatArticleHtml,
   expandSection,
@@ -14,10 +13,12 @@ import {
 import { analyzeContentQuality } from "@/lib/content-quality";
 import { generateCoverImage, generateSectionImage } from "@/lib/image-gen";
 import { mapWithConcurrency } from "@/lib/map-with-concurrency";
+import { log } from "@/lib/log";
 import { withRetry } from "@/lib/retry";
 import { pushArticleToWechatDraft } from "@/lib/push-draft";
 import { syncArticleToBlog } from "@/lib/blog-sync";
 import { withUserConfig } from "@/lib/config-bridge";
+import { OUTLINE_SKILL, REFINE_SKILL } from "@/lib/ai/skills";
 
 type OutlineRecord = {
   index: number;
@@ -105,7 +106,11 @@ async function runOutline(job: GenerationJob, update: ProgressUpdater) {
   });
 
   await update(100, "完成");
-  return { outlines, count: outlines.length };
+  return {
+    outlines,
+    count: outlines.length,
+    promptVersions: { outline: OUTLINE_SKILL.version },
+  };
 }
 
 async function runContent(job: GenerationJob, update: ProgressUpdater) {
@@ -197,17 +202,17 @@ async function runContent(job: GenerationJob, update: ProgressUpdater) {
       content: generated.content,
     });
     if (preCheck.score < 70) {
-      console.warn(
-        `[job:content] quality score low (${preCheck.score}):`,
-        preCheck.issues.map((i) => i.code).join(","),
-      );
+      log.warn("content quality score low", {
+        score: preCheck.score,
+        issueCodes: preCheck.issues.map((i) => i.code),
+      });
     }
   }
 
   const coverImageUrl = coverResult.url;
   const coverWarning = coverResult.error;
   if (coverWarning) {
-    console.error("[job:content] cover failed:", coverWarning);
+    log.error("content cover failed", { error: coverWarning });
   }
 
   await update(90, "保存正文");
@@ -238,6 +243,10 @@ async function runContent(job: GenerationJob, update: ProgressUpdater) {
     articleId: updated.id,
     coverImageUrl: updated.coverImageUrl,
     coverWarning,
+    promptVersions: {
+      ...generated.promptVersions,
+      refine: REFINE_SKILL.version,
+    },
     ...(generated.missingSections.length > 0
       ? { contentWarning: `以下章节生成失败，已跳过：${generated.missingSections.join("、")}` }
       : {}),
@@ -463,10 +472,10 @@ async function runInlineImages(job: GenerationJob, update: ProgressUpdater) {
       await enqueuePersist(result);
       return result;
     } catch (err) {
-      console.error(
-        `[job:inline] failed for "${sectionJob.heading}":`,
-        err instanceof Error ? err.message : err,
-      );
+      log.error("inline image job failed", {
+        heading: sectionJob.heading,
+        error: err instanceof Error ? err.message : String(err),
+      });
       return null;
     }
   });
@@ -702,7 +711,7 @@ async function runQuickGenerate(job: GenerationJob, update: ProgressUpdater) {
   const coverImageUrl = coverResult.url;
   const coverWarning = coverResult.error;
   if (coverWarning) {
-    console.error("[job:quick_generate] cover failed:", coverWarning);
+    log.error("quick_generate cover failed", { error: coverWarning });
   }
 
   await update(84, "保存正文");
@@ -740,7 +749,7 @@ async function runQuickGenerate(job: GenerationJob, update: ProgressUpdater) {
       pushed = { draftMediaId: result.draftMediaId, warnings: result.warnings };
     } catch (err) {
       pushWarning = err instanceof Error ? err.message : "自动推送失败";
-      console.error("[job:quick_generate] auto push failed:", pushWarning);
+      log.error("quick_generate auto push failed", { error: pushWarning });
     }
   }
 
@@ -768,7 +777,7 @@ async function runQuickGenerate(job: GenerationJob, update: ProgressUpdater) {
       blogSync = { pushed: true, url: result.url, path: result.path };
     } catch (err) {
       const warning = err instanceof Error ? err.message : "自动同步博客失败";
-      console.error("[job:quick_generate] blog sync failed:", warning);
+      log.error("quick_generate blog sync failed", { error: warning });
       blogSync = { pushed: false, warning };
     }
   }
@@ -779,6 +788,11 @@ async function runQuickGenerate(job: GenerationJob, update: ProgressUpdater) {
     outlineIndex: 0,
     coverImageUrl: updated.coverImageUrl,
     coverWarning,
+    promptVersions: {
+      outline: OUTLINE_SKILL.version,
+      ...generated.promptVersions,
+      refine: REFINE_SKILL.version,
+    },
     autoPush: payload.autoPush === true,
     autoPushBlog: payload.autoPushBlog === true,
     push: pushed

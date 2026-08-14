@@ -3,6 +3,7 @@
  * Contract: vuepressblog/docs/SYNC.md
  */
 import { downloadToBuffer } from "@/lib/image-gen";
+import { log } from "@/lib/log";
 import {
   collectImageSrcs,
   guessImageExt,
@@ -357,7 +358,7 @@ async function uploadImages(
       // 写成 /penn-notes/sync/... 会导致 Rollup 当成模块解析失败。
       map.set(src, `/sync/${articleId}/${filename}`);
     } catch (err) {
-      console.error(`[blog-sync] image upload failed: ${src}`, err);
+      log.error("blog-sync image upload failed", { src, error: err instanceof Error ? err.message : String(err) });
     }
   }
 
@@ -376,7 +377,7 @@ async function uploadImages(
         }
       }
     } catch (err) {
-      console.error(`[blog-sync] cover upload failed: ${coverUrl}`, err);
+      log.error("blog-sync cover upload failed", { coverUrl, error: err instanceof Error ? err.message : String(err) });
     }
   }
 

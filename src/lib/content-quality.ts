@@ -204,7 +204,6 @@ export function analyzeFactualClaims(plain: string): FactualFinding[] {
 
   // 对话引用（「他说…」「张磊说…」类）
   for (const m of plain.matchAll(/[「『""][^」』""]{4,40}[」』""]/g)) {
-    const quote = m[0];
     const before = plain.slice(Math.max(0, (m.index ?? 0) - 12), m.index ?? 0);
     if (/说|问|答|回|讲|吐槽|抱怨/.test(before)) {
       pushUniqueFinding(findings, seen, {
