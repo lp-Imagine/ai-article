@@ -3,7 +3,13 @@ import { getEnvValue } from "@/lib/config-bridge";
 
 type AccessTokenCache = { token: string; expiresAt: number };
 
-let tokenCache: AccessTokenCache | null = null;
+/**
+ * 每个 AppID 一份 token 缓存：多用户各自配置不同公众号时，
+ * 不能共用同一个 token（微信 token 与 appid 绑定，串用会报 invalid credential）。
+ */
+const tokenCache = new Map<string, AccessTokenCache>();
+/** 同一 AppID 的在途 token 请求合并，避免并发推送时重复拉取 */
+const inflightTokens = new Map<string, Promise<string>>();
 
 function readSecret(key: string): string | undefined {
   return getEnvValue(key) ?? process.env[key];
@@ -21,33 +27,46 @@ export async function getAccessToken(): Promise<string> {
   }
 
   const now = Date.now();
-  if (tokenCache && tokenCache.expiresAt > now + 60_000) {
-    return tokenCache.token;
+  const cached = tokenCache.get(appId);
+  if (cached && cached.expiresAt > now + 60_000) {
+    return cached.token;
   }
 
-  const url = new URL(`${WECHAT_API_BASE}/token`);
-  url.searchParams.set("grant_type", "client_credential");
-  url.searchParams.set("appid", appId);
-  url.searchParams.set("secret", appSecret);
+  const inflight = inflightTokens.get(appId);
+  if (inflight) return inflight;
 
-  const res = await fetch(url.toString(), { cache: "no-store" });
-  const json = (await res.json()) as {
-    access_token?: string;
-    expires_in?: number;
-    errcode?: number;
-    errmsg?: string;
-  };
+  const task = (async () => {
+    const url = new URL(`${WECHAT_API_BASE}/token`);
+    url.searchParams.set("grant_type", "client_credential");
+    url.searchParams.set("appid", appId);
+    url.searchParams.set("secret", appSecret);
 
-  if (!json.access_token) {
-    throw new Error(`wechat token error: ${json.errmsg ?? "unknown"}`);
+    const res = await fetch(url.toString(), { cache: "no-store" });
+    const json = (await res.json()) as {
+      access_token?: string;
+      expires_in?: number;
+      errcode?: number;
+      errmsg?: string;
+    };
+
+    if (!json.access_token) {
+      throw new Error(`wechat token error: ${json.errmsg ?? "unknown"}`);
+    }
+
+    tokenCache.set(appId, {
+      token: json.access_token,
+      expiresAt: now + (json.expires_in ?? 7200) * 1000,
+    });
+
+    return json.access_token;
+  })();
+
+  inflightTokens.set(appId, task);
+  try {
+    return await task;
+  } finally {
+    inflightTokens.delete(appId);
   }
-
-  tokenCache = {
-    token: json.access_token,
-    expiresAt: now + (json.expires_in ?? 7200) * 1000,
-  };
-
-  return json.access_token;
 }
 
 export async function uploadMedia(
@@ -144,4 +163,10 @@ export async function createDraft(
 
 export function isReady() {
   return isWechatConfigured();
+}
+
+/** 仅用于测试：清空 token 缓存与在途请求。 */
+export function _resetWechatTokenCacheForTests() {
+  tokenCache.clear();
+  inflightTokens.clear();
 }

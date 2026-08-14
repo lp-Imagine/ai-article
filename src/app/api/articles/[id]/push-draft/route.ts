@@ -24,6 +24,7 @@ export async function POST(
         data: {
           wechatDraftId: result.draftMediaId,
           status: "pushed",
+          warnings: result.warnings,
         },
       });
     } catch (error) {
