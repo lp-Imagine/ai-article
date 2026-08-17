@@ -2007,7 +2007,8 @@ CRITICAL: This model ONLY understands natural language. YOU MUST:
 - NEVER output Stable Diffusion syntax (negative prompts, weights like (word:1.2), <lora:...>)
 - Keep 3-6 sentences, be specific and visual
 - The image MUST contain Chinese text as part of the design — specify the exact text and its visual treatment
-- No faces or people in the image`;
+- No faces or people in the image
+- NEVER render code-like strings as on-image text: no hex color codes (#xxxxxx), no CSS/rgb()/url(), no HTML tags, no punctuation-only marks. Describe colors in plain words (e.g. "warm latte beige", "soft pink") — if a code-like token appears in this prompt, it is a color hint to follow, NOT text to draw`;
 
 /**
  * 锁定参考图 lookbook（漏洞原理那张）：
@@ -2015,11 +2016,11 @@ CRITICAL: This model ONLY understands natural language. YOU MUST:
  */
 const DOODLE_LOOKBOOK = [
   "CRITICAL LOOKBOOK (match this reference teaching doodle exactly — colors first):",
-  "Canvas background is warm latte beige paper, about #F3EBDF / #F7F0E6 — never pure white, never cool gray, never navy, never black.",
+  "Canvas background is warm latte beige paper — never pure white, never cool gray, never navy, never black.",
   "Subtle paper texture only — clean warm sketchbook page with NO decorative icons, NO warning triangles, NO scattered dots, NO exclamation marks in the background.",
-  "All outlines are warm dark-brown ink (#4A3428), slightly wobbly hand-drawn strokes of uneven thickness — not pure black UI lines, not vector-perfect.",
+  "All outlines are warm dark-brown ink, slightly wobbly hand-drawn strokes of uneven thickness — not pure black UI lines, not vector-perfect.",
   "Filled shapes use soft desaturated pastels with matte flat coloring and heavily rounded corners, plus very soft light drop shadows under cards.",
-  "Signature fills: pale sky-blue panels (#C9DDF0), blush pink boxes (#F3CDD6), soft apricot/peach boxes (#F2D2B4), mint green result cards (#BFE6CB), lavender summary arrow (#C9B6E4), coral accent ribbon (#EF7B7B).",
+  "Signature fills: pale sky-blue panels, blush pink boxes, soft apricot/peach boxes, mint green result cards, lavender summary arrow, coral accent ribbon.",
   "Text ink is dark brown/charcoal for readability. Atmosphere is warm, friendly, educational kawaii tech comic — never cyberpunk neon, never glassmorphism, never photoreal 3D, never muddy gray wash.",
 ].join(" ");
 
@@ -2585,7 +2586,7 @@ function reinforceCoverPrompt(
     `Subtitle text must be exactly 「${safeSubtitle}」 — keyword tagline. Never use 大纲正常 or other status fragments.`,
     `The ONLY Chinese strings allowed on the image are 「${headline}」 and 「${safeSubtitle}」.`,
     "All on-image text must be complete phrases — never cut off Chinese or English mid-word.",
-    "BACKGROUND: warm latte beige paper (#F3EBDF), subtle paper grain only — clean empty space, no warning triangles, no scattered dots. Pastel blush/apricot/mint/lavender accents, brown doodle outlines.",
+    "BACKGROUND: warm latte beige paper, subtle paper grain only — clean empty space, no warning triangles, no scattered dots. Pastel blush/apricot/mint/lavender accents, brown doodle outlines.",
     "FORBIDDEN: 大纲正常、正文失败、生成成功, and any chapter headings.",
     "FORBIDDEN: horizontal row of 3-4 small glass cards with keyword labels at the bottom.",
     "FORBIDDEN: pure white studio bg, cool gray wash, dark navy cyber backgrounds, neon glow, photoreal 3D renders, glassmorphism.",
