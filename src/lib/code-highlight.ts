@@ -395,11 +395,11 @@ function highlightSourceLine(line: string, language: string): string {
   }
 }
 
-/** 微信专用：逐行渲染，缩进用 padding-left，空格用全角字符 */
+/** 微信专用：逐行渲染，缩进用 padding-left，空格用全角字符（不换行，长行靠容器横向滚动） */
 function withWechatLineBreaks(plainCode: string, language: string): string {
   return plainCode.split("\n").map((plainLine) => {
     if (!plainLine.trim()) {
-      return '<p style="margin:0;height:1em;line-height:1.65;font-size:14px;"></p>';
+      return '<p style="margin:0;height:1em;line-height:1.65;font-size:13px;"></p>';
     }
 
     const indent = plainLine.match(/^(\s*)/)?.[1] ?? "";
@@ -410,8 +410,8 @@ function withWechatLineBreaks(plainCode: string, language: string): string {
     const highlighted = alignHighlightToPlain(codeLine, rawHighlight);
 
     return (
-      `<p style="margin:0;padding:0 0 0 ${indentPx}px;line-height:1.65;font-size:14px;` +
-      `font-family:SF Mono,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:break-word;color:${CODE_THEME.text};">${highlighted}</p>`
+      `<p style="margin:0;padding:0 0 0 ${indentPx}px;line-height:1.65;font-size:13px;` +
+      `font-family:SF Mono,Menlo,Consolas,monospace;white-space:nowrap;color:${CODE_THEME.text};">${highlighted}</p>`
     );
   }).join("");
 }
@@ -426,14 +426,13 @@ function buildCodeBlockForWechat(rawCode: string, langHint?: string): string {
       "代码示例",
       `<p style="margin:0;padding:10px 0;text-align:center;color:${t.headerText};font-size:13px;">（此处无代码内容）</p>`,
       "",
-      { wrap: true },
     );
   }
   const language = resolveLanguage(decoded, langHint);
   const bodyHtml = withWechatLineBreaks(decoded, language);
   const langLabel = formatLangLabel(language);
 
-  return codeBlockShell(langLabel, bodyHtml, "", { wrap: true });
+  return codeBlockShell(langLabel, bodyHtml, "");
 }
 
 function rebuildExistingCodeBlocks(html: string): string {
@@ -541,20 +540,14 @@ function codeBlockShell(
   langLabel: string,
   bodyHtml: string,
   codeSourceAttr: string,
-  opts: { wrap?: boolean } = {},
 ): string {
   const t = CODE_THEME;
-  // 微信内无法可靠地横向滚动（overflow:auto 常被裁剪），
-  // 微信场景必须换行（wrap:true）：pre-wrap 保留缩进/空格，overflow-wrap 保证
-  // 超长 token（URL、长命令）也能断行，并去掉 max-height 限制，长代码永远完整可见。
-  // 预览场景保留横向滚动（wrap:false）。
-  const bodyStyle = opts.wrap
-    ? "padding:12px 14px;font-size:14px;line-height:1.65;color:#c9d1d9;white-space:pre-wrap;overflow-wrap:break-word;"
-    : "padding:12px 14px;font-size:13px;line-height:1.6;color:#c9d1d9;max-height:420px;overflow:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;";
+  // 微信场景与预览共用同一结构：正文横向滚动（white-space:nowrap + overflow:auto），
+  // 长行可左右滑动查看完整代码；max-height 限制纵向高度避免撑爆文章。
   return [
     `<section data-mp-cb="1"${codeSourceAttr} style="border-radius:8px;border:1px solid ${t.border};background-color:${t.bg};overflow:hidden;margin:16px 0;font-family:SF Mono,Menlo,Consolas,monospace;">`,
     `<section data-mp-cb-lang="1" style="padding:8px 14px;background-color:${t.headerBg};color:${t.headerText};font-size:12px;letter-spacing:0.05em;border-bottom:1px solid ${t.border};text-align:left;font-weight:600;">${langLabel}</section>`,
-    `<section data-mp-cb-body="1" style="${bodyStyle}">${bodyHtml}</section>`,
+    `<section data-mp-cb-body="1" style="padding:12px 14px;font-size:13px;line-height:1.6;color:${t.text};max-height:420px;overflow:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;">${bodyHtml}</section>`,
     "</section>",
   ].join("");
 }

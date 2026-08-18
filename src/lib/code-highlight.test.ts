@@ -42,15 +42,16 @@ describe("resolveLanguageLabel（终端命令识别）", () => {
 });
 
 describe("renderCodeBlockForWechat（微信代码块）", () => {
-  it("wraps long lines instead of clipping (pre-wrap + overflow-wrap, no nowrap/max-height)", () => {
+  it("keeps long lines in a horizontally scrollable container (nowrap + overflow:auto)", () => {
     const html = renderCodeBlockForWechat(
       "npx ts-migrate migrate --decorators --transforms experimentalDecorators --suffix .ts --src src",
     );
 
-    expect(html).toContain("white-space:pre-wrap");
-    expect(html).toContain("overflow-wrap:break-word");
-    expect(html).not.toContain("white-space:nowrap");
-    expect(html).not.toContain("max-height:420px");
+    expect(html).toContain("white-space:nowrap");
+    expect(html).toContain("overflow:auto");
+    expect(html).toContain("max-height:420px");
+    expect(html).toContain("-webkit-overflow-scrolling:touch");
+    expect(html).not.toContain("white-space:pre-wrap");
     expect(html).toMatch(/data-mp-cb-lang="1"[^>]*>Bash<\/section>/);
   });
 

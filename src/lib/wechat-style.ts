@@ -851,8 +851,7 @@ export function convertToWechatHtml(html: string): string {
   result = applyTableZebraStripes(result);
 
   // ====== 13. pre 代码块（老格式降级处理） ——
-  // 如果数据库里有 <pre> 残留（手动编辑未经过 code-highlight），做一次换行转换，
-  // 并强制换行（pre-wrap + overflow-wrap），避免微信内长行被截断。
+  // 如果数据库里有 <pre> 残留（手动编辑未经过 code-highlight），做一次换行转换
   result = result.replace(
     /<pre([^>]*)>([\s\S]*?)<\/pre>/gi,
     (_full, preAttrs: string, block: string) => {
@@ -862,11 +861,7 @@ export function convertToWechatHtml(html: string): string {
           return openTag + codeContent.replace(/\n/g, "<br>") + closeTag;
         },
       );
-      const wrapStyle = "white-space:pre-wrap;overflow-wrap:break-word;";
-      if (/style\s*=/i.test(preAttrs)) {
-        return `<pre${preAttrs.replace(/(style\s*=\s*["'])/i, `$1${wrapStyle}`)}>${block}</pre>`;
-      }
-      return `<pre${preAttrs} style="${wrapStyle}">${block}</pre>`;
+      return `<pre${preAttrs}>${block}</pre>`;
     },
   );
 

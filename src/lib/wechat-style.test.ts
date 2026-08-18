@@ -194,14 +194,14 @@ describe("convertToWechatHtml", () => {
     expect(wechat).toContain("先想清楚再动手，代码只是表达。");
   });
 
-  it("wraps code block lines for WeChat (pre-wrap + overflow-wrap, no nowrap)", () => {
+  it("keeps code lines in a horizontally scrollable container for WeChat (nowrap + overflow:auto)", () => {
     const codeBlock = '<section data-mp-cb="1"><section data-mp-cb-lang="1">Bash</section><section data-mp-cb-body="1"><span>npx ts-migrate migrate --decorators --transforms experimentalDecorators --suffix .ts --src src</span></section></section>';
     const wechat = convertToWechatHtml(codeBlock);
 
-    expect(wechat).toContain("white-space:pre-wrap");
-    expect(wechat).toContain("overflow-wrap:break-word");
-    expect(wechat).not.toContain("white-space:nowrap");
-    expect(wechat).not.toContain("max-height:420px");
+    expect(wechat).toContain("white-space:nowrap");
+    expect(wechat).toContain("overflow:auto");
+    expect(wechat).toContain("max-height:420px");
+    expect(wechat).not.toContain("white-space:pre-wrap");
     // 终端命令不再被误标为 CSS
     expect(wechat).toMatch(/data-mp-cb-lang="1"[^>]*>Bash<\/section>/);
   });
