@@ -262,6 +262,51 @@ describe("convertToWechatHtml", () => {
     expect(wechat).toMatch(/<\/table><section data-mp-cb="1"/);
     expect(wechat).toMatch(/data-mp-cb-lang="1"[^>]*>Bash<\/section>/);
   });
+
+  it("strips AI-invented container backgrounds so list cards are not stacked (no card-in-card)", () => {
+    const html =
+      "<p>前文</p>" +
+      '<div style="background-color:#f0f4ff;border-radius:12px;padding:18px 20px;margin:24px 0;box-shadow:0 2px 8px rgba(0,0,0,0.05);">' +
+      "<h3>验证层核心3项规则配置</h3>" +
+      "<ul><li><strong>商品ID校验</strong>固定调用接口，仅允许返回200/404状态</li>" +
+      "<li><strong>相关信息校验</strong>必填字段缺失则拦截</li></ul>" +
+      "</div>" +
+      "<p>后文</p>";
+
+    const wechat = convertToWechatHtml(html);
+
+    // AI 自创 div 的视觉样式被剥掉（退化为无样式容器）
+    expect(wechat).not.toContain("#f0f4ff");
+    expect(wechat).not.toMatch(/<div style=/);
+    // 列表卡片独立存在，不套在任何外层背景里
+    expect(wechat).toMatch(/border-left:4px solid #3e7bfa;background-color:#f8fbff/);
+    // 文字保留
+    expect(wechat).toContain("验证层核心3项规则配置");
+    expect(wechat).toContain("商品ID校验");
+  });
+
+  it("keeps system structures (mp-tip, code blocks) untouched by style stripping", () => {
+    const html =
+      '<div class="mp-tip"><ol><li><strong>步骤一</strong>先做这件事</li></ol></div>' +
+      '<section data-mp-cb="1" style="border-radius:8px;border:1px solid #30363d;background-color:#0d1117;"><section data-mp-cb-lang="1" style="padding:8px 14px;">Bash</section></section>';
+
+    const wechat = convertToWechatHtml(html);
+
+    expect(wechat).toContain("实用技巧");
+    expect(wechat).toContain("background-color:#0d1117");
+    expect(wechat).toContain("border:1px solid #30363d");
+  });
+
+  it("pulls lists out of mp-summary so the summary box does not wrap list cards", () => {
+    const html =
+      "<h2>总结</h2><div class=\"mp-summary\"><p>要点回顾。</p><ul><li><strong>要点一</strong>说明一</li></ul></div>";
+
+    const wechat = convertToWechatHtml(html);
+
+    expect(wechat).toContain("要点回顾。");
+    expect(wechat).toMatch(/<section style="margin:16px 0 24px;padding:18px 20px;background-color:#f0f4ff;/);
+    expect(wechat).toMatch(/border-left:4px solid #3e7bfa;background-color:#f8fbff/);
+  });
 });
 
 describe("normalizeArticleMarkup", () => {

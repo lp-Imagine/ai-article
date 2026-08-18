@@ -716,11 +716,31 @@ function applyDropCapToOpeningParagraph(html: string): string {
 }
 
 function buildSummaryBox(inner: string): string {
-  const cleanInner = inner.trim();
-  return (
+  // 总结框内若嵌了列表（AI 违规），把列表拆到框外独立渲染，
+  // 避免浅蓝总结框里再叠浅蓝列表卡片的「卡片套卡片」。
+  const { prose, lists } = splitCalloutContent(inner);
+  const cleanInner = prose.trim();
+  const box =
     `<section style="margin:16px 0 24px;padding:18px 20px;background-color:${SUMMARY.bg};` +
     `border-left:4px solid ${SUMMARY.border};border-radius:0 10px 10px 0;` +
-    `color:${SUMMARY.text};line-height:1.85;font-size:15px;text-align:justify;">${cleanInner}</section>`
+    `color:${SUMMARY.text};line-height:1.85;font-size:15px;text-align:justify;">${cleanInner}</section>`;
+  return lists ? box + lists : box;
+}
+
+/**
+ * 剥离 AI 自创容器（div/section）的视觉样式。
+ * AI 常违反格式规范写 `<div style="background-color:…;border-radius:…;padding:…">`
+ * 包裹标题/列表，转换后与系统列表卡片（同样浅色底）叠出「卡片套卡片」。
+ * 把这类自创卡片的 style 整个移除，使其退化为无样式结构、内容直接平铺；
+ * 系统结构（mp-tip / mp-warning / mp-summary / 代码块 data-mp-cb）不受影响。
+ */
+function stripForeignContainerStyles(html: string): string {
+  return html.replace(
+    /<(div|section)([^>]*?)\sstyle="([^"]*)"([^>]*?)>/gi,
+    (full, tag: string, pre: string, _style: string, post: string) => {
+      if (/class="mp-|data-mp-cb/.test(full)) return full;
+      return `<${tag}${pre}${post}>`;
+    },
   );
 }
 
@@ -728,7 +748,7 @@ function buildSummaryBox(inner: string): string {
  * 将文章 HTML 转换为微信公众号兼容的内联样式版本
  */
 export function convertToWechatHtml(html: string): string {
-  let result = normalizeCalloutBlocks(wrapSummarySection(html));
+  let result = stripForeignContainerStyles(normalizeCalloutBlocks(wrapSummarySection(html)));
 
   // ====== 0. 首段首字下沉（微信不支持 ::first-letter）======
   result = applyDropCapToOpeningParagraph(result);
