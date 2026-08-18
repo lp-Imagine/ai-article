@@ -257,6 +257,10 @@ function inferLanguage(code: string): string | null {
 }
 
 function resolveLanguage(code: string, hint?: string): string {
+  // 终端命令优先识别为 bash：hljs 的 auto 检测会误判（npx → CSS、git → Python），
+  // 且比显式 hint 更可信（AI 常给终端命令打 language-css 之类的错误标签）。
+  if (isShellCommand(code)) return "bash";
+
   const normalizedHint = hint?.toLowerCase().replace(/^language-/, "").trim();
   if (normalizedHint && hljs.getLanguage(normalizedHint)) {
     return normalizedHint;
@@ -395,7 +399,7 @@ function highlightSourceLine(line: string, language: string): string {
 function withWechatLineBreaks(plainCode: string, language: string): string {
   return plainCode.split("\n").map((plainLine) => {
     if (!plainLine.trim()) {
-      return '<p style="margin:0;height:1em;line-height:1.65;font-size:13px;"></p>';
+      return '<p style="margin:0;height:1em;line-height:1.65;font-size:14px;"></p>';
     }
 
     const indent = plainLine.match(/^(\s*)/)?.[1] ?? "";
@@ -406,19 +410,30 @@ function withWechatLineBreaks(plainCode: string, language: string): string {
     const highlighted = alignHighlightToPlain(codeLine, rawHighlight);
 
     return (
-      `<p style="margin:0;padding:0 0 0 ${indentPx}px;line-height:1.65;font-size:13px;` +
-      `font-family:SF Mono,Menlo,Consolas,monospace;white-space:nowrap;color:${CODE_THEME.text};">${highlighted}</p>`
+      `<p style="margin:0;padding:0 0 0 ${indentPx}px;line-height:1.65;font-size:14px;` +
+      `font-family:SF Mono,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:break-word;color:${CODE_THEME.text};">${highlighted}</p>`
     );
   }).join("");
 }
 
 function buildCodeBlockForWechat(rawCode: string, langHint?: string): string {
   const decoded = decodeHtmlEntities(rawCode);
+  const trimmed = decoded.replace(/\s+/g, " ").trim();
+  if (!trimmed) {
+    // 空代码块：渲染占位提示，避免微信里出现「只有语言标签的黑块」
+    const t = CODE_THEME;
+    return codeBlockShell(
+      "代码示例",
+      `<p style="margin:0;padding:10px 0;text-align:center;color:${t.headerText};font-size:13px;">（此处无代码内容）</p>`,
+      "",
+      { wrap: true },
+    );
+  }
   const language = resolveLanguage(decoded, langHint);
   const bodyHtml = withWechatLineBreaks(decoded, language);
   const langLabel = formatLangLabel(language);
 
-  return codeBlockShell(langLabel, bodyHtml, "");
+  return codeBlockShell(langLabel, bodyHtml, "", { wrap: true });
 }
 
 function rebuildExistingCodeBlocks(html: string): string {
@@ -473,6 +488,25 @@ function protectDataMpCodeBlocks(html: string): { html: string; blocks: string[]
 }
 
 /**
+ * 判断代码是否为「终端命令 / Shell 脚本」。
+ * 放在语言识别最前面：highlight.js 的 auto 检测会把
+ * `npx ts-migrate --transforms ...` 这类命令误判成 CSS（-- 与 transforms 命中 CSS 特征），
+ * 把 git 命令误判成 Python，导致微信文章代码块语言标签与内容不符。
+ */
+function isShellCommand(code: string): boolean {
+  if (!code || !code.trim()) return false;
+
+  const firstLine = code.trimStart().split(/\r?\n/)[0] ?? "";
+  // 以常见命令名开头（排除 YAML 的 `cd: xxx`、`key: value` 等误报）
+  const cmdStartRe =
+    /^\s*(?:sudo\s+)?(?:npx|npm|yarn|pnpm|bun|bunx|nvm|node|deno|git|docker|docker-compose|kubectl|helm|terraform|curl|wget|ssh|scp|rsync|cd|ls|cat|grep|sed|awk|find|xargs|chmod|chown|mkdir|rmdir|rm|cp|mv|touch|tar|unzip|zip|gzip|make|cmake|cargo|go\s+run|go\s+build|rustc|python|python3|pip|pip3|poetry|uv|psql|mysql|sqlite3|redis-cli|mongosh|java|mvn|gradle|echo|printf|export|env|which|whereis|history|clear|alias|source|watch|time|perl|php|ruby|gem|brew|apt|apt-get|yum|dnf|pacman|systemctl|service|ps|top|htop|df|du|free|ip|ifconfig|netstat|ss|ping|traceroute|dig|nslookup|openssl|jq|tree|head|tail|sort|uniq|wc|cut|tr|paste|join|comm|diff|patch|zcat|less|more|vim|vi|nano)\b(?!\s*[:=])/i;
+  if (cmdStartRe.test(firstLine)) return true;
+
+  // 含典型 shell 操作符（管道 / 重定向 / 命令串联 / 变量展开），视为脚本片段
+  return /(?:\|\s*[a-z]+|&&|\|\||\b2>&1\b|\$\{|\b>\s*\S+\s*$|`[^`]+`)/i.test(firstLine);
+}
+
+/**
  * 将 hljs 输出的 class-based HTML 转换为内联样式 HTML
  */
 function classesToInlineStyles(hljsHtml: string): string {
@@ -503,12 +537,24 @@ function withLineBreaks(inlineHtml: string): string {
     .join("");
 }
 
-function codeBlockShell(langLabel: string, bodyHtml: string, codeSourceAttr: string): string {
+function codeBlockShell(
+  langLabel: string,
+  bodyHtml: string,
+  codeSourceAttr: string,
+  opts: { wrap?: boolean } = {},
+): string {
   const t = CODE_THEME;
+  // 微信内无法可靠地横向滚动（overflow:auto 常被裁剪），
+  // 微信场景必须换行（wrap:true）：pre-wrap 保留缩进/空格，overflow-wrap 保证
+  // 超长 token（URL、长命令）也能断行，并去掉 max-height 限制，长代码永远完整可见。
+  // 预览场景保留横向滚动（wrap:false）。
+  const bodyStyle = opts.wrap
+    ? "padding:12px 14px;font-size:14px;line-height:1.65;color:#c9d1d9;white-space:pre-wrap;overflow-wrap:break-word;"
+    : "padding:12px 14px;font-size:13px;line-height:1.6;color:#c9d1d9;max-height:420px;overflow:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;";
   return [
     `<section data-mp-cb="1"${codeSourceAttr} style="border-radius:8px;border:1px solid ${t.border};background-color:${t.bg};overflow:hidden;margin:16px 0;font-family:SF Mono,Menlo,Consolas,monospace;">`,
     `<section data-mp-cb-lang="1" style="padding:8px 14px;background-color:${t.headerBg};color:${t.headerText};font-size:12px;letter-spacing:0.05em;border-bottom:1px solid ${t.border};text-align:left;font-weight:600;">${langLabel}</section>`,
-    `<section data-mp-cb-body="1" style="padding:12px 14px;font-size:13px;line-height:1.6;color:${t.text};max-height:420px;overflow:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;">${bodyHtml}</section>`,
+    `<section data-mp-cb-body="1" style="${bodyStyle}">${bodyHtml}</section>`,
     "</section>",
   ].join("");
 }

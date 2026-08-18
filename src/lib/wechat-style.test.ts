@@ -151,16 +151,66 @@ describe("convertToWechatHtml", () => {
 
     expect(wechat).not.toMatch(/<thead|<\/thead|<tbody|<\/tbody/i);
     expect(wechat).toMatch(
-      /<table style="width:100%;border-collapse:collapse;margin:20px 0;border:1px solid #e5e7eb;">/,
+      /<table style="width:100%;table-layout:fixed;border-collapse:collapse;margin:20px 0;border:1px solid #e5e7eb;word-break:break-word;overflow-wrap:break-word;">/,
     );
     expect(wechat).toMatch(
       /<th style="background-color:#3e7bfa;color:#ffffff;padding:10px 12px;/,
     );
     expect(wechat).toMatch(
-      /<td style="padding:10px 12px;font-size:14px;line-height:1.7;color:#3d3d3d;border:1px solid #e5e7eb;">/,
+      /<td style="padding:10px 12px;font-size:14px;line-height:1.7;color:#3d3d3d;border:1px solid #e5e7eb;word-break:break-word;overflow-wrap:break-word;">/,
     );
     expect(wechat).toContain("场景");
     expect(wechat).toContain("1850");
+  });
+
+  it("wraps table cells instead of clipping (no white-space:nowrap on th)", () => {
+    const html = "<table><tr><th>场景</th><th>QPS</th></tr><tr><td>A</td><td>1850</td></tr></table>";
+    const wechat = convertToWechatHtml(html);
+
+    expect(wechat).not.toMatch(/white-space:nowrap/);
+    expect(wechat).toMatch(/table-layout:fixed/);
+    expect(wechat).toMatch(/word-break:break-word/);
+  });
+
+  it("applies zebra stripes to even data rows of styled data tables", () => {
+    const html =
+      "<table><tr><th>场景</th><th>QPS</th></tr><tr><td>A</td><td>1850</td></tr><tr><td>B</td><td>900</td></tr><tr><td>C</td><td>600</td></tr></table>";
+    const wechat = convertToWechatHtml(html);
+
+    // 第 2 行（rowIndex 2，偶数数据行）有浅灰底，第 1/3 数据行无底
+    expect(wechat).toMatch(/background-color:#f1f5f9;padding:10px 12px/);
+    const dataRows = wechat.match(/<td style="(?:background-color:#f1f5f9;)?padding:10px 12px;/g) ?? [];
+    expect(dataRows.length).toBe(6);
+    expect(dataRows.filter((r) => r.includes("#f1f5f9")).length).toBe(2);
+  });
+
+  it("renders blockquote as a WeChat-safe table layout without position:absolute", () => {
+    const html = "<blockquote><p>先想清楚再动手，代码只是表达。</p></blockquote>";
+    const wechat = convertToWechatHtml(html);
+
+    expect(wechat).not.toMatch(/position:\s*(absolute|relative)/i);
+    expect(wechat).toMatch(/<table style="width:100%;border-collapse:collapse;margin:26px 0;background-color:#fff8eb;/);
+    expect(wechat).toMatch(/&#8220;/);
+    expect(wechat).toContain("先想清楚再动手，代码只是表达。");
+  });
+
+  it("wraps code block lines for WeChat (pre-wrap + overflow-wrap, no nowrap)", () => {
+    const codeBlock = '<section data-mp-cb="1"><section data-mp-cb-lang="1">Bash</section><section data-mp-cb-body="1"><span>npx ts-migrate migrate --decorators --transforms experimentalDecorators --suffix .ts --src src</span></section></section>';
+    const wechat = convertToWechatHtml(codeBlock);
+
+    expect(wechat).toContain("white-space:pre-wrap");
+    expect(wechat).toContain("overflow-wrap:break-word");
+    expect(wechat).not.toContain("white-space:nowrap");
+    expect(wechat).not.toContain("max-height:420px");
+    // 终端命令不再被误标为 CSS
+    expect(wechat).toMatch(/data-mp-cb-lang="1"[^>]*>Bash<\/section>/);
+  });
+
+  it("replaces empty code blocks with a placeholder instead of a broken black box", () => {
+    const codeBlock = '<section data-mp-cb="1"><section data-mp-cb-lang="1">CSS</section><section data-mp-cb-body="1"></section></section>';
+    const wechat = convertToWechatHtml(codeBlock);
+
+    expect(wechat).toContain("此处无代码内容");
   });
 
   it("does not double-style list-card tables that already carry inline styles", () => {

@@ -252,6 +252,7 @@ export const ARTICLE_HTML_FORMAT_RULES = `
 
 - 正文步骤：<ol><li><strong>标题</strong>说明</li></ol>
 - 并列要点：<ul><li><strong>标题</strong>说明</li></ul>
+- 代码块：<pre><code class="language-xxx">…</code></pre>；language 必须与代码内容匹配（python/javascript/typescript/jsx/bash/shell/sql/json/html/css 等）；终端命令一律用 bash 或 shell，禁止给命令打 language-css；代码块禁止为空、禁止只有语言标签
 - mp-tip：div 内只能有单个 <ol>，li 结构与正文 ol 完全相同；禁止 ul、多个 p、嵌套 li、写「实用技巧」等标题
 - mp-warning：div 内只用 <p>...</p>；禁止列表和「注意」标题
 - 总结：<h2>总结</h2> + <div class="mp-summary"><p>...</p></div>
@@ -262,5 +263,5 @@ export const ARTICLE_HTML_FORMAT_RULES = `
 
 /** 润色 / 扩写用的精简版，避免占用过多上下文 */
 export const ARTICLE_HTML_FORMAT_RULES_BRIEF = `
-【HTML 格式】保留现有结构；mp-tip 内仅单个 <ol>；mp-warning/mp-summary 内仅 <p>；列表项用 <li><strong>标题</strong>说明</li>；允许简单对比 <table>；禁止新增 figure/img/section/自创 class。
+【HTML 格式】保留现有结构；代码块用 <pre><code class="language-真实语言">…</code></pre>（终端命令用 bash/shell，禁止空代码块）；mp-tip 内仅单个 <ol>；mp-warning/mp-summary 内仅 <p>；列表项用 <li><strong>标题</strong>说明</li>；允许简单对比 <table>；禁止新增 figure/img/section/自创 class。
 `.trim();

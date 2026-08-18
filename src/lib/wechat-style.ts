@@ -272,6 +272,37 @@ function simplifyFiguresForWechat(html: string): string {
   return result;
 }
 
+/** 数据表格斑马纹：仅作用于 12b 加过内联样式的表格（border:1px solid #e5e7eb），
+ *  首行为表头（保持蓝底），偶数数据行加浅灰底色。列表卡片/提示卡片不受影响。 */
+function applyTableZebraStripes(html: string): string {
+  return html.replace(
+    /<table([^>]*border:1px solid #e5e7eb[^>]*)>([\s\S]*?)<\/table>/gi,
+    (_full, attrs: string, inner: string) => {
+      let rowIndex = 0;
+      const striped = inner.replace(
+        /(<tr[^>]*>)([\s\S]*?)(<\/tr>)/gi,
+        (_rm, open: string, cells: string, close: string) => {
+          const current = rowIndex;
+          rowIndex += 1;
+          // 首行视为表头（保持蓝底），数据行从 1 起计，偶数数据行（2、4…）加浅灰底
+          if (current === 0) return _rm;
+          if (current % 2 === 0) {
+            cells = cells.replace(
+              /<td style="([^"]*)"/gi,
+              (_td, existing: string) =>
+                existing.includes("background-color")
+                  ? _td
+                  : `<td style="background-color:#f1f5f9;${existing}"`,
+            );
+          }
+          return `${open}${cells}${close}`;
+        },
+      );
+      return `<table${attrs}>${striped}</table>`;
+    },
+  );
+}
+
 function buildOrderedListCard(counter: number, title: string, body: string): string {
   return (
     `<table style="width:100%;border-collapse:collapse;margin:0 0 12px;border:1px solid ${LIST_CARD.border};background-color:${LIST_CARD.bg};border-radius:10px;">` +
@@ -594,10 +625,18 @@ function findFirstVisibleCharIndex(html: string): number {
   return -1;
 }
 
-/** 首段首字下沉：微信不支持 ::first-letter，用 float span 模拟 */
+/** 首段首字下沉：微信不支持 ::first-letter，用 float span 模拟。
+ *  只作用于正文顶层段落：若首个 <p> 位于 blockquote / 卡片 / 表格等容器内
+ *  （如文章以引用或 mp-tip 开头），不做下沉，避免装饰字符落在卡片/引用里。 */
 function applyDropCapToOpeningParagraph(html: string): string {
   const match = html.match(/<p(?:\s[^>]*)?>([\s\S]*?)<\/p>/i);
   if (!match || match.index === undefined) return html;
+
+  // 首个 <p> 之前若存在未闭合的容器标签（blockquote/table/div/section/ol/ul/li 等），跳过
+  const before = html.slice(0, match.index);
+  const containerOpen = (before.match(/<(?:blockquote|table|div|section|ol|ul|li|td|tr|figure)\b/gi) ?? []).length;
+  const containerClose = (before.match(/<\/(?:blockquote|table|div|section|ol|ul|li|td|tr|figure)>/gi) ?? []).length;
+  if (containerOpen > containerClose) return html;
 
   const full = match[0];
   const innerStart = html.indexOf(">", match.index) + 1;
@@ -680,6 +719,8 @@ export function convertToWechatHtml(html: string): string {
   );
 
   // ====== 3. blockquote 引用块 ======
+  // 微信不支持 position:absolute（装饰引号会被丢弃或错位），改用 table 双格布局：
+  // 左侧米色竖条 + 右侧浅底正文，装饰引号作为行内 span 渲染。
   result = result.replace(
     /<blockquote>([\s\S]*?)<\/blockquote>/gi,
     (_full, inner: string) => {
@@ -687,10 +728,14 @@ export function convertToWechatHtml(html: string): string {
         .replace(/^\s*<p>/i, "")
         .replace(/<\/p>\s*$/i, "");
       return (
-        `<blockquote style="margin:26px 0;padding:20px 24px 20px 54px;background-color:${WARNING_BG};border-left:4px solid ${WARNING};border-radius:0 10px 10px 0;color:#5a4a2a;font-style:normal;position:relative;">` +
-        `<span style="position:absolute;left:12px;top:2px;font-size:52px;color:rgba(231,169,59,0.25);font-family:Georgia,serif;line-height:1;">&#8220;</span>` +
-        `<p style="margin:0;color:#5a4a2a;font-size:15.5px;line-height:1.85;">${cleanInner}</p>` +
-        `</blockquote>`
+        `<table style="width:100%;border-collapse:collapse;margin:26px 0;background-color:${WARNING_BG};border-radius:10px;overflow:hidden;">` +
+        `<tr>` +
+        `<td style="width:4px;padding:0;background-color:${WARNING};border:none;"></td>` +
+        `<td style="padding:18px 20px;border:none;color:#5a4a2a;">` +
+        `<p style="margin:0;font-size:15.5px;line-height:1.85;color:#5a4a2a;text-align:justify;">` +
+        `<span style="font-family:Georgia,serif;font-size:26px;line-height:0;color:${WARNING};margin-right:8px;vertical-align:-8px;">&#8220;</span>${cleanInner}` +
+        `</p>` +
+        `</td></tr></table>`
       );
     },
   );
@@ -704,6 +749,16 @@ export function convertToWechatHtml(html: string): string {
   result = result.replace(/<h3([^>]*)>/gi, (_full, attrs: string) => {
     return `<h3${attrs} style="font-size:17px;font-weight:600;line-height:1.55;margin:26px 0 10px;color:#2a2a2a;padding-left:12px;border-left:3px solid #e6dccb;">`;
   });
+
+  // ====== 5b. h1 / h4-h6 兜底（AI 偶发输出，统一并入 h2/h3 视觉层级）======
+  result = result.replace(/<h1([^>]*)>/gi, (_full, attrs: string) => {
+    return `<h2${attrs} style="font-size:20px;font-weight:700;line-height:1.5;margin:38px 0 16px;color:#1a1a1a;padding-left:16px;border-left:4px solid ${ACCENT};">`;
+  });
+  result = result.replace(/<\/h1>/gi, "</h2>");
+  result = result.replace(/<h[456]([^>]*)>/gi, (_full, attrs: string) => {
+    return `<h4${attrs} style="font-size:16px;font-weight:600;line-height:1.55;margin:22px 0 10px;color:#2a2a2a;padding-left:10px;border-left:3px solid #e6dccb;">`;
+  });
+  result = result.replace(/<\/h[456]>/gi, "</h4>");
 
   // ====== 6. strong 加粗（移至末尾再次统一处理，此处跳过）======
 
@@ -763,11 +818,11 @@ export function convertToWechatHtml(html: string): string {
     const fullBlock = result.slice(startIdx, endIdx);
     const tagEnd = result.indexOf(">", startIdx) + 1;
     const inner = result.slice(tagEnd, endIdx - "</section>".length);
-    const { code } = parseCodeBlockSections(inner);
+    const { lang, code } = parseCodeBlockSections(inner);
     const plainCode = highlightedCodeToPlainText(code);
-    if (!plainCode.trim()) continue;
-
-    replacements.push({ original: fullBlock, replacement: renderCodeBlockForWechat(plainCode) });
+    // 语言标签随代码一起重建：renderCodeBlockForWechat 优先按代码内容识别语言
+    // （终端命令不会再被误标为 CSS），识别不出时回退到原标签。
+    replacements.push({ original: fullBlock, replacement: renderCodeBlockForWechat(plainCode, lang) });
   }
 
   // 按位置倒序替换（避免偏移）
@@ -780,40 +835,49 @@ export function convertToWechatHtml(html: string): string {
   // 与文章整体的卡片风格（蓝色竖线、圆角）脱节。正文里的数据表格（QPS 对比、
   // 参数表等）在此统一加内联样式；thead/tbody/tfoot 一并移除——微信编辑器
   // 对它们的支持不稳定，th/td 足以表达表头与数据行。
+  // 关键修复：table-layout:fixed + word-break，去掉 th 的 white-space:nowrap，
+  // 否则手机宽度下右侧列会被横向截断（微信内无法横向滚动）。
   result = result.replace(/<\/?(?:thead|tbody|tfoot)>/gi, "");
   result = result.replace(/<table(?![^>]*style=)/gi, () => {
-    return `<table style="width:100%;border-collapse:collapse;margin:20px 0;border:1px solid #e5e7eb;"`;
+    return `<table style="width:100%;table-layout:fixed;border-collapse:collapse;margin:20px 0;border:1px solid #e5e7eb;word-break:break-word;overflow-wrap:break-word;"`;
   });
   result = result.replace(/<th(?![^>]*style=)/gi, () => {
-    return `<th style="background-color:${ACCENT};color:#ffffff;padding:10px 12px;font-size:14px;font-weight:600;text-align:left;border:1px solid #c7d2fe;white-space:nowrap;"`;
+    return `<th style="background-color:${ACCENT};color:#ffffff;padding:10px 12px;font-size:14px;font-weight:600;text-align:left;border:1px solid #c7d2fe;word-break:break-word;overflow-wrap:break-word;line-height:1.5;"`;
   });
   result = result.replace(/<td(?![^>]*style=)/gi, () => {
-    return `<td style="padding:10px 12px;font-size:14px;line-height:1.7;color:#3d3d3d;border:1px solid #e5e7eb;"`;
+    return `<td style="padding:10px 12px;font-size:14px;line-height:1.7;color:#3d3d3d;border:1px solid #e5e7eb;word-break:break-word;overflow-wrap:break-word;"`;
   });
+  // 数据表斑马纹：偶数数据行加浅灰底，提升长表格的可读性（仅作用于 12b 生成的表格）
+  result = applyTableZebraStripes(result);
 
   // ====== 13. pre 代码块（老格式降级处理） ——
-  // 如果数据库里有 <pre> 残留（手动编辑未经过 code-highlight），做一次换行转换
+  // 如果数据库里有 <pre> 残留（手动编辑未经过 code-highlight），做一次换行转换，
+  // 并强制换行（pre-wrap + overflow-wrap），避免微信内长行被截断。
   result = result.replace(
-    /<pre[^>]*>[\s\S]*?<\/pre>/gi,
-    (block) => {
+    /<pre([^>]*)>([\s\S]*?)<\/pre>/gi,
+    (_full, preAttrs: string, block: string) => {
       block = block.replace(
         /(<code[^>]*>)([\s\S]*?)(<\/code>)/gi,
         (_codeMatch, openTag: string, codeContent: string, closeTag: string) => {
           return openTag + codeContent.replace(/\n/g, "<br>") + closeTag;
         },
       );
-      return block;
+      const wrapStyle = "white-space:pre-wrap;overflow-wrap:break-word;";
+      if (/style\s*=/i.test(preAttrs)) {
+        return `<pre${preAttrs.replace(/(style\s*=\s*["'])/i, `$1${wrapStyle}`)}>${block}</pre>`;
+      }
+      return `<pre${preAttrs} style="${wrapStyle}">${block}</pre>`;
     },
   );
 
-  // ====== 14. code 行内代码 → 紫色背景（跳过代码块 section 内的 <code>）======
+  // ====== 14. code 行内代码 → 浅紫底 chip（跳过代码块 section 内的 <code>）======
   const PROTECTED = "__MP_WECHAT_CODE__";
   result = result.replace(
     /<section data-mp-cb-body="1"[^>]*>[\s\S]*?<\/section>/gi,
     (block) => block.replace(/<code/g, `<code data-mp-w="${PROTECTED}"`),
   );
   result = result.replace(/<code>/gi, () => {
-    return `<code style="padding:2px 4px;font-size:0.88em;color:#7c3aed;font-weight:500;font-family:SF Mono,Menlo,monospace;">`;
+    return `<code style="padding:2px 5px;font-size:0.9em;color:#6d28d9;font-weight:500;background-color:#f3f0ff;border-radius:4px;font-family:SF Mono,Menlo,Consolas,monospace;">`;
   });
   // 还原
   result = result.replace(
@@ -824,7 +888,7 @@ export function convertToWechatHtml(html: string): string {
   // ====== 14. p 段落基础样式（跳过代码块 table 内的 <p>）======
   // 由于代码块转换后内部可能没有 <p>，这里只处理顶层段落
   result = result.replace(/<p>/gi, () => {
-    return `<p style="margin:0 0 16px;color:#3d3d3d;text-align:justify;">`;
+    return `<p style="margin:0 0 18px;font-size:15.5px;line-height:1.8;color:#373d45;text-align:justify;letter-spacing:0.02em;">`;
   });
   // 已有 style 的 p 合并
   result = result.replace(
@@ -833,7 +897,7 @@ export function convertToWechatHtml(html: string): string {
       if (existing.includes("margin")) {
         return `<p style="${existing}"${rest}>`;
       }
-      return `<p style="margin:0 0 16px;color:#3d3d3d;text-align:justify;${existing}"${rest}>`;
+      return `<p style="margin:0 0 18px;font-size:15.5px;line-height:1.8;color:#373d45;text-align:justify;letter-spacing:0.02em;${existing}"${rest}>`;
     },
   );
 
