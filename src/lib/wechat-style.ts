@@ -345,6 +345,47 @@ function buildPlainListItem(counter: number | null, inner: string, ordered: bool
   );
 }
 
+/**
+ * 从列表项 / 卡片内容中提取代码块（已高亮的 data-mp-cb section 或 <pre><code>）。
+ * 微信的卡片（table td）内无法横向滚动，代码块嵌进去会被拍平+截断；
+ * 提取后代码块作为独立块放在卡片外，保持多行与横向滚动能力。
+ */
+function extractCodeBlocksFromListItem(inner: string): { text: string; blocks: string[] } {
+  const blocks: string[] = [];
+  const replacements: Array<{ start: number; end: number; token: string }> = [];
+  let text = inner;
+
+  // 1) 已高亮的代码块：<section data-mp-cb="1">…</section>（内部嵌套 section，用 findSectionBlockEnd 定位）
+  const cbRe = /<section\s+data-mp-cb="1"/gi;
+  let m: RegExpExecArray | null;
+  while ((m = cbRe.exec(text)) !== null) {
+    const end = findSectionBlockEnd(text, m.index);
+    if (end === -1) continue;
+    const idx = blocks.length;
+    const token = `__MP_LI_CB_${idx}__`;
+    blocks.push(text.slice(m.index, end));
+    replacements.push({ start: m.index, end, token });
+    cbRe.lastIndex = m.index + token.length;
+  }
+
+  // 2) 未高亮的代码块：<pre>…</pre>
+  const preRe = /<pre[\s\S]*?<\/pre>/gi;
+  while ((m = preRe.exec(text)) !== null) {
+    const idx = blocks.length;
+    const token = `__MP_LI_CB_${idx}__`;
+    blocks.push(m[0]);
+    replacements.push({ start: m.index, end: m.index + m[0].length, token });
+    preRe.lastIndex = m.index + token.length;
+  }
+
+  // 按位置倒序替换为 token（token 不含空白，不受 normalizeListItemInner 的空白压缩影响）
+  replacements.sort((a, b) => b.start - a.start);
+  for (const r of replacements) {
+    text = text.slice(0, r.start) + r.token + text.slice(r.end);
+  }
+  return { text, blocks };
+}
+
 function transformListBlock(html: string, ordered: boolean): string {
   const tag = ordered ? "ol" : "ul";
   const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "gi");
@@ -355,7 +396,17 @@ function transformListBlock(html: string, ordered: boolean): string {
     let liMatch: RegExpExecArray | null;
     while ((liMatch = liRe.exec(inner)) !== null) {
       const liInner = liMatch[1];
-      const parsed = parseListItemTitleBody(liInner);
+      // 先抽出代码块：卡片只承载文字，代码块独立渲染（否则会被压成一行并在卡片内截断）
+      const { text: liText, blocks } = extractCodeBlocksFromListItem(liInner);
+
+      if (!liText.trim() && blocks.length > 0) {
+        // 列表项只有代码块没有文字：不生成空卡片，直接输出独立代码块
+        counter++;
+        items.push(blocks.join(""));
+        continue;
+      }
+
+      const parsed = parseListItemTitleBody(liText);
       if (parsed) {
         if (ordered) {
           counter++;
@@ -365,13 +416,16 @@ function transformListBlock(html: string, ordered: boolean): string {
         }
       } else {
         counter++;
-        const normalized = normalizeListItemInner(liInner);
+        const normalized = normalizeListItemInner(liText);
         const strongSplit = normalized.match(/^<strong(?:\s[^>]*)?>([\s\S]*?)<\/strong>\s*([\s\S]+)$/i);
         if (ordered && strongSplit && stripTags(strongSplit[1]) && stripTags(strongSplit[2]).length >= 2) {
           items.push(buildOrderedListCard(counter, stripTags(strongSplit[1]), strongSplit[2].trim()));
         } else {
-          items.push(buildPlainListItem(ordered ? counter : null, liInner, ordered));
+          items.push(buildPlainListItem(ordered ? counter : null, liText, ordered));
         }
+      }
+      if (blocks.length > 0) {
+        items.push(blocks.join(""));
       }
     }
     return `<section style="margin:14px 0 20px;">${items.join("")}</section>`;
