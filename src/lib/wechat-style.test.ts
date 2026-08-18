@@ -287,6 +287,24 @@ describe("convertToWechatHtml", () => {
     expect(wechat).toContain("商品ID校验");
   });
 
+  it("strips AI containers with single-quoted style too (common AI output)", () => {
+    const html =
+      "<p>前文</p>" +
+      "<div style='background-color:#eef2f7;border-radius:12px;padding:16px 18px;'>" +
+      "<h3>验证层配置项（3项）</h3>" +
+      "<ul><li><strong>业务字段校验阈值</strong>空值拦截率≥90%</li></ul>" +
+      "</div>" +
+      "<p>后文</p>";
+
+    const wechat = convertToWechatHtml(html);
+
+    // 单引号 style 的 AI 容器同样被剥掉，不出现「卡片套卡片」
+    expect(wechat).not.toContain("#eef2f7");
+    expect(wechat).not.toMatch(/<div style=/i);
+    expect(wechat).toMatch(/border-left:4px solid #3e7bfa;background-color:#f8fbff/);
+    expect(wechat).toContain("验证层配置项（3项）");
+  });
+
   it("keeps system structures (mp-tip, code blocks) untouched by style stripping", () => {
     const html =
       '<div class="mp-tip"><ol><li><strong>步骤一</strong>先做这件事</li></ol></div>' +

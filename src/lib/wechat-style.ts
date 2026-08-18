@@ -735,11 +735,12 @@ function buildSummaryBox(inner: string): string {
  * 包裹标题/列表，转换后与系统列表卡片（同样浅色底）叠出「卡片套卡片」。
  * 把这类自创卡片的 style 整个移除，使其退化为无样式结构、内容直接平铺；
  * 系统结构（mp-tip / mp-warning / mp-summary / 代码块 data-mp-cb）不受影响。
+ * 兼容双引号与单引号 style（AI 两种写法都常见）。
  */
 function stripForeignContainerStyles(html: string): string {
   return html.replace(
-    /<(div|section)([^>]*?)\sstyle="([^"]*)"([^>]*?)>/gi,
-    (full, tag: string, pre: string, _style: string, post: string) => {
+    /<(div|section)([^>]*?)\sstyle=(["'])([^"']*)\3([^>]*?)>/gi,
+    (full, tag: string, pre: string, _q: string, _style: string, post: string) => {
       if (/class="mp-|data-mp-cb/.test(full)) return full;
       return `<${tag}${pre}${post}>`;
     },
