@@ -213,9 +213,12 @@ export async function pushArticleToWechatDraft(input: {
   const token = await getAccessToken();
 
   const digest = buildWechatDigest(article.summary, article.content);
+  // 摘要缺失时 digest 会回退成正文开头文字，微信会把 digest 显示在标题下方，
+  // 与正文开头重复成「两遍一样的内容」；此时不向微信传 digest，避免重复。
+  const wechatDigest = article.summary?.trim() ? digest : "";
   const wechatContent = prependWechatDigest(
     dedupeWholeArticleContent(convertToWechatHtml(article.content)),
-    digest,
+    wechatDigest,
   );
 
   // 上传正文中的图片到微信并替换 URL（章节配图等）
@@ -265,7 +268,7 @@ export async function pushArticleToWechatDraft(input: {
   const draftId = await (await import("@/lib/wechat")).createDraft(token, {
     title: article.title ?? article.topic,
     content: contentWithImages,
-    digest,
+    digest: wechatDigest,
     thumbMediaId,
   });
 
