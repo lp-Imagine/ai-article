@@ -139,6 +139,41 @@ export type PushDraftResult = {
 };
 
 /**
+ * 推送前防御：检测正文是否「整篇重复两遍」（纯文本后半与前半逐字一致）。
+ * 命中时按首个块级锚点定位 HTML 中第二遍的起点并截断，
+ * 避免微信草稿出现「一篇文章两遍一样的内容」。
+ * 要求重复片段足够长（>400 字）且第二遍起点落在后半区域，防止误伤正常文章。
+ */
+export function dedupeWholeArticleContent(html: string): string {
+  const text = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  const len = text.length;
+  if (len < 800) return html;
+
+  const half = Math.floor(len / 2);
+  const head = text.slice(0, half).trim();
+  const tail = text.slice(half).trim();
+  if (tail.length < head.length - 50 || tail.length < 400) return html;
+  if (!tail.startsWith(head.slice(0, 400))) return html;
+
+  // 用 HTML 里首个块级元素做锚点，定位第二遍起点
+  const anchorMatch = html.match(/<(?:h[1-6]|p|section)[^>]*>[\s\S]*?<\/(?:h[1-6]|p|section)>/i);
+  const anchor = anchorMatch?.[0] ?? "";
+  if (!anchor || anchor.length < 30) return html;
+
+  const first = html.indexOf(anchor);
+  const second = html.indexOf(anchor, first + anchor.length);
+  if (second === -1) return html;
+
+  const mid = Math.floor(html.length / 2);
+  if (second < mid - 300 || second > html.length - 300) return html;
+
+  return html
+    .slice(0, second)
+    .replace(/(?:\s*<hr\s*\/?>)+\s*$/i, "")
+    .trim();
+}
+
+/**
  * 推送文章到微信公众号草稿箱的核心逻辑。
  * 供 push-draft API 路由与定时任务的自动推送复用。
  * 需要 article 所属用户的配置已注入（withUserConfig 上下文或环境变量）。
@@ -179,7 +214,7 @@ export async function pushArticleToWechatDraft(input: {
 
   const digest = buildWechatDigest(article.summary, article.content);
   const wechatContent = prependWechatDigest(
-    convertToWechatHtml(article.content),
+    dedupeWholeArticleContent(convertToWechatHtml(article.content)),
     digest,
   );
 
