@@ -383,6 +383,8 @@ function extractCodeBlocksFromListItem(inner: string): { text: string; blocks: s
   for (const r of replacements) {
     text = text.slice(0, r.start) + r.token + text.slice(r.end);
   }
+  // 占位 token 替换为换行（代码块 HTML 已移到卡片外渲染，卡片文字里不留占位符）
+  text = text.replace(/__MP_LI_CB_\d+__/g, "<br>");
   return { text, blocks };
 }
 
@@ -925,14 +927,22 @@ export function convertToWechatHtml(html: string): string {
   result = applyTableZebraStripes(result);
 
   // ====== 13. pre 代码块（老格式降级处理） ——
-  // 如果数据库里有 <pre> 残留（手动编辑未经过 code-highlight），做一次换行转换
+  // 如果数据库里有 <pre> 残留（手动编辑未经过 code-highlight），做一次换行转换，
+  // 并对代码文本转义（< > & 会破坏 HTML 结构，导致微信渲染错乱/内容移位）。
   result = result.replace(
     /<pre([^>]*)>([\s\S]*?)<\/pre>/gi,
     (_full, preAttrs: string, block: string) => {
       block = block.replace(
         /(<code[^>]*>)([\s\S]*?)(<\/code>)/gi,
         (_codeMatch, openTag: string, codeContent: string, closeTag: string) => {
-          return openTag + codeContent.replace(/\n/g, "<br>") + closeTag;
+          // 先解码实体再转义：兼容原文已转义（&lt;）与未转义（<）两种情况
+          const decoded = codeContent
+            .replace(/&amp;/g, "&")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'");
+          return openTag + escapeHtmlText(decoded).replace(/\n/g, "<br>") + closeTag;
         },
       );
       return `<pre${preAttrs}>${block}</pre>`;

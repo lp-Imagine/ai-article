@@ -243,6 +243,8 @@ describe("convertToWechatHtml", () => {
     // 代码块独立在卡片外，多行保留 <br> 换行，缩进不丢
     expect(wechat).toMatch(/<\/table><pre/);
     expect(wechat).toContain("def check_format(data):<br>  if not re.match");
+    // 卡片内不留 __MP_LI_CB_ 占位符（伪代码位置用空白分隔）
+    expect(wechat).not.toContain("__MP_LI_CB_");
     // 列表文字仍保留
     expect(wechat).toContain("数据格式校验");
     expect(wechat).toContain("命令自动生效");

@@ -145,6 +145,19 @@ export function decodeEntitiesInHtml(html: string): string {
   });
 }
 
+/** HTML 转义文本节点中的 < > &，防止代码内容被解析成标签导致 DOM 错乱 */
+function escapeTextNodes(html: string): string {
+  return html.replace(/(<[^>]*>)|([^<]+)/g, (match, tag: string | undefined, text: string | undefined) => {
+    if (tag) return tag;
+    if (text) return escapeHtmlText(text);
+    return match;
+  });
+}
+
+function escapeHtmlText(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 /** 将文本节点中的普通空格替换为不换行空格，避免微信吞掉 span 之间的空白 */
 export function preserveSpacesInHtml(html: string): string {
   return html.replace(/(<[^>]*>)|([^<]+)/g, (match, tag: string | undefined, text: string | undefined) => {
@@ -288,7 +301,9 @@ export function anchorSpacesBetweenTags(html: string): string {
 }
 
 function normalizeHighlightHtml(html: string): string {
-  return preserveSpacesInHtml(anchorSpacesBetweenTags(decodeEntitiesInHtml(html)));
+  // decode 后必须对文本节点重新转义（< > &），否则代码里的 <div>、< 1 等
+  // 会被当 HTML 标签解析，造成 DOM 错乱与内容错位。
+  return preserveSpacesInHtml(anchorSpacesBetweenTags(escapeTextNodes(decodeEntitiesInHtml(html))));
 }
 
 /** 将 span 之间的空白合并到前一个 span 内部（微信不会吞 span 内文字） */
@@ -352,10 +367,13 @@ function alignHighlightToPlain(plainLine: string, highlightedHtml: string): stri
 
   const flush = () => {
     if (!buffer) return;
+    // 关键：代码中的 < > & 必须转义，否则微信/浏览器会把代码里的
+    // `<div>`、`< 1` 等当 HTML 标签解析，导致 DOM 错乱、内容被拆散移位甚至重复。
+    const escaped = escapeHtmlText(buffer);
     if (bufferStyle) {
-      result += `<span style="${bufferStyle}">${buffer}</span>`;
+      result += `<span style="${bufferStyle}">${escaped}</span>`;
     } else {
-      result += `<span>${buffer}</span>`;
+      result += `<span>${escaped}</span>`;
     }
     buffer = "";
     bufferStyle = null;

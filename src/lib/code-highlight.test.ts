@@ -77,4 +77,27 @@ describe("renderCodeBlockForWechat（微信代码块）", () => {
       .filter(Boolean);
     expect(plain).toEqual(expected);
   });
+
+  it("escapes < > & in code so they are not parsed as HTML tags", () => {
+    const code = "if len(user_id) < 10:\n    return '<div>' in html and a & b";
+    const rendered = renderCodeBlockForWechat(code);
+
+    // 输出中不允许出现裸的 < >（会被微信/浏览器当标签解析，导致 DOM 错乱、内容移位重复）
+    const body = rendered.match(/data-mp-cb-body="1"[^>]*>([\s\S]*?)<\/section>/)?.[1] ?? "";
+    expect(body).not.toMatch(/<(?![a-zA-Z\/!])/);
+    expect(body).not.toMatch(/<div/);
+    expect(body).toContain("&lt;div&gt;");
+    expect(body).toContain("&lt;");
+    expect(body).toContain("&amp;");
+    // 还原后仍是原代码（逐行忽略缩进：微信模式缩进走 padding-left）
+    const plain = highlightedCodeToPlainText(body)
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+    const expected = code
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+    expect(plain).toEqual(expected);
+  });
 });
