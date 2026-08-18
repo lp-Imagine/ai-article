@@ -2008,7 +2008,8 @@ CRITICAL: This model ONLY understands natural language. YOU MUST:
 - Keep 3-6 sentences, be specific and visual
 - The image MUST contain Chinese text as part of the design — specify the exact text and its visual treatment
 - No faces or people in the image
-- NEVER render code-like strings as on-image text: no hex color codes (#xxxxxx), no CSS/rgb()/url(), no HTML tags, no punctuation-only marks. Describe colors in plain words (e.g. "warm latte beige", "soft pink") — if a code-like token appears in this prompt, it is a color hint to follow, NOT text to draw`;
+- NEVER render code-like strings as on-image text: no hex color codes (#xxxxxx), no CSS/rgb()/url(), no HTML tags, no punctuation-only marks. Describe colors in plain words (e.g. "warm latte beige", "soft pink") — if a code-like token appears in this prompt, it is a color hint to follow, NOT text to draw
+- NEVER mention aspect ratio or pixel dimensions (16:9, 1:1, 2560x1440, "banner size" etc.) anywhere — the canvas ratio is set by the API, not by the prompt, and these tokens get painted onto the image as text`;
 
 /**
  * 锁定参考图 lookbook（漏洞原理那张）：
@@ -2033,9 +2034,9 @@ const SECTION_FLOW_LAYOUTS = [
   "COMPARE_THEN_PICK: two soft boxes on the left (option A vs B); arrow to a chosen path; right side shows the outcome badge",
 ] as const;
 
-/** 封面：同一 lookbook，内容仍是主副标题 + 主视觉 */
+/** 封面：同一 lookbook，内容仍是主副标题 + 主视觉（画布比例由 API size 参数控制，prompt 内禁止出现比例/尺寸字样） */
 const COVER_STYLE_DOODLE =
-  `${DOODLE_LOOKBOOK} Cover banner 16:9 in the SAME sketchbook look. Bold Chinese headline + short keyword subtitle in dark brown ink. One large cute doodle hero metaphor matching the topic (server, browser, stopwatch, puzzle, queue, shield as simplified icons). Use blush pink / apricot / mint / lavender accents on cream-beige paper. No glass chip rows, no neon.`;
+  `${DOODLE_LOOKBOOK} Cover banner in the SAME sketchbook look. Bold Chinese headline + short keyword subtitle in dark brown ink. One large cute doodle hero metaphor matching the topic (server, browser, stopwatch, puzzle, queue, shield as simplified icons). Use blush pink / apricot / mint / lavender accents on cream-beige paper. No glass chip rows, no neon. No aspect ratio or pixel dimension mentions.`;
 
 const COVER_LAYOUT_VARIANTS = [
   "LEFT_TITLE_RIGHT_HERO: bold Chinese headline + subtitle on the left third; right two-thirds shows one large hand-drawn doodle hero metaphor related to the topic",
@@ -2448,7 +2449,7 @@ export async function generateCoverPrompt(
   const prompt = await callChat([
     {
       role: "system",
-      content: IMAGE_PROMPT_SYSTEM + `\n\nCreate a WeChat article COVER banner (16:9) in the SAME hand-drawn educational doodle style as teaching infographics (cream paper, pastel panels, cute simplified icons). Content stays a cover: bold Chinese headline + one short keyword tagline + one hero doodle — NOT a multi-panel vulnerability storyboard.
+      content: IMAGE_PROMPT_SYSTEM + `\n\nCreate a WeChat article COVER banner in the SAME hand-drawn educational doodle style as teaching infographics (cream paper, pastel panels, cute simplified icons). Content stays a cover: bold Chinese headline + one short keyword tagline + one hero doodle — NOT a multi-panel vulnerability storyboard. The canvas is a wide horizontal banner already fixed by the API — do NOT mention aspect ratio or dimensions in the prompt.
 
 STYLE ANCHOR (fixed for this cover):
 ${variant.styleAnchor}
