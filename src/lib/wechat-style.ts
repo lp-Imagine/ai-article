@@ -1003,18 +1003,42 @@ export function convertToWechatHtml(html: string): string {
 
 /**
  * 列表转换前防御：把代码块（<pre><code> 或 data-mp-cb body）内部误写的 <ol>/<ul>
- * 提取到代码块外。AI 偶尔会把配置清单等列表写进代码块，若不提取，
- * transformListBlock 会在代码块内部生成列表卡片，微信渲染成「深色代码块套白色
- * 卡片」；提取后列表走正文同一套卡片渲染，与代码块平级。
+ * 提取到代码块外。AI 偶尔会把配置清单等列表写进代码块（真标签或经 hljs 转义的
+ * &lt;ol&gt; 实体文本），若不提取：真标签会被 transformListBlock 在代码块内部转成
+ * 卡片；转义文本会被微信解码成真标签后渲染成列表——两者都会出现「深色代码块套
+ * 白色卡片」。提取后列表走正文同一套卡片渲染，与代码块平级。
  */
 function extractListsFromInsideCodeBlocks(html: string): string {
-  // 1) 老格式 <pre> 内嵌列表（直接拼在 pre 后，列表由 transformListBlock 统一转卡片并包裹）
+  // 把代码片段中「转义文本形式的列表」（&lt;ol&gt;…&lt;/ol&gt;）解码为真列表
+  const decodeListTexts = (fragment: string): { cleaned: string; lists: string[] } => {
+    const lists: string[] = [];
+    const cleaned = fragment.replace(
+      /&lt;ol[\s\S]*?&lt;\/ol&gt;|&lt;ul[\s\S]*?&lt;\/ul&gt;/gi,
+      (encodedList) => {
+        lists.push(
+          encodedList
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&amp;/g, "&")
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'"),
+        );
+        return "";
+      },
+    );
+    return { cleaned, lists };
+  };
+
+  // 1) 老格式 <pre> 内嵌列表（真标签 + 转义文本形式）
   const result = html.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (_full, inner: string) => {
     const extracted: string[] = [];
-    const cleaned = inner.replace(/<ol[\s\S]*?<\/ol>|<ul[\s\S]*?<\/ul>/gi, (listHtml) => {
+    let cleaned = inner.replace(/<ol[\s\S]*?<\/ol>|<ul[\s\S]*?<\/ul>/gi, (listHtml) => {
       extracted.push(listHtml);
       return "";
     });
+    const decoded = decodeListTexts(cleaned);
+    cleaned = decoded.cleaned;
+    extracted.push(...decoded.lists);
     if (extracted.length === 0) return _full;
     return `<pre>${cleaned}</pre>${extracted.join("")}`;
   });
@@ -1034,17 +1058,20 @@ function extractListsFromInsideCodeBlocks(html: string): string {
     const block = result.slice(start, end);
     const bodyMatch = block.match(/<section\s+data-mp-cb-body="1"[^>]*>([\s\S]*?)<\/section>/i);
     const body = bodyMatch?.[1] ?? "";
-    if (!/<ol[\s>]|<ul[\s>]/i.test(body)) {
+    const decodedBody = decodeListTexts(body);
+    if (!/<ol[\s>]|<ul[\s>]/i.test(body) && decodedBody.lists.length === 0) {
       output.push(result.slice(lastIndex, start), block);
       lastIndex = end;
       cbOpen.lastIndex = end;
       continue;
     }
     const extracted: string[] = [];
-    const cleanedBody = body.replace(/<ol[\s\S]*?<\/ol>|<ul[\s\S]*?<\/ul>/gi, (listHtml) => {
+    let cleanedBody = body.replace(/<ol[\s\S]*?<\/ol>|<ul[\s\S]*?<\/ul>/gi, (listHtml) => {
       extracted.push(listHtml);
       return "";
     });
+    cleanedBody = decodeListTexts(cleanedBody).cleaned;
+    extracted.push(...decodeListTexts(body).lists);
     const bodyOpen = block.match(/<section\s+data-mp-cb-body="1"[^>]*>/i)?.[0] ?? '<section data-mp-cb-body="1">';
     output.push(result.slice(lastIndex, start));
     output.push(block.replace(bodyMatch![0], `${bodyOpen}${cleanedBody}</section>`));

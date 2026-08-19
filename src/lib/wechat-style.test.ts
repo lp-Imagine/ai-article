@@ -360,6 +360,32 @@ describe("convertToWechatHtml", () => {
     expect(wechat).toMatch(/<\/section><\/section><section style="margin:14px 0 20px;"><table/);
     expect(wechat).toContain("最大重试次数");
   });
+
+  it("extracts escaped list text (&lt;ol&gt;) mistakenly written inside code blocks", () => {
+    // AI 把含 HTML 标签的配置清单写进代码块，hljs 高亮后转义成 &lt;ol&gt; 实体文本；
+    // 微信会把实体解码成真标签渲染成列表。防御应把这些转义文本解码并提取到代码块外。
+    const cbBody =
+      "<p># 配置</p>" +
+      "&lt;ol&gt;&lt;li&gt;&lt;strong&gt;订单ID校验规则&lt;/strong&gt;&lt;code&gt;^\\\\d{10}$&lt;/code&gt;&lt;/li&gt;" +
+      "&lt;li&gt;&lt;strong&gt;金额校验规则&lt;/strong&gt;&lt;code&gt;^\\\\d+\\\\.\\\\d{2}$&lt;/code&gt;&lt;/li&gt;&lt;/ol&gt;";
+    const html =
+      '<section data-mp-cb="1" style="background-color:#0d1117;">' +
+      '<section data-mp-cb-lang="1">Python</section>' +
+      `<section data-mp-cb-body="1" style="padding:12px;">${cbBody}</section>` +
+      "</section>";
+
+    const wechat = convertToWechatHtml(html);
+
+    // 代码块 body 内不再残留转义的列表文本
+    const cbBodyOut = wechat.match(/<section data-mp-cb-body="1"[^>]*>([\s\S]*?)<\/section>/)?.[1] ?? "";
+    expect(cbBodyOut).not.toMatch(/&lt;ol/i);
+    // 列表被提取到代码块外并按卡片渲染
+    expect(wechat).toMatch(/background-color:#f8fbff/);
+    expect(wechat).toContain("订单ID校验规则");
+    expect(wechat).toContain("金额校验规则");
+    // 代码块本身仍保留纯代码
+    expect(cbBodyOut).toContain("# 配置");
+  });
 });
 
 describe("normalizeArticleMarkup", () => {

@@ -253,6 +253,7 @@ export const ARTICLE_HTML_FORMAT_RULES = `
 - 正文步骤：<ol><li><strong>标题</strong>说明</li></ol>
 - 并列要点：<ul><li><strong>标题</strong>说明</li></ul>
 - 代码块：<pre><code class="language-xxx">…</code></pre>；language 必须与代码内容匹配（python/javascript/typescript/jsx/bash/shell/sql/json/html/css 等）；终端命令一律用 bash 或 shell，禁止给命令打 language-css；代码块禁止为空、禁止只有语言标签
+- ⚠️ 代码块内只写纯代码文本，禁止出现任何 HTML 标签（<ol>/<ul>/<li>/<strong>/<code>/<p> 等）——配置清单、参数表、说明条目一律写成正文列表 <ul>/<ol>，绝不允许写进代码块里（微信会把代码块内的标签渲染成真元素，导致排版错乱）
 - ⚠️ 代码块必须是正文顶层的独立块：放在 <p> 段落之间，禁止嵌套在 <ol>/<ul>/<li>、mp-tip、mp-warning、mp-summary、blockquote、<table> 等任何列表/卡片容器内部。列表项和卡片里只写文字说明，代码示例一律写在列表/卡片结束之后，以独立的 <pre><code> 单独成块（可用「示例：」开头引出）
 - mp-tip：div 内只能有单个 <ol>，li 结构与正文 ol 完全相同；禁止 ul、多个 p、嵌套 li、写「实用技巧」等标题；禁止代码块
 - mp-warning：div 内只用 <p>...</p>；禁止列表和「注意」标题；禁止代码块
@@ -264,5 +265,5 @@ export const ARTICLE_HTML_FORMAT_RULES = `
 
 /** 润色 / 扩写用的精简版，避免占用过多上下文 */
 export const ARTICLE_HTML_FORMAT_RULES_BRIEF = `
-【HTML 格式】保留现有结构；代码块用 <pre><code class="language-真实语言">…</code></pre>（终端命令用 bash/shell，禁止空代码块）；代码块必须是正文顶层的独立块，禁止放进 <ol>/<ul>/<li>、mp-tip、mp-warning、mp-summary、blockquote、<table> 等任何列表/卡片容器内，列表项和卡片里只写文字；mp-tip 内仅单个 <ol>；mp-warning/mp-summary 内仅 <p>；列表项用 <li><strong>标题</strong>说明</li>；允许简单对比 <table>；禁止新增 figure/img/section/自创 class。
+【HTML 格式】保留现有结构；代码块用 <pre><code class="language-真实语言">…</code></pre>（终端命令用 bash/shell，禁止空代码块）；代码块内只写纯代码，禁止任何 HTML 标签（配置清单/参数表写成正文列表，绝不放代码块里）；代码块必须是正文顶层的独立块，禁止放进 <ol>/<ul>/<li>、mp-tip、mp-warning、mp-summary、blockquote、<table> 等任何列表/卡片容器内，列表项和卡片里只写文字；mp-tip 内仅单个 <ol>；mp-warning/mp-summary 内仅 <p>；列表项用 <li><strong>标题</strong>说明</li>；允许简单对比 <table>；禁止新增 figure/img/section/自创 class。
 `.trim();
