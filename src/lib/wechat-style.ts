@@ -1081,6 +1081,12 @@ function extractListsFromInsideCodeBlocks(html: string): string {
  */
 function fixUnclosedTags(html: string): string {
   const VOID = new Set(["br", "img", "hr", "meta", "link", "input", "wbr", "source", "col"]);
+  // <p> 遇到这些标签时按 HTML 规范自动闭合（新 <p> 或块级容器/列表/表格等）
+  const P_CLOSING_TAGS = new Set([
+    "p", "div", "section", "h1", "h2", "h3", "h4", "h5", "h6",
+    "ul", "ol", "li", "table", "thead", "tbody", "tr", "td", "th",
+    "blockquote", "pre", "figure", "figcaption", "address", "hr",
+  ]);
   const re = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)(\/?)>/g;
   const stack: string[] = [];
   const out: string[] = [];
@@ -1096,8 +1102,9 @@ function fixUnclosedTags(html: string): string {
     if (VOID.has(tag) || selfClose) {
       out.push(token);
     } else if (!closeSlash) {
-      // <p> 是自动闭合标签：遇到新的 <p> 时，先闭合栈内未闭合的 <p>（含其上的标签）
-      if (tag === "p") {
+      // <p> 是自动闭合标签：遇到新 <p> 或块级标签时，先闭合栈内未闭合的 <p>（含其上的标签）。
+      // 否则未闭合的 <p> 会把后续代码块/列表等块级内容吞进去，导致结构错位。
+      if (P_CLOSING_TAGS.has(tag)) {
         const idx = stack.lastIndexOf("p");
         if (idx !== -1) {
           for (let i = stack.length - 1; i > idx; i--) out.push(`</${stack[i]}>`);
@@ -1173,17 +1180,29 @@ function extractForeignFromCodeBlocks(html: string): string {
       cbOpen.lastIndex = end;
       continue;
     }
-    const foreign: string[] = [];
-    const cleaned = block.replace(
-      /<(?:p|h[1-6]|section|div|blockquote|table|ul|ol)(?![^>]*data-mp-cb)[\s\S]*?<\/(?:p|h[1-6]|section|div|blockquote|table|ul|ol)>/gi,
+    let cleaned = block;
+    const extracted: string[] = [];
+    // 1) 提取嵌套在代码块内的另一个代码块（AI 缺闭合 </section> 时，后续代码块会被吞进前一个）
+    const nestedCbPositions = [...cleaned.matchAll(/<section\s+data-mp-cb="1"/g)];
+    for (let i = nestedCbPositions.length - 1; i >= 1; i--) {
+      const ns = nestedCbPositions[i].index;
+      const ne = findSectionBlockEnd(cleaned, ns);
+      if (ne !== -1) {
+        extracted.push(cleaned.slice(ns, ne));
+        cleaned = cleaned.slice(0, ns) + cleaned.slice(ne);
+      }
+    }
+    // 2) 提取代码块内被误吞的正文块（无 data-mp-cb 属性的块级元素）
+    cleaned = cleaned.replace(
+      /<(?:p|h[1-6]|div|blockquote|table|ul|ol)(?![^>]*data-mp-cb)[\s\S]*?<\/(?:p|h[1-6]|div|blockquote|table|ul|ol)>/gi,
       (foreignHtml) => {
-        foreign.push(foreignHtml);
+        extracted.push(foreignHtml);
         return "";
       },
     );
     output.push(html.slice(lastIndex, start));
     output.push(cleaned);
-    if (foreign.length > 0) output.push(foreign.join(""));
+    if (extracted.length > 0) output.push(extracted.join(""));
     lastIndex = end;
     cbOpen.lastIndex = end;
   }

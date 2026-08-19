@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { convertToWechatHtml, enforceArticleHtmlFormat, normalizeArticleMarkup, normalizeCalloutBlocks, normalizeListHtml, prependWechatDigest } from "./wechat-style";
+import { convertToWechatHtml, enforceArticleHtmlFormat, fixWechatHtmlStructure, normalizeArticleMarkup, normalizeCalloutBlocks, normalizeListHtml, prependWechatDigest } from "./wechat-style";
 
 describe("normalizeListHtml", () => {
   it("flattens nested li tags", () => {
@@ -417,6 +417,35 @@ describe("convertToWechatHtml", () => {
     // 代码内容保留
     expect(cb).toContain("address_pattern");
     expect(wechat).toContain("容错兜底");
+  });
+
+  it("splits adjacent code blocks when the first one is unclosed (no Bash-wraps-Python)", () => {
+    // AI 缺 </section> 时，后续代码块会被吞进前一个；修复后应分离为平级代码块
+    const html =
+      "<p>伪代码示例：</p>" +
+      '<section data-mp-cb="1" style="background:#0d1117;">' +
+      '<p data-mp-cb-lang="1">Bash</p>' +
+      '<p data-mp-cb-body="1">npm install pkg</p>' +
+      '<p data-mp-cb-body="1"><span>curl -s https://api.example.com</span>' +
+      '<section data-mp-cb="1" style="background:#0d1117;">' +
+      '<p data-mp-cb-lang="1">Python</p>' +
+      '<p data-mp-cb-body="1">def validate_format(order_data):</p>' +
+      "<p data-mp-cb-body=\"1\">    phone_regex = r\"^1[3-9]\\d{9}$\"</p>" +
+      "</section>" +
+      "</section>" +
+      "<p>校验项2：关联关系校验。</p>";
+
+    const wechat = fixWechatHtmlStructure(html);
+
+    const cbs = [...wechat.matchAll(/<section data-mp-cb="1"[^>]*>[\s\S]*?<\/section>/g)].map((mm) => mm[0]);
+    expect(cbs.length).toBe(2);
+    expect(cbs[0]).toMatch(/data-mp-cb-lang="1"[^>]*>Bash</);
+    expect(cbs[1]).toMatch(/data-mp-cb-lang="1"[^>]*>Python</);
+    // 无嵌套代码块、标签平衡
+    expect(cbs.filter((cb) => (cb.match(/data-mp-cb="1"/g) ?? []).length > 1).length).toBe(0);
+    const secOpen = (wechat.match(/<section[\s>]/g) ?? []).length;
+    const secClose = (wechat.match(/<\/section>/g) ?? []).length;
+    expect(secOpen).toBe(secClose);
   });
 });
 
