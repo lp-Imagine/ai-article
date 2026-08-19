@@ -111,12 +111,8 @@ export function extractMpCodeBlocks(html: string): string {
     const srcAttr = openTag.match(/data-mp-code-source="([^"]*)"/i)?.[1] ?? "";
     let code = srcAttr ? decodeCodeSource(srcAttr) : "";
     if (!code) {
-      // 兼容新旧代码块结构：body 可能是单个 <section>，也可能是平级 <p> 行
-      const sectionBody = inner.match(/data-mp-cb-body="1"[^>]*>([\s\S]*?)<\/section>/i)?.[1];
-      const pBody = [...inner.matchAll(/<p\s+data-mp-cb-body="1"[^>]*>([\s\S]*?)<\/p>/gi)]
-        .map((mm) => mm[1])
-        .join("\n");
-      const body = sectionBody ?? (pBody ? pBody : inner);
+      const body =
+        inner.match(/data-mp-cb-body="1"[^>]*>([\s\S]*?)<\/section>/i)?.[1] ?? inner;
       code = decodeEntities(
         body
           .replace(/<br\s*\/?>/gi, "\n")
@@ -127,7 +123,7 @@ export function extractMpCodeBlocks(html: string): string {
     }
 
     const langLabel =
-      inner.match(/data-mp-cb-lang="1"[^>]*>([\s\S]*?)<\/(?:section|p)>/i)?.[1] ?? "";
+      inner.match(/data-mp-cb-lang="1"[^>]*>([\s\S]*?)<\/section>/i)?.[1] ?? "";
     const lang = mapLangLabel(stripTags(langLabel));
     const fenced = `\n\n\`\`\`${lang}\n${code.replace(/\n$/, "")}\n\`\`\`\n\n`;
     result += fenced;

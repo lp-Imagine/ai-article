@@ -69,33 +69,12 @@ type ArticleRecord = {
   status: string;
   coverImageUrl: string | null;
   wechatDraftId: string | null;
-  wechatHtml: string | null;
   style: string | null;
   wordCount: number | null;
   keywords?: string | null;
 };
 
 type ApiResponse<T> = { code: number; message: string; data: T };
-
-/** 检测 HTML 标签是否闭合（用于「查看微信源码」自查部署版本是否生效） */
-function checkHtmlClosed(html: string): { closed: boolean; unclosed: string[] } {
-  const VOID = new Set(["br", "img", "hr", "meta", "link", "input", "wbr", "source", "col"]);
-  const re = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)(\/?)>/g;
-  const stack: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html)) !== null) {
-    const close = m[1];
-    const tag = m[2].toLowerCase();
-    const self = m[4] === "/";
-    if (VOID.has(tag) || self) continue;
-    if (!close) stack.push(tag);
-    else {
-      const idx = stack.lastIndexOf(tag);
-      if (idx !== -1) stack.length = idx;
-    }
-  }
-  return { closed: stack.length === 0, unclosed: stack };
-}
 
 const statusLabel: Record<string, string> = {
   draft: "草稿",
@@ -140,7 +119,6 @@ export default function ArticlePage({
   const [busy, setBusy] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [pushDialogOpen, setPushDialogOpen] = useState(false);
-  const [wechatSourceOpen, setWechatSourceOpen] = useState(false);
   const [pushResult, setPushResult] = useState<{ draftId: string; status: string } | null>(null);
   const [blogSyncResult, setBlogSyncResult] = useState<{ path: string; url: string } | null>(null);
   const [pushRecords, setPushRecords] = useState<PublishRecord[]>([]);
@@ -1438,18 +1416,6 @@ export default function ArticlePage({
         {article.wechatDraftId && !article.wechatDraftId.startsWith("mock_draft_") ? (
           <p className="article-topbar-draft-id">微信草稿 ID：{article.wechatDraftId}</p>
         ) : null}
-        {article.wechatHtml ? (
-          <div className="article-topbar-draft-id">
-            <button
-              type="button"
-              onClick={() => setWechatSourceOpen(true)}
-              className="btn-secondary text-sm"
-              style={{ color: "var(--color-accent)", textDecoration: "underline" }}
-            >
-              查看微信源码
-            </button>
-          </div>
-        ) : null}
 
         <nav className="mobile-stage-tabs" aria-label="编辑步骤">
           {(
@@ -1988,95 +1954,6 @@ export default function ArticlePage({
         blogSyncConfigured={blogSyncConfigured}
         defaultTags={article.keywords ?? ""}
       />
-
-      {wechatSourceOpen && article.wechatHtml ? (
-        <div
-          className="wechat-source-overlay"
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 1000,
-            background: "rgba(0,0,0,0.55)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "20px",
-          }}
-          onClick={() => setWechatSourceOpen(false)}
-        >
-          <div
-            className="wechat-source-dialog"
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: "#fff",
-              borderRadius: "12px",
-              maxWidth: "860px",
-              width: "100%",
-              maxHeight: "80vh",
-              display: "flex",
-              flexDirection: "column",
-              overflow: "hidden",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "12px 16px",
-                borderBottom: "1px solid #e5e7eb",
-              }}
-            >
-              <strong>推送微信的格式处理后源码</strong>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                {(() => {
-                  const { closed, unclosed } = checkHtmlClosed(article.wechatHtml ?? "");
-                  return closed ? (
-                    <span style={{ fontSize: "12px", color: "#16a34a", fontWeight: 600 }}>
-                      ✓ 标签闭合
-                    </span>
-                  ) : (
-                    <span style={{ fontSize: "12px", color: "#dc2626", fontWeight: 600 }} title={`未闭合：${unclosed.join(", ")}`}>
-                      ✗ 存在未闭合标签（可能是旧版本生成的源码，请确认已部署最新代码并重新推送）
-                    </span>
-                  );
-                })()}
-                <button
-                  type="button"
-                  className="btn-secondary text-sm"
-                  onClick={() => {
-                    void navigator.clipboard.writeText(article.wechatHtml ?? "");
-                  }}
-                >
-                  复制全部
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary text-sm"
-                  onClick={() => setWechatSourceOpen(false)}
-                >
-                  关闭
-                </button>
-              </div>
-            </div>
-            <pre
-              style={{
-                margin: 0,
-                padding: "16px",
-                overflow: "auto",
-                fontSize: "12px",
-                lineHeight: 1.6,
-                fontFamily: "SF Mono, Menlo, Consolas, monospace",
-                color: "#374151",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-all",
-              }}
-            >
-              {article.wechatHtml}
-            </pre>
-          </div>
-        </div>
-      ) : null}
 
       {!pushDialogOpen && !previewOpen && !progress.open && !cancelConfirmOpen ? (
       <div className="mobile-editor-dock">

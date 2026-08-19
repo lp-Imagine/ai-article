@@ -272,37 +272,6 @@ function simplifyFiguresForWechat(html: string): string {
   return result;
 }
 
-/** 数据表格斑马纹：仅作用于 12b 加过内联样式的表格（border:1px solid #e5e7eb），
- *  首行为表头（保持蓝底），偶数数据行加浅灰底色。列表卡片/提示卡片不受影响。 */
-function applyTableZebraStripes(html: string): string {
-  return html.replace(
-    /<table([^>]*border:1px solid #e5e7eb[^>]*)>([\s\S]*?)<\/table>/gi,
-    (_full, attrs: string, inner: string) => {
-      let rowIndex = 0;
-      const striped = inner.replace(
-        /(<tr[^>]*>)([\s\S]*?)(<\/tr>)/gi,
-        (_rm, open: string, cells: string, close: string) => {
-          const current = rowIndex;
-          rowIndex += 1;
-          // 首行视为表头（保持蓝底），数据行从 1 起计，偶数数据行（2、4…）加浅灰底
-          if (current === 0) return _rm;
-          if (current % 2 === 0) {
-            cells = cells.replace(
-              /<td style="([^"]*)"/gi,
-              (_td, existing: string) =>
-                existing.includes("background-color")
-                  ? _td
-                  : `<td style="background-color:#f1f5f9;${existing}"`,
-            );
-          }
-          return `${open}${cells}${close}`;
-        },
-      );
-      return `<table${attrs}>${striped}</table>`;
-    },
-  );
-}
-
 function buildOrderedListCard(counter: number, title: string, body: string): string {
   return (
     `<table style="width:100%;border-collapse:collapse;margin:0 0 12px;border:1px solid ${LIST_CARD.border};background-color:${LIST_CARD.bg};border-radius:10px;">` +
@@ -345,49 +314,6 @@ function buildPlainListItem(counter: number | null, inner: string, ordered: bool
   );
 }
 
-/**
- * 从列表项 / 卡片内容中提取代码块（已高亮的 data-mp-cb section 或 <pre><code>）。
- * 微信的卡片（table td）内无法横向滚动，代码块嵌进去会被拍平+截断；
- * 提取后代码块作为独立块放在卡片外，保持多行与横向滚动能力。
- */
-function extractCodeBlocksFromListItem(inner: string): { text: string; blocks: string[] } {
-  const blocks: string[] = [];
-  const replacements: Array<{ start: number; end: number; token: string }> = [];
-  let text = inner;
-
-  // 1) 已高亮的代码块：<section data-mp-cb="1">…</section>（内部嵌套 section，用 findSectionBlockEnd 定位）
-  const cbRe = /<section\s+data-mp-cb="1"/gi;
-  let m: RegExpExecArray | null;
-  while ((m = cbRe.exec(text)) !== null) {
-    const end = findSectionBlockEnd(text, m.index);
-    if (end === -1) continue;
-    const idx = blocks.length;
-    const token = `__MP_LI_CB_${idx}__`;
-    blocks.push(text.slice(m.index, end));
-    replacements.push({ start: m.index, end, token });
-    cbRe.lastIndex = m.index + token.length;
-  }
-
-  // 2) 未高亮的代码块：<pre>…</pre>
-  const preRe = /<pre[\s\S]*?<\/pre>/gi;
-  while ((m = preRe.exec(text)) !== null) {
-    const idx = blocks.length;
-    const token = `__MP_LI_CB_${idx}__`;
-    blocks.push(m[0]);
-    replacements.push({ start: m.index, end: m.index + m[0].length, token });
-    preRe.lastIndex = m.index + token.length;
-  }
-
-  // 按位置倒序替换为 token（token 不含空白，不受 normalizeListItemInner 的空白压缩影响）
-  replacements.sort((a, b) => b.start - a.start);
-  for (const r of replacements) {
-    text = text.slice(0, r.start) + r.token + text.slice(r.end);
-  }
-  // 占位 token 替换为换行（代码块 HTML 已移到卡片外渲染，卡片文字里不留占位符）
-  text = text.replace(/__MP_LI_CB_\d+__/g, "<br>");
-  return { text, blocks };
-}
-
 function transformListBlock(html: string, ordered: boolean): string {
   const tag = ordered ? "ol" : "ul";
   const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "gi");
@@ -398,17 +324,7 @@ function transformListBlock(html: string, ordered: boolean): string {
     let liMatch: RegExpExecArray | null;
     while ((liMatch = liRe.exec(inner)) !== null) {
       const liInner = liMatch[1];
-      // 先抽出代码块：卡片只承载文字，代码块独立渲染（否则会被压成一行并在卡片内截断）
-      const { text: liText, blocks } = extractCodeBlocksFromListItem(liInner);
-
-      if (!liText.trim() && blocks.length > 0) {
-        // 列表项只有代码块没有文字：不生成空卡片，直接输出独立代码块
-        counter++;
-        items.push(blocks.join(""));
-        continue;
-      }
-
-      const parsed = parseListItemTitleBody(liText);
+      const parsed = parseListItemTitleBody(liInner);
       if (parsed) {
         if (ordered) {
           counter++;
@@ -418,21 +334,16 @@ function transformListBlock(html: string, ordered: boolean): string {
         }
       } else {
         counter++;
-        const normalized = normalizeListItemInner(liText);
+        const normalized = normalizeListItemInner(liInner);
         const strongSplit = normalized.match(/^<strong(?:\s[^>]*)?>([\s\S]*?)<\/strong>\s*([\s\S]+)$/i);
         if (ordered && strongSplit && stripTags(strongSplit[1]) && stripTags(strongSplit[2]).length >= 2) {
           items.push(buildOrderedListCard(counter, stripTags(strongSplit[1]), strongSplit[2].trim()));
         } else {
-          items.push(buildPlainListItem(ordered ? counter : null, liText, ordered));
+          items.push(buildPlainListItem(ordered ? counter : null, liInner, ordered));
         }
       }
-      if (blocks.length > 0) {
-        items.push(blocks.join(""));
-      }
     }
-    // 列表容器用 <div> 而非 <section>：微信对「带背景色的 section 后紧跟 section」
-    // 的渲染不稳定，会把后续内容吸进深色代码块；div 更接近正文块，避免误合并。
-    return `<div style="margin:14px 0 20px;">${items.join("")}</div>`;
+    return `<section style="margin:14px 0 20px;">${items.join("")}</section>`;
   });
 }
 
@@ -683,18 +594,10 @@ function findFirstVisibleCharIndex(html: string): number {
   return -1;
 }
 
-/** 首段首字下沉：微信不支持 ::first-letter，用 float span 模拟。
- *  只作用于正文顶层段落：若首个 <p> 位于 blockquote / 卡片 / 表格等容器内
- *  （如文章以引用或 mp-tip 开头），不做下沉，避免装饰字符落在卡片/引用里。 */
+/** 首段首字下沉：微信不支持 ::first-letter，用 float span 模拟 */
 function applyDropCapToOpeningParagraph(html: string): string {
   const match = html.match(/<p(?:\s[^>]*)?>([\s\S]*?)<\/p>/i);
   if (!match || match.index === undefined) return html;
-
-  // 首个 <p> 之前若存在未闭合的容器标签（blockquote/table/div/section/ol/ul/li 等），跳过
-  const before = html.slice(0, match.index);
-  const containerOpen = (before.match(/<(?:blockquote|table|div|section|ol|ul|li|td|tr|figure)\b/gi) ?? []).length;
-  const containerClose = (before.match(/<\/(?:blockquote|table|div|section|ol|ul|li|td|tr|figure)>/gi) ?? []).length;
-  if (containerOpen > containerClose) return html;
 
   const full = match[0];
   const innerStart = html.indexOf(">", match.index) + 1;
@@ -720,32 +623,11 @@ function applyDropCapToOpeningParagraph(html: string): string {
 }
 
 function buildSummaryBox(inner: string): string {
-  // 总结框内若嵌了列表（AI 违规），把列表拆到框外独立渲染，
-  // 避免浅蓝总结框里再叠浅蓝列表卡片的「卡片套卡片」。
-  const { prose, lists } = splitCalloutContent(inner);
-  const cleanInner = prose.trim();
-  const box =
+  const cleanInner = inner.trim();
+  return (
     `<section style="margin:16px 0 24px;padding:18px 20px;background-color:${SUMMARY.bg};` +
     `border-left:4px solid ${SUMMARY.border};border-radius:0 10px 10px 0;` +
-    `color:${SUMMARY.text};line-height:1.85;font-size:15px;text-align:justify;">${cleanInner}</section>`;
-  return lists ? box + lists : box;
-}
-
-/**
- * 剥离 AI 自创容器（div/section）的视觉样式。
- * AI 常违反格式规范写 `<div style="background-color:…;border-radius:…;padding:…">`
- * 包裹标题/列表，转换后与系统列表卡片（同样浅色底）叠出「卡片套卡片」。
- * 把这类自创卡片的 style 整个移除，使其退化为无样式结构、内容直接平铺；
- * 系统结构（mp-tip / mp-warning / mp-summary / 代码块 data-mp-cb）不受影响。
- * 兼容双引号与单引号 style（AI 两种写法都常见）。
- */
-function stripForeignContainerStyles(html: string): string {
-  return html.replace(
-    /<(div|section)([^>]*?)\sstyle=(["'])([^"']*)\3([^>]*?)>/gi,
-    (full, tag: string, pre: string, _q: string, _style: string, post: string) => {
-      if (/class="mp-|data-mp-cb/.test(full)) return full;
-      return `<${tag}${pre}${post}>`;
-    },
+    `color:${SUMMARY.text};line-height:1.85;font-size:15px;text-align:justify;">${cleanInner}</section>`
   );
 }
 
@@ -753,10 +635,7 @@ function stripForeignContainerStyles(html: string): string {
  * 将文章 HTML 转换为微信公众号兼容的内联样式版本
  */
 export function convertToWechatHtml(html: string): string {
-  // 0. 结构防御：修复未闭合标签 + 提取代码块内被误吞的正文。
-  // AI 生成/精炼可能产生未闭合的代码行（如字符串被截断），微信对未闭合标签的
-  // "自动修复"会把后续内容吞进深色代码块（卡片套卡片、内容重复）——先保证结构闭合。
-  let result = fixWechatHtmlStructure(stripForeignContainerStyles(normalizeCalloutBlocks(wrapSummarySection(html))));
+  let result = normalizeCalloutBlocks(wrapSummarySection(html));
 
   // ====== 0. 首段首字下沉（微信不支持 ::first-letter）======
   result = applyDropCapToOpeningParagraph(result);
@@ -801,8 +680,6 @@ export function convertToWechatHtml(html: string): string {
   );
 
   // ====== 3. blockquote 引用块 ======
-  // 微信不支持 position:absolute（装饰引号会被丢弃或错位），改用 table 双格布局：
-  // 左侧米色竖条 + 右侧浅底正文，装饰引号作为行内 span 渲染。
   result = result.replace(
     /<blockquote>([\s\S]*?)<\/blockquote>/gi,
     (_full, inner: string) => {
@@ -810,14 +687,10 @@ export function convertToWechatHtml(html: string): string {
         .replace(/^\s*<p>/i, "")
         .replace(/<\/p>\s*$/i, "");
       return (
-        `<table style="width:100%;border-collapse:collapse;margin:26px 0;background-color:${WARNING_BG};border-radius:10px;overflow:hidden;">` +
-        `<tr>` +
-        `<td style="width:4px;padding:0;background-color:${WARNING};border:none;"></td>` +
-        `<td style="padding:18px 20px;border:none;color:#5a4a2a;">` +
-        `<p style="margin:0;font-size:15.5px;line-height:1.85;color:#5a4a2a;text-align:justify;">` +
-        `<span style="font-family:Georgia,serif;font-size:26px;line-height:0;color:${WARNING};margin-right:8px;vertical-align:-8px;">&#8220;</span>${cleanInner}` +
-        `</p>` +
-        `</td></tr></table>`
+        `<blockquote style="margin:26px 0;padding:20px 24px 20px 54px;background-color:${WARNING_BG};border-left:4px solid ${WARNING};border-radius:0 10px 10px 0;color:#5a4a2a;font-style:normal;position:relative;">` +
+        `<span style="position:absolute;left:12px;top:2px;font-size:52px;color:rgba(231,169,59,0.25);font-family:Georgia,serif;line-height:1;">&#8220;</span>` +
+        `<p style="margin:0;color:#5a4a2a;font-size:15.5px;line-height:1.85;">${cleanInner}</p>` +
+        `</blockquote>`
       );
     },
   );
@@ -832,16 +705,6 @@ export function convertToWechatHtml(html: string): string {
     return `<h3${attrs} style="font-size:17px;font-weight:600;line-height:1.55;margin:26px 0 10px;color:#2a2a2a;padding-left:12px;border-left:3px solid #e6dccb;">`;
   });
 
-  // ====== 5b. h1 / h4-h6 兜底（AI 偶发输出，统一并入 h2/h3 视觉层级）======
-  result = result.replace(/<h1([^>]*)>/gi, (_full, attrs: string) => {
-    return `<h2${attrs} style="font-size:20px;font-weight:700;line-height:1.5;margin:38px 0 16px;color:#1a1a1a;padding-left:16px;border-left:4px solid ${ACCENT};">`;
-  });
-  result = result.replace(/<\/h1>/gi, "</h2>");
-  result = result.replace(/<h[456]([^>]*)>/gi, (_full, attrs: string) => {
-    return `<h4${attrs} style="font-size:16px;font-weight:600;line-height:1.55;margin:22px 0 10px;color:#2a2a2a;padding-left:10px;border-left:3px solid #e6dccb;">`;
-  });
-  result = result.replace(/<\/h[456]>/gi, "</h4>");
-
   // ====== 6. strong 加粗（移至末尾再次统一处理，此处跳过）======
 
   // ====== 7. hr 分隔线 → 纯文字「线 + ✦ + 线」（不用 table，避免微信画出单元格方框）======
@@ -854,11 +717,6 @@ export function convertToWechatHtml(html: string): string {
       `</section>`
     );
   });
-
-  // ====== 7b. 防御：代码块内误写的列表提取到代码块外（在列表转换前） ======
-  // AI 偶发把配置清单等 <ol>/<ul> 写进代码块，若不先提取，列表卡片会在代码块
-  // 内部生成，微信渲染成「深色代码块套白色卡片」。
-  result = extractListsFromInsideCodeBlocks(result);
 
   // ====== 8. ul 无序列表 → 标题+说明卡片 / 普通列表 ======
   result = transformListBlock(result, false);
@@ -905,11 +763,11 @@ export function convertToWechatHtml(html: string): string {
     const fullBlock = result.slice(startIdx, endIdx);
     const tagEnd = result.indexOf(">", startIdx) + 1;
     const inner = result.slice(tagEnd, endIdx - "</section>".length);
-    const { lang, code } = parseCodeBlockSections(inner);
+    const { code } = parseCodeBlockSections(inner);
     const plainCode = highlightedCodeToPlainText(code);
-    // 语言标签随代码一起重建：renderCodeBlockForWechat 优先按代码内容识别语言
-    // （终端命令不会再被误标为 CSS），识别不出时回退到原标签。
-    replacements.push({ original: fullBlock, replacement: renderCodeBlockForWechat(plainCode, lang) });
+    if (!plainCode.trim()) continue;
+
+    replacements.push({ original: fullBlock, replacement: renderCodeBlockForWechat(plainCode) });
   }
 
   // 按位置倒序替换（避免偏移）
@@ -922,52 +780,40 @@ export function convertToWechatHtml(html: string): string {
   // 与文章整体的卡片风格（蓝色竖线、圆角）脱节。正文里的数据表格（QPS 对比、
   // 参数表等）在此统一加内联样式；thead/tbody/tfoot 一并移除——微信编辑器
   // 对它们的支持不稳定，th/td 足以表达表头与数据行。
-  // 关键修复：table-layout:fixed + word-break，去掉 th 的 white-space:nowrap，
-  // 否则手机宽度下右侧列会被横向截断（微信内无法横向滚动）。
   result = result.replace(/<\/?(?:thead|tbody|tfoot)>/gi, "");
   result = result.replace(/<table(?![^>]*style=)/gi, () => {
-    return `<table style="width:100%;table-layout:fixed;border-collapse:collapse;margin:20px 0;border:1px solid #e5e7eb;word-break:break-word;overflow-wrap:break-word;"`;
+    return `<table style="width:100%;border-collapse:collapse;margin:20px 0;border:1px solid #e5e7eb;"`;
   });
   result = result.replace(/<th(?![^>]*style=)/gi, () => {
-    return `<th style="background-color:${ACCENT};color:#ffffff;padding:10px 12px;font-size:14px;font-weight:600;text-align:left;border:1px solid #c7d2fe;word-break:break-word;overflow-wrap:break-word;line-height:1.5;"`;
+    return `<th style="background-color:${ACCENT};color:#ffffff;padding:10px 12px;font-size:14px;font-weight:600;text-align:left;border:1px solid #c7d2fe;white-space:nowrap;"`;
   });
   result = result.replace(/<td(?![^>]*style=)/gi, () => {
-    return `<td style="padding:10px 12px;font-size:14px;line-height:1.7;color:#3d3d3d;border:1px solid #e5e7eb;word-break:break-word;overflow-wrap:break-word;"`;
+    return `<td style="padding:10px 12px;font-size:14px;line-height:1.7;color:#3d3d3d;border:1px solid #e5e7eb;"`;
   });
-  // 数据表斑马纹：偶数数据行加浅灰底，提升长表格的可读性（仅作用于 12b 生成的表格）
-  result = applyTableZebraStripes(result);
 
   // ====== 13. pre 代码块（老格式降级处理） ——
-  // 如果数据库里有 <pre> 残留（手动编辑未经过 code-highlight），做一次换行转换，
-  // 并对代码文本转义（< > & 会破坏 HTML 结构，导致微信渲染错乱/内容移位）。
+  // 如果数据库里有 <pre> 残留（手动编辑未经过 code-highlight），做一次换行转换
   result = result.replace(
-    /<pre([^>]*)>([\s\S]*?)<\/pre>/gi,
-    (_full, preAttrs: string, block: string) => {
+    /<pre[^>]*>[\s\S]*?<\/pre>/gi,
+    (block) => {
       block = block.replace(
         /(<code[^>]*>)([\s\S]*?)(<\/code>)/gi,
         (_codeMatch, openTag: string, codeContent: string, closeTag: string) => {
-          // 先解码实体再转义：兼容原文已转义（&lt;）与未转义（<）两种情况
-          const decoded = codeContent
-            .replace(/&amp;/g, "&")
-            .replace(/&lt;/g, "<")
-            .replace(/&gt;/g, ">")
-            .replace(/&quot;/g, '"')
-            .replace(/&#39;/g, "'");
-          return openTag + escapeHtmlText(decoded).replace(/\n/g, "<br>") + closeTag;
+          return openTag + codeContent.replace(/\n/g, "<br>") + closeTag;
         },
       );
-      return `<pre${preAttrs}>${block}</pre>`;
+      return block;
     },
   );
 
-  // ====== 14. code 行内代码 → 浅紫底 chip（跳过代码块 section 内的 <code>）======
+  // ====== 14. code 行内代码 → 紫色背景（跳过代码块 section 内的 <code>）======
   const PROTECTED = "__MP_WECHAT_CODE__";
   result = result.replace(
     /<section data-mp-cb-body="1"[^>]*>[\s\S]*?<\/section>/gi,
     (block) => block.replace(/<code/g, `<code data-mp-w="${PROTECTED}"`),
   );
   result = result.replace(/<code>/gi, () => {
-    return `<code style="padding:2px 5px;font-size:0.9em;color:#6d28d9;font-weight:500;background-color:#f3f0ff;border-radius:4px;font-family:SF Mono,Menlo,Consolas,monospace;">`;
+    return `<code style="padding:2px 4px;font-size:0.88em;color:#7c3aed;font-weight:500;font-family:SF Mono,Menlo,monospace;">`;
   });
   // 还原
   result = result.replace(
@@ -978,7 +824,7 @@ export function convertToWechatHtml(html: string): string {
   // ====== 14. p 段落基础样式（跳过代码块 table 内的 <p>）======
   // 由于代码块转换后内部可能没有 <p>，这里只处理顶层段落
   result = result.replace(/<p>/gi, () => {
-    return `<p style="margin:0 0 18px;font-size:15.5px;line-height:1.8;color:#373d45;text-align:justify;letter-spacing:0.02em;">`;
+    return `<p style="margin:0 0 16px;color:#3d3d3d;text-align:justify;">`;
   });
   // 已有 style 的 p 合并
   result = result.replace(
@@ -987,7 +833,7 @@ export function convertToWechatHtml(html: string): string {
       if (existing.includes("margin")) {
         return `<p style="${existing}"${rest}>`;
       }
-      return `<p style="margin:0 0 18px;font-size:15.5px;line-height:1.8;color:#373d45;text-align:justify;letter-spacing:0.02em;${existing}"${rest}>`;
+      return `<p style="margin:0 0 16px;color:#3d3d3d;text-align:justify;${existing}"${rest}>`;
     },
   );
 
@@ -1004,213 +850,4 @@ export function convertToWechatHtml(html: string): string {
   result = applyStrongStyles(result);
 
   return result;
-}
-
-/**
- * 列表转换前防御：把代码块（<pre><code> 或 data-mp-cb）内部误写的 <ol>/<ul>
- * 提取到代码块外。AI 偶尔会把配置清单等列表写进代码块（真标签或经 hljs 转义的
- * &lt;ol&gt; 实体文本），若不提取：真标签会被 transformListBlock 在代码块内部转成
- * 卡片；转义文本会被微信解码成真标签后渲染成列表——两者都会出现「深色代码块套
- * 白色卡片」。提取后列表走正文同一套卡片渲染，与代码块平级。
- * 兼容新旧代码块结构（旧：body 是嵌套 <section>；新：语言标签与代码行是平级 <p>）。
- */
-function extractListsFromInsideCodeBlocks(html: string): string {
-  // 从片段中提取列表（真 <ol>/<ul> 标签 + 转义文本形式的 &lt;ol&gt;），返回清理后的片段与列表
-  const extractLists = (fragment: string): { cleaned: string; lists: string[] } => {
-    const lists: string[] = [];
-    const decode = (encodedList: string) =>
-      encodedList
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&amp;/g, "&")
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'");
-    const cleaned = fragment
-      .replace(/<ol[\s\S]*?<\/ol>|<ul[\s\S]*?<\/ul>/gi, (listHtml) => {
-        lists.push(listHtml);
-        return "";
-      })
-      .replace(/&lt;ol[\s\S]*?&lt;\/ol&gt;|&lt;ul[\s\S]*?&lt;\/ul&gt;/gi, (encodedList) => {
-        lists.push(decode(encodedList));
-        return "";
-      });
-    return { cleaned, lists };
-  };
-
-  // 1) 老格式 <pre> 内嵌列表
-  const result = html.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (_full, inner: string) => {
-    const { cleaned, lists } = extractLists(inner);
-    if (lists.length === 0) return _full;
-    return `<pre>${cleaned}</pre>${lists.join("")}`;
-  });
-
-  // 2) data-mp-cb 代码块内嵌列表（对代码块整体提取，不依赖 body section 结构）
-  const cbOpen = /<section\s+data-mp-cb="1"/gi;
-  const output: string[] = [];
-  let lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = cbOpen.exec(result)) !== null) {
-    const start = m.index;
-    const end = findSectionBlockEnd(result, start);
-    if (end === -1) {
-      cbOpen.lastIndex = start + 1;
-      continue;
-    }
-    const block = result.slice(start, end);
-    const { cleaned: blockCleaned, lists } = extractLists(block);
-    if (lists.length === 0) {
-      output.push(result.slice(lastIndex, start), block);
-      lastIndex = end;
-      cbOpen.lastIndex = end;
-      continue;
-    }
-    output.push(result.slice(lastIndex, start));
-    output.push(blockCleaned);
-    output.push(lists.join(""));
-    lastIndex = end;
-    cbOpen.lastIndex = end;
-  }
-  output.push(result.slice(lastIndex));
-  return output.join("");
-}
-
-/**
- * HTML 标签闭合修复（防御）：用栈扫描把未闭合的标签补上闭合、多余的闭合丢弃，
- * 确保推送微信的 HTML 结构永远闭合——微信对未闭合标签的"自动修复"会把后续内容
- * 吞进错误容器（深色代码块套卡片、内容重复），这是用户线上问题的根因之一。
- */
-function fixUnclosedTags(html: string): string {
-  const VOID = new Set(["br", "img", "hr", "meta", "link", "input", "wbr", "source", "col"]);
-  // <p> 遇到这些标签时按 HTML 规范自动闭合（新 <p> 或块级容器/列表/表格等）
-  const P_CLOSING_TAGS = new Set([
-    "p", "div", "section", "h1", "h2", "h3", "h4", "h5", "h6",
-    "ul", "ol", "li", "table", "thead", "tbody", "tr", "td", "th",
-    "blockquote", "pre", "figure", "figcaption", "address", "hr",
-  ]);
-  const re = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)(\/?)>/g;
-  const stack: string[] = [];
-  const out: string[] = [];
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html)) !== null) {
-    const closeSlash = m[1];
-    const tag = m[2].toLowerCase();
-    const selfClose = m[4] === "/";
-    const token = m[0];
-    out.push(html.slice(last, m.index));
-
-    if (VOID.has(tag) || selfClose) {
-      out.push(token);
-    } else if (!closeSlash) {
-      // <p> 是自动闭合标签：遇到新 <p> 或块级标签时，先闭合栈内未闭合的 <p>（含其上的标签）。
-      // 否则未闭合的 <p> 会把后续代码块/列表等块级内容吞进去，导致结构错位。
-      if (P_CLOSING_TAGS.has(tag)) {
-        const idx = stack.lastIndexOf("p");
-        if (idx !== -1) {
-          for (let i = stack.length - 1; i > idx; i--) out.push(`</${stack[i]}>`);
-          out.push(`</p>`);
-          stack.length = idx;
-        }
-      }
-      stack.push(tag);
-      out.push(token);
-    } else {
-      const idx = stack.lastIndexOf(tag);
-      if (idx === -1) {
-        // 多余的闭合标签：丢弃（避免干扰结构）
-      } else {
-        for (let i = stack.length - 1; i > idx; i--) out.push(`</${stack[i]}>`);
-        stack.length = idx;
-        out.push(token);
-      }
-    }
-    last = m.index + token.length;
-  }
-  out.push(html.slice(last));
-  for (let i = stack.length - 1; i >= 0; i--) out.push(`</${stack[i]}>`);
-  return out.join("");
-}
-
-/**
- * 把代码块（data-mp-cb section）内部被误吞的正文块（无 data-mp-cb 属性的
- * p/h2/section 等）提取到代码块外。配合 fixUnclosedTags：未闭合代码行会吞掉
- * 后续正文，闭合修复后这些正文还留在代码块内，需移出避免深色代码块里出现白字。
- */
-function extractForeignFromCodeBlocks(html: string): string {
-  const cbOpen = /<section\s+data-mp-cb="1"/gi;
-  const output: string[] = [];
-  let lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = cbOpen.exec(html)) !== null) {
-    const start = m.index;
-    let depth = 1;
-    let pos = html.indexOf(">", start) + 1;
-    let end = -1;
-    const openRe = /<section\b/gi;
-    const closeRe = /<\/section>/gi;
-    while (depth > 0 && pos < html.length) {
-      openRe.lastIndex = pos;
-      closeRe.lastIndex = pos;
-      const no = openRe.exec(html);
-      const nc = closeRe.exec(html);
-      if (!nc) break;
-      if (no && no.index < nc.index) {
-        depth++;
-        pos = no.index + no[0].length;
-      } else {
-        depth--;
-        if (depth === 0) {
-          end = nc.index + nc[0].length;
-          break;
-        }
-        pos = nc.index + nc[0].length;
-      }
-    }
-    if (end === -1) {
-      output.push(html.slice(lastIndex, start));
-      lastIndex = start + 1;
-      cbOpen.lastIndex = lastIndex;
-      continue;
-    }
-    const block = html.slice(start, end);
-    // 旧结构（body 是嵌套 <section>）：body 内都是代码行，不在此处提取（step 12 会重建）
-    if (/<section\s+data-mp-cb-body/.test(block)) {
-      output.push(html.slice(lastIndex, start), block);
-      lastIndex = end;
-      cbOpen.lastIndex = end;
-      continue;
-    }
-    let cleaned = block;
-    const extracted: string[] = [];
-    // 1) 提取嵌套在代码块内的另一个代码块（AI 缺闭合 </section> 时，后续代码块会被吞进前一个）
-    const nestedCbPositions = [...cleaned.matchAll(/<section\s+data-mp-cb="1"/g)];
-    for (let i = nestedCbPositions.length - 1; i >= 1; i--) {
-      const ns = nestedCbPositions[i].index;
-      const ne = findSectionBlockEnd(cleaned, ns);
-      if (ne !== -1) {
-        extracted.push(cleaned.slice(ns, ne));
-        cleaned = cleaned.slice(0, ns) + cleaned.slice(ne);
-      }
-    }
-    // 2) 提取代码块内被误吞的正文块（无 data-mp-cb 属性的块级元素）
-    cleaned = cleaned.replace(
-      /<(?:p|h[1-6]|div|blockquote|table|ul|ol)(?![^>]*data-mp-cb)[\s\S]*?<\/(?:p|h[1-6]|div|blockquote|table|ul|ol)>/gi,
-      (foreignHtml) => {
-        extracted.push(foreignHtml);
-        return "";
-      },
-    );
-    output.push(html.slice(lastIndex, start));
-    output.push(cleaned);
-    if (extracted.length > 0) output.push(extracted.join(""));
-    lastIndex = end;
-    cbOpen.lastIndex = end;
-  }
-  output.push(html.slice(lastIndex));
-  return output.join("");
-}
-
-/** 结构防御管线：闭合未闭合标签 → 提取代码块内被吞的正文 */
-export function fixWechatHtmlStructure(html: string): string {
-  return extractForeignFromCodeBlocks(fixUnclosedTags(html));
 }

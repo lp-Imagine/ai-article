@@ -145,19 +145,6 @@ export function decodeEntitiesInHtml(html: string): string {
   });
 }
 
-/** HTML 转义文本节点中的 < > &，防止代码内容被解析成标签导致 DOM 错乱 */
-function escapeTextNodes(html: string): string {
-  return html.replace(/(<[^>]*>)|([^<]+)/g, (match, tag: string | undefined, text: string | undefined) => {
-    if (tag) return tag;
-    if (text) return escapeHtmlText(text);
-    return match;
-  });
-}
-
-function escapeHtmlText(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
 /** 将文本节点中的普通空格替换为不换行空格，避免微信吞掉 span 之间的空白 */
 export function preserveSpacesInHtml(html: string): string {
   return html.replace(/(<[^>]*>)|([^<]+)/g, (match, tag: string | undefined, text: string | undefined) => {
@@ -211,18 +198,25 @@ export function findSectionBlockEnd(html: string, openTagStart: number): number 
 
 /** 解析代码块内部的「语言栏 + 代码区」两段内容 */
 export function parseCodeBlockSections(inner: string): { lang: string; code: string } {
-  const langMatch = inner.match(/<(?:section|p)\s+data-mp-cb-lang="1"[^>]*>([\s\S]*?)<\/(?:section|p)>/i);
-  const lang = langMatch?.[1]?.replace(/<[^>]+>/g, "").trim() || "Plain Text";
+  const sections: string[] = [];
+  let pos = 0;
 
-  // 新结构：多个平级 <p data-mp-cb-body> 行（微信兼容的单层代码块）
-  const bodyPMatches = [...inner.matchAll(/<p\s+data-mp-cb-body="1"[^>]*>([\s\S]*?)<\/p>/gi)];
-  if (bodyPMatches.length > 0) {
-    return { lang, code: bodyPMatches.map((m) => m[1]).join("\n") };
+  while (pos < inner.length) {
+    const slice = inner.slice(pos);
+    const openMatch = slice.match(/<section[^>]*>/i);
+    if (!openMatch || openMatch.index === undefined) break;
+
+    const absStart = pos + openMatch.index + openMatch[0].length;
+    const closeIdx = inner.indexOf("</section>", absStart);
+    if (closeIdx === -1) break;
+
+    sections.push(inner.slice(absStart, closeIdx));
+    pos = closeIdx + "</section>".length;
   }
 
-  // 旧结构：单个 <section data-mp-cb-body> 包裹多行
-  const bodySection = inner.match(/<section\s+data-mp-cb-body="1"[^>]*>([\s\S]*?)<\/section>/i);
-  return { lang, code: bodySection?.[1] ?? inner };
+  const lang = sections[0]?.replace(/<[^>]+>/g, "").trim() || "Plain Text";
+  const code = sections[1] ?? inner;
+  return { lang, code };
 }
 
 function formatLangLabel(language: string): string {
@@ -263,10 +257,6 @@ function inferLanguage(code: string): string | null {
 }
 
 function resolveLanguage(code: string, hint?: string): string {
-  // 终端命令优先识别为 bash：hljs 的 auto 检测会误判（npx → CSS、git → Python），
-  // 且比显式 hint 更可信（AI 常给终端命令打 language-css 之类的错误标签）。
-  if (isShellCommand(code)) return "bash";
-
   const normalizedHint = hint?.toLowerCase().replace(/^language-/, "").trim();
   if (normalizedHint && hljs.getLanguage(normalizedHint)) {
     return normalizedHint;
@@ -294,9 +284,7 @@ export function anchorSpacesBetweenTags(html: string): string {
 }
 
 function normalizeHighlightHtml(html: string): string {
-  // decode 后必须对文本节点重新转义（< > &），否则代码里的 <div>、< 1 等
-  // 会被当 HTML 标签解析，造成 DOM 错乱与内容错位。
-  return preserveSpacesInHtml(anchorSpacesBetweenTags(escapeTextNodes(decodeEntitiesInHtml(html))));
+  return preserveSpacesInHtml(anchorSpacesBetweenTags(decodeEntitiesInHtml(html)));
 }
 
 /** 将 span 之间的空白合并到前一个 span 内部（微信不会吞 span 内文字） */
@@ -360,13 +348,10 @@ function alignHighlightToPlain(plainLine: string, highlightedHtml: string): stri
 
   const flush = () => {
     if (!buffer) return;
-    // 关键：代码中的 < > & 必须转义，否则微信/浏览器会把代码里的
-    // `<div>`、`< 1` 等当 HTML 标签解析，导致 DOM 错乱、内容被拆散移位甚至重复。
-    const escaped = escapeHtmlText(buffer);
     if (bufferStyle) {
-      result += `<span style="${bufferStyle}">${escaped}</span>`;
+      result += `<span style="${bufferStyle}">${buffer}</span>`;
     } else {
-      result += `<span>${escaped}</span>`;
+      result += `<span>${buffer}</span>`;
     }
     buffer = "";
     bufferStyle = null;
@@ -406,11 +391,11 @@ function highlightSourceLine(line: string, language: string): string {
   }
 }
 
-/** 微信专用：逐行渲染，缩进用 padding-left，空格用全角字符（不换行，长行靠容器横向滚动） */
+/** 微信专用：逐行渲染，缩进用 padding-left，空格用全角字符 */
 function withWechatLineBreaks(plainCode: string, language: string): string {
   return plainCode.split("\n").map((plainLine) => {
     if (!plainLine.trim()) {
-      return '<p data-mp-cb-body="1" style="margin:0;height:1em;line-height:1.65;font-size:13px;"></p>';
+      return '<p style="margin:0;height:1em;line-height:1.65;font-size:13px;"></p>';
     }
 
     const indent = plainLine.match(/^(\s*)/)?.[1] ?? "";
@@ -421,7 +406,7 @@ function withWechatLineBreaks(plainCode: string, language: string): string {
     const highlighted = alignHighlightToPlain(codeLine, rawHighlight);
 
     return (
-      `<p data-mp-cb-body="1" style="margin:0;padding:0 0 0 ${indentPx}px;line-height:1.65;font-size:13px;` +
+      `<p style="margin:0;padding:0 0 0 ${indentPx}px;line-height:1.65;font-size:13px;` +
       `font-family:SF Mono,Menlo,Consolas,monospace;white-space:nowrap;color:${CODE_THEME.text};">${highlighted}</p>`
     );
   }).join("");
@@ -429,16 +414,6 @@ function withWechatLineBreaks(plainCode: string, language: string): string {
 
 function buildCodeBlockForWechat(rawCode: string, langHint?: string): string {
   const decoded = decodeHtmlEntities(rawCode);
-  const trimmed = decoded.replace(/\s+/g, " ").trim();
-  if (!trimmed) {
-    // 空代码块：渲染占位提示，避免微信里出现「只有语言标签的黑块」
-    const t = CODE_THEME;
-    return codeBlockShell(
-      "代码示例",
-      `<p style="margin:0;padding:10px 0;text-align:center;color:${t.headerText};font-size:13px;">（此处无代码内容）</p>`,
-      "",
-    );
-  }
   const language = resolveLanguage(decoded, langHint);
   const bodyHtml = withWechatLineBreaks(decoded, language);
   const langLabel = formatLangLabel(language);
@@ -498,25 +473,6 @@ function protectDataMpCodeBlocks(html: string): { html: string; blocks: string[]
 }
 
 /**
- * 判断代码是否为「终端命令 / Shell 脚本」。
- * 放在语言识别最前面：highlight.js 的 auto 检测会把
- * `npx ts-migrate --transforms ...` 这类命令误判成 CSS（-- 与 transforms 命中 CSS 特征），
- * 把 git 命令误判成 Python，导致微信文章代码块语言标签与内容不符。
- */
-function isShellCommand(code: string): boolean {
-  if (!code || !code.trim()) return false;
-
-  const firstLine = code.trimStart().split(/\r?\n/)[0] ?? "";
-  // 以常见命令名开头（排除 YAML 的 `cd: xxx`、`key: value` 等误报）
-  const cmdStartRe =
-    /^\s*(?:sudo\s+)?(?:npx|npm|yarn|pnpm|bun|bunx|nvm|node|deno|git|docker|docker-compose|kubectl|helm|terraform|curl|wget|ssh|scp|rsync|cd|ls|cat|grep|sed|awk|find|xargs|chmod|chown|mkdir|rmdir|rm|cp|mv|touch|tar|unzip|zip|gzip|make|cmake|cargo|go\s+run|go\s+build|rustc|python|python3|pip|pip3|poetry|uv|psql|mysql|sqlite3|redis-cli|mongosh|java|mvn|gradle|echo|printf|export|env|which|whereis|history|clear|alias|source|watch|time|perl|php|ruby|gem|brew|apt|apt-get|yum|dnf|pacman|systemctl|service|ps|top|htop|df|du|free|ip|ifconfig|netstat|ss|ping|traceroute|dig|nslookup|openssl|jq|tree|head|tail|sort|uniq|wc|cut|tr|paste|join|comm|diff|patch|zcat|less|more|vim|vi|nano)\b(?!\s*[:=])/i;
-  if (cmdStartRe.test(firstLine)) return true;
-
-  // 含典型 shell 操作符（管道 / 重定向 / 命令串联 / 变量展开），视为脚本片段
-  return /(?:\|\s*[a-z]+|&&|\|\||\b2>&1\b|\$\{|\b>\s*\S+\s*$|`[^`]+`)/i.test(firstLine);
-}
-
-/**
  * 将 hljs 输出的 class-based HTML 转换为内联样式 HTML
  */
 function classesToInlineStyles(hljsHtml: string): string {
@@ -547,19 +503,12 @@ function withLineBreaks(inlineHtml: string): string {
     .join("");
 }
 
-function codeBlockShell(
-  langLabel: string,
-  bodyHtml: string,
-  codeSourceAttr: string,
-): string {
+function codeBlockShell(langLabel: string, bodyHtml: string, codeSourceAttr: string): string {
   const t = CODE_THEME;
-  // 单层 section + 平级 p（语言标签条 + 每行代码）：微信对「嵌套 section」的清洗
-  // 不稳定（会把后续兄弟内容吸进深色容器、token 拆行），平级 p 结构更接近正文块。
-  // 长行靠容器横向滚动（overflow-x:auto），不再用嵌套 section 做滚动容器。
   return [
-    `<section data-mp-cb="1"${codeSourceAttr} style="border-radius:8px;border:1px solid ${t.border};background-color:${t.bg};overflow-x:auto;-webkit-overflow-scrolling:touch;margin:16px 0;font-family:SF Mono,Menlo,Consolas,monospace;">`,
-    `<p data-mp-cb-lang="1" style="margin:0;padding:8px 14px;background-color:${t.headerBg};color:${t.headerText};font-size:12px;letter-spacing:0.05em;border-bottom:1px solid ${t.border};font-weight:600;white-space:nowrap;">${langLabel}</p>`,
-    bodyHtml,
+    `<section data-mp-cb="1"${codeSourceAttr} style="border-radius:8px;border:1px solid ${t.border};background-color:${t.bg};overflow:hidden;margin:16px 0;font-family:SF Mono,Menlo,Consolas,monospace;">`,
+    `<section data-mp-cb-lang="1" style="padding:8px 14px;background-color:${t.headerBg};color:${t.headerText};font-size:12px;letter-spacing:0.05em;border-bottom:1px solid ${t.border};text-align:left;font-weight:600;">${langLabel}</section>`,
+    `<section data-mp-cb-body="1" style="padding:12px 14px;font-size:13px;line-height:1.6;color:${t.text};max-height:420px;overflow:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;">${bodyHtml}</section>`,
     "</section>",
   ].join("");
 }
