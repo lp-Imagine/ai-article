@@ -48,11 +48,11 @@ describe("renderCodeBlockForWechat（微信代码块）", () => {
     );
 
     expect(html).toContain("white-space:nowrap");
-    expect(html).toContain("overflow:auto");
-    expect(html).toContain("max-height:420px");
+    expect(html).toContain("overflow-x:auto");
     expect(html).toContain("-webkit-overflow-scrolling:touch");
     expect(html).not.toContain("white-space:pre-wrap");
-    expect(html).toMatch(/data-mp-cb-lang="1"[^>]*>Bash<\/section>/);
+    expect(html).not.toContain("max-height:420px");
+    expect(html).toMatch(/data-mp-cb-lang="1"[^>]*>Bash<\/p>/);
   });
 
   it("renders a placeholder for empty code instead of a bare black box", () => {

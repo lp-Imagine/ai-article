@@ -211,25 +211,18 @@ export function findSectionBlockEnd(html: string, openTagStart: number): number 
 
 /** 解析代码块内部的「语言栏 + 代码区」两段内容 */
 export function parseCodeBlockSections(inner: string): { lang: string; code: string } {
-  const sections: string[] = [];
-  let pos = 0;
+  const langMatch = inner.match(/<(?:section|p)\s+data-mp-cb-lang="1"[^>]*>([\s\S]*?)<\/(?:section|p)>/i);
+  const lang = langMatch?.[1]?.replace(/<[^>]+>/g, "").trim() || "Plain Text";
 
-  while (pos < inner.length) {
-    const slice = inner.slice(pos);
-    const openMatch = slice.match(/<section[^>]*>/i);
-    if (!openMatch || openMatch.index === undefined) break;
-
-    const absStart = pos + openMatch.index + openMatch[0].length;
-    const closeIdx = inner.indexOf("</section>", absStart);
-    if (closeIdx === -1) break;
-
-    sections.push(inner.slice(absStart, closeIdx));
-    pos = closeIdx + "</section>".length;
+  // 新结构：多个平级 <p data-mp-cb-body> 行（微信兼容的单层代码块）
+  const bodyPMatches = [...inner.matchAll(/<p\s+data-mp-cb-body="1"[^>]*>([\s\S]*?)<\/p>/gi)];
+  if (bodyPMatches.length > 0) {
+    return { lang, code: bodyPMatches.map((m) => m[1]).join("\n") };
   }
 
-  const lang = sections[0]?.replace(/<[^>]+>/g, "").trim() || "Plain Text";
-  const code = sections[1] ?? inner;
-  return { lang, code };
+  // 旧结构：单个 <section data-mp-cb-body> 包裹多行
+  const bodySection = inner.match(/<section\s+data-mp-cb-body="1"[^>]*>([\s\S]*?)<\/section>/i);
+  return { lang, code: bodySection?.[1] ?? inner };
 }
 
 function formatLangLabel(language: string): string {
@@ -417,7 +410,7 @@ function highlightSourceLine(line: string, language: string): string {
 function withWechatLineBreaks(plainCode: string, language: string): string {
   return plainCode.split("\n").map((plainLine) => {
     if (!plainLine.trim()) {
-      return '<p style="margin:0;height:1em;line-height:1.65;font-size:13px;"></p>';
+      return '<p data-mp-cb-body="1" style="margin:0;height:1em;line-height:1.65;font-size:13px;"></p>';
     }
 
     const indent = plainLine.match(/^(\s*)/)?.[1] ?? "";
@@ -428,7 +421,7 @@ function withWechatLineBreaks(plainCode: string, language: string): string {
     const highlighted = alignHighlightToPlain(codeLine, rawHighlight);
 
     return (
-      `<p style="margin:0;padding:0 0 0 ${indentPx}px;line-height:1.65;font-size:13px;` +
+      `<p data-mp-cb-body="1" style="margin:0;padding:0 0 0 ${indentPx}px;line-height:1.65;font-size:13px;` +
       `font-family:SF Mono,Menlo,Consolas,monospace;white-space:nowrap;color:${CODE_THEME.text};">${highlighted}</p>`
     );
   }).join("");
@@ -560,12 +553,13 @@ function codeBlockShell(
   codeSourceAttr: string,
 ): string {
   const t = CODE_THEME;
-  // 微信场景与预览共用同一结构：正文横向滚动（white-space:nowrap + overflow:auto），
-  // 长行可左右滑动查看完整代码；max-height 限制纵向高度避免撑爆文章。
+  // 单层 section + 平级 p（语言标签条 + 每行代码）：微信对「嵌套 section」的清洗
+  // 不稳定（会把后续兄弟内容吸进深色容器、token 拆行），平级 p 结构更接近正文块。
+  // 长行靠容器横向滚动（overflow-x:auto），不再用嵌套 section 做滚动容器。
   return [
-    `<section data-mp-cb="1"${codeSourceAttr} style="border-radius:8px;border:1px solid ${t.border};background-color:${t.bg};overflow:hidden;margin:16px 0;font-family:SF Mono,Menlo,Consolas,monospace;">`,
-    `<section data-mp-cb-lang="1" style="padding:8px 14px;background-color:${t.headerBg};color:${t.headerText};font-size:12px;letter-spacing:0.05em;border-bottom:1px solid ${t.border};text-align:left;font-weight:600;">${langLabel}</section>`,
-    `<section data-mp-cb-body="1" style="padding:12px 14px;font-size:13px;line-height:1.6;color:${t.text};max-height:420px;overflow:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;">${bodyHtml}</section>`,
+    `<section data-mp-cb="1"${codeSourceAttr} style="border-radius:8px;border:1px solid ${t.border};background-color:${t.bg};overflow-x:auto;-webkit-overflow-scrolling:touch;margin:16px 0;font-family:SF Mono,Menlo,Consolas,monospace;">`,
+    `<p data-mp-cb-lang="1" style="margin:0;padding:8px 14px;background-color:${t.headerBg};color:${t.headerText};font-size:12px;letter-spacing:0.05em;border-bottom:1px solid ${t.border};font-weight:600;white-space:nowrap;">${langLabel}</p>`,
+    bodyHtml,
     "</section>",
   ].join("");
 }

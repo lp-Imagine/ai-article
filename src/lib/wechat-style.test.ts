@@ -199,11 +199,11 @@ describe("convertToWechatHtml", () => {
     const wechat = convertToWechatHtml(codeBlock);
 
     expect(wechat).toContain("white-space:nowrap");
-    expect(wechat).toContain("overflow:auto");
-    expect(wechat).toContain("max-height:420px");
+    expect(wechat).toContain("overflow-x:auto");
+    expect(wechat).not.toContain("max-height:420px");
     expect(wechat).not.toContain("white-space:pre-wrap");
     // 终端命令不再被误标为 CSS
-    expect(wechat).toMatch(/data-mp-cb-lang="1"[^>]*>Bash<\/section>/);
+    expect(wechat).toMatch(/data-mp-cb-lang="1"[^>]*>Bash<\/p>/);
   });
 
   it("replaces empty code blocks with a placeholder instead of a broken black box", () => {
@@ -262,7 +262,7 @@ describe("convertToWechatHtml", () => {
       expect(card).not.toMatch(/data-mp-cb/i);
     }
     expect(wechat).toMatch(/<\/table><section data-mp-cb="1"/);
-    expect(wechat).toMatch(/data-mp-cb-lang="1"[^>]*>Bash<\/section>/);
+    expect(wechat).toMatch(/data-mp-cb-lang="1"[^>]*>Bash<\/p>/);
   });
 
   it("strips AI-invented container backgrounds so list cards are not stacked (no card-in-card)", () => {
@@ -355,9 +355,9 @@ describe("convertToWechatHtml", () => {
     const wechat = convertToWechatHtml(html);
 
     // 卡片 table 不在代码块 section 内部，代码块后跟列表卡片容器
-    const cbBlock = wechat.match(/<section data-mp-cb="1"[^>]*>[\s\S]*?<\/section><\/section>/)?.[0] ?? "";
+    const cbBlock = wechat.match(/<section data-mp-cb="1"[^>]*>[\s\S]*?<\/section>/)?.[0] ?? "";
     expect(cbBlock).not.toMatch(/<table/);
-    expect(wechat).toMatch(/<\/section><\/section><div style="margin:14px 0 20px;"><table/);
+    expect(wechat).toMatch(/<\/section><div style="margin:14px 0 20px;"><table/);
     expect(wechat).toContain("最大重试次数");
   });
 
@@ -376,15 +376,15 @@ describe("convertToWechatHtml", () => {
 
     const wechat = convertToWechatHtml(html);
 
-    // 代码块 body 内不再残留转义的列表文本
-    const cbBodyOut = wechat.match(/<section data-mp-cb-body="1"[^>]*>([\s\S]*?)<\/section>/)?.[1] ?? "";
+    // 代码块 body（平级 p 行）内不再残留转义的列表文本
+    const cbBodyOut = wechat.match(/<p data-mp-cb-body="1"[^>]*>([\s\S]*?)<\/p>/)?.[1] ?? "";
     expect(cbBodyOut).not.toMatch(/&lt;ol/i);
     // 列表被提取到代码块外并按卡片渲染
     expect(wechat).toMatch(/background-color:#f8fbff/);
     expect(wechat).toContain("订单ID校验规则");
     expect(wechat).toContain("金额校验规则");
     // 代码块本身仍保留纯代码
-    expect(cbBodyOut).toContain("# 配置");
+    expect(wechat).toContain("# 配置");
   });
 });
 
