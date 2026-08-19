@@ -327,6 +327,39 @@ describe("convertToWechatHtml", () => {
     expect(wechat).toMatch(/<section style="margin:16px 0 24px;padding:18px 20px;background-color:#f0f4ff;/);
     expect(wechat).toMatch(/border-left:4px solid #3e7bfa;background-color:#f8fbff/);
   });
+
+  it("extracts lists mistakenly written inside code blocks (no dark-card-wraps-white-card)", () => {
+    // AI 违规把配置清单写进 <pre><code>
+    const html =
+      "<p>伪代码示例：</p>" +
+      "<pre><code class=\"language-python\"># 重试配置\nmax_retries = 3</code></pre>" +
+      "<ol><li><strong>最大重试次数</strong>3次</li><li><strong>基础重试间隔</strong>1-3秒</li></ol>";
+
+    const wechat = convertToWechatHtml(html);
+
+    // 列表卡片在代码块外（兄弟关系），代码块内不出现卡片
+    expect(wechat).toMatch(/<\/pre><section style="margin:14px 0 20px;"><table/);
+    expect(wechat).toMatch(/background-color:#f8fbff/);
+    expect(wechat).toContain("最大重试次数");
+  });
+
+  it("extracts lists from inside highlighted code block bodies", () => {
+    const html =
+      '<section data-mp-cb="1" style="background-color:#0d1117;">' +
+      '<section data-mp-cb-lang="1">Python</section>' +
+      '<section data-mp-cb-body="1" style="padding:12px;">' +
+      '<p style="margin:0;"># 配置</p>' +
+      "<ul><li><strong>最大重试次数</strong>3次</li><li><strong>基础重试间隔</strong>1-3秒</li></ul>" +
+      "</section></section>";
+
+    const wechat = convertToWechatHtml(html);
+
+    // 卡片 table 不在代码块 section 内部，代码块后跟列表卡片容器
+    const cbBlock = wechat.match(/<section data-mp-cb="1"[^>]*>[\s\S]*?<\/section><\/section>/)?.[0] ?? "";
+    expect(cbBlock).not.toMatch(/<table/);
+    expect(wechat).toMatch(/<\/section><\/section><section style="margin:14px 0 20px;"><table/);
+    expect(wechat).toContain("最大重试次数");
+  });
 });
 
 describe("normalizeArticleMarkup", () => {

@@ -850,6 +850,11 @@ export function convertToWechatHtml(html: string): string {
     );
   });
 
+  // ====== 7b. 防御：代码块内误写的列表提取到代码块外（在列表转换前） ======
+  // AI 偶发把配置清单等 <ol>/<ul> 写进代码块，若不先提取，列表卡片会在代码块
+  // 内部生成，微信渲染成「深色代码块套白色卡片」。
+  result = extractListsFromInsideCodeBlocks(result);
+
   // ====== 8. ul 无序列表 → 标题+说明卡片 / 普通列表 ======
   result = transformListBlock(result, false);
 
@@ -994,4 +999,62 @@ export function convertToWechatHtml(html: string): string {
   result = applyStrongStyles(result);
 
   return result;
+}
+
+/**
+ * 列表转换前防御：把代码块（<pre><code> 或 data-mp-cb body）内部误写的 <ol>/<ul>
+ * 提取到代码块外。AI 偶尔会把配置清单等列表写进代码块，若不提取，
+ * transformListBlock 会在代码块内部生成列表卡片，微信渲染成「深色代码块套白色
+ * 卡片」；提取后列表走正文同一套卡片渲染，与代码块平级。
+ */
+function extractListsFromInsideCodeBlocks(html: string): string {
+  // 1) 老格式 <pre> 内嵌列表（直接拼在 pre 后，列表由 transformListBlock 统一转卡片并包裹）
+  const result = html.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (_full, inner: string) => {
+    const extracted: string[] = [];
+    const cleaned = inner.replace(/<ol[\s\S]*?<\/ol>|<ul[\s\S]*?<\/ul>/gi, (listHtml) => {
+      extracted.push(listHtml);
+      return "";
+    });
+    if (extracted.length === 0) return _full;
+    return `<pre>${cleaned}</pre>${extracted.join("")}`;
+  });
+
+  // 2) data-mp-cb 代码块 body 内嵌列表（findSectionBlockEnd 能定位的正常结构）
+  const cbOpen = /<section\s+data-mp-cb="1"/gi;
+  const output: string[] = [];
+  let lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = cbOpen.exec(result)) !== null) {
+    const start = m.index;
+    const end = findSectionBlockEnd(result, start);
+    if (end === -1) {
+      cbOpen.lastIndex = start + 1;
+      continue;
+    }
+    const block = result.slice(start, end);
+    const bodyMatch = block.match(/<section\s+data-mp-cb-body="1"[^>]*>([\s\S]*?)<\/section>/i);
+    const body = bodyMatch?.[1] ?? "";
+    if (!/<ol[\s>]|<ul[\s>]/i.test(body)) {
+      output.push(result.slice(lastIndex, start), block);
+      lastIndex = end;
+      cbOpen.lastIndex = end;
+      continue;
+    }
+    const extracted: string[] = [];
+    const cleanedBody = body.replace(/<ol[\s\S]*?<\/ol>|<ul[\s\S]*?<\/ul>/gi, (listHtml) => {
+      extracted.push(listHtml);
+      return "";
+    });
+    const bodyOpen = block.match(/<section\s+data-mp-cb-body="1"[^>]*>/i)?.[0] ?? '<section data-mp-cb-body="1">';
+    output.push(result.slice(lastIndex, start));
+    output.push(block.replace(bodyMatch![0], `${bodyOpen}${cleanedBody}</section>`));
+    // 提取出的列表直接拼在代码块后，由 transformListBlock 统一转卡片并包裹
+    if (extracted.length > 0) {
+      output.push(extracted.join(""));
+    }
+    lastIndex = end;
+    cbOpen.lastIndex = end;
+  }
+  output.push(result.slice(lastIndex));
+  return output.join("");
 }
