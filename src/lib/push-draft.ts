@@ -287,6 +287,8 @@ export async function pushArticleToWechatDraft(input: {
     data: {
       status: "pushed",
       wechatDraftId: draftId,
+      // 保存推送到微信的「格式处理后的完整 HTML」，供排查微信渲染差异时查看/复制
+      wechatHtml: contentWithImages,
     },
   });
 
