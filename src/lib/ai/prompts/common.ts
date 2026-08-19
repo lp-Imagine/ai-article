@@ -252,15 +252,17 @@ export const ARTICLE_HTML_FORMAT_RULES = `
 
 - 正文步骤：<ol><li><strong>标题</strong>说明</li></ol>
 - 并列要点：<ul><li><strong>标题</strong>说明</li></ul>
-- mp-tip：div 内只能有单个 <ol>，li 结构与正文 ol 完全相同；禁止 ul、多个 p、嵌套 li、写「实用技巧」等标题
+- ⚠️ 禁止列表嵌套（防卡片套卡片）：<ul>/<ol> 的 <li> 里禁止再出现 <ul>/<ol>；需要分层/分组的配置项，一律写成一层 <ul>/<ol>，每项用 <strong>2-8字标题</strong> 区分，绝不在列表里套列表
+- ⚠️ 代码块必须是正文顶层的独立块：<pre><code class="language-真实语言">…</code></pre>，语言与内容匹配（python/javascript/typescript/bash/shell/sql/json/html/css 等，终端命令用 bash/shell）；禁止把 <pre>/<code> 放进 <li>、mp-tip、mp-warning、mp-summary、blockquote 等任何列表/卡片容器内；列表项和卡片里只写文字说明，不写代码；有代码的内容直接用独立代码块，不要同时用列表/卡片格式包裹
+- mp-tip：div 内只能有单个 <ol>，li 结构与正文 ol 完全相同；禁止 ul、多个 p、嵌套 li、嵌套列表、写「实用技巧」等标题
 - mp-warning：div 内只用 <p>...</p>；禁止列表和「注意」标题
 - 总结：<h2>总结</h2> + <div class="mp-summary"><p>...</p></div>
 - 引用：<blockquote><p>...</p></blockquote>
 
-列表项统一写法：<li><strong>2-8字标题</strong>说明正文</li>（标题与说明同一行，不用 br，li 内不用 p）
+列表项统一写法：<li><strong>2-8字标题</strong>说明正文</li>（标题与说明同一行，不用 br，li 内不用 p，li 内绝不出现 <pre>/<code>/<ul>/<ol>）
 `.trim();
 
 /** 润色 / 扩写用的精简版，避免占用过多上下文 */
 export const ARTICLE_HTML_FORMAT_RULES_BRIEF = `
-【HTML 格式】保留现有结构；mp-tip 内仅单个 <ol>；mp-warning/mp-summary 内仅 <p>；列表项用 <li><strong>标题</strong>说明</li>；允许简单对比 <table>；禁止新增 figure/img/section/自创 class。
+【HTML 格式】保留现有结构；⚠️ 禁止列表嵌套（li 内禁止再出现 ul/ol，防卡片套卡片）；代码块用 <pre><code class="language-真实语言">…</code></pre> 且必须是正文顶层的独立块，禁止放进 li/卡片容器内，列表项和卡片里只写文字、不写代码；mp-tip 内仅单个 <ol>；mp-warning/mp-summary 内仅 <p>；列表项用 <li><strong>标题</strong>说明</li>；允许简单对比 <table>；禁止新增 figure/img/section/自创 class。
 `.trim();
