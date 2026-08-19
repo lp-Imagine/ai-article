@@ -753,7 +753,10 @@ function stripForeignContainerStyles(html: string): string {
  * 将文章 HTML 转换为微信公众号兼容的内联样式版本
  */
 export function convertToWechatHtml(html: string): string {
-  let result = stripForeignContainerStyles(normalizeCalloutBlocks(wrapSummarySection(html)));
+  // 0. 结构防御：修复未闭合标签 + 提取代码块内被误吞的正文。
+  // AI 生成/精炼可能产生未闭合的代码行（如字符串被截断），微信对未闭合标签的
+  // "自动修复"会把后续内容吞进深色代码块（卡片套卡片、内容重复）——先保证结构闭合。
+  let result = fixWechatHtmlStructure(stripForeignContainerStyles(normalizeCalloutBlocks(wrapSummarySection(html))));
 
   // ====== 0. 首段首字下沉（微信不支持 ::first-letter）======
   result = applyDropCapToOpeningParagraph(result);
@@ -1069,4 +1072,126 @@ function extractListsFromInsideCodeBlocks(html: string): string {
   }
   output.push(result.slice(lastIndex));
   return output.join("");
+}
+
+/**
+ * HTML 标签闭合修复（防御）：用栈扫描把未闭合的标签补上闭合、多余的闭合丢弃，
+ * 确保推送微信的 HTML 结构永远闭合——微信对未闭合标签的"自动修复"会把后续内容
+ * 吞进错误容器（深色代码块套卡片、内容重复），这是用户线上问题的根因之一。
+ */
+function fixUnclosedTags(html: string): string {
+  const VOID = new Set(["br", "img", "hr", "meta", "link", "input", "wbr", "source", "col"]);
+  const re = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)(\/?)>/g;
+  const stack: string[] = [];
+  const out: string[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const closeSlash = m[1];
+    const tag = m[2].toLowerCase();
+    const selfClose = m[4] === "/";
+    const token = m[0];
+    out.push(html.slice(last, m.index));
+
+    if (VOID.has(tag) || selfClose) {
+      out.push(token);
+    } else if (!closeSlash) {
+      // <p> 是自动闭合标签：遇到新的 <p> 时，先闭合栈内未闭合的 <p>（含其上的标签）
+      if (tag === "p") {
+        const idx = stack.lastIndexOf("p");
+        if (idx !== -1) {
+          for (let i = stack.length - 1; i > idx; i--) out.push(`</${stack[i]}>`);
+          out.push(`</p>`);
+          stack.length = idx;
+        }
+      }
+      stack.push(tag);
+      out.push(token);
+    } else {
+      const idx = stack.lastIndexOf(tag);
+      if (idx === -1) {
+        // 多余的闭合标签：丢弃（避免干扰结构）
+      } else {
+        for (let i = stack.length - 1; i > idx; i--) out.push(`</${stack[i]}>`);
+        stack.length = idx;
+        out.push(token);
+      }
+    }
+    last = m.index + token.length;
+  }
+  out.push(html.slice(last));
+  for (let i = stack.length - 1; i >= 0; i--) out.push(`</${stack[i]}>`);
+  return out.join("");
+}
+
+/**
+ * 把代码块（data-mp-cb section）内部被误吞的正文块（无 data-mp-cb 属性的
+ * p/h2/section 等）提取到代码块外。配合 fixUnclosedTags：未闭合代码行会吞掉
+ * 后续正文，闭合修复后这些正文还留在代码块内，需移出避免深色代码块里出现白字。
+ */
+function extractForeignFromCodeBlocks(html: string): string {
+  const cbOpen = /<section\s+data-mp-cb="1"/gi;
+  const output: string[] = [];
+  let lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = cbOpen.exec(html)) !== null) {
+    const start = m.index;
+    let depth = 1;
+    let pos = html.indexOf(">", start) + 1;
+    let end = -1;
+    const openRe = /<section\b/gi;
+    const closeRe = /<\/section>/gi;
+    while (depth > 0 && pos < html.length) {
+      openRe.lastIndex = pos;
+      closeRe.lastIndex = pos;
+      const no = openRe.exec(html);
+      const nc = closeRe.exec(html);
+      if (!nc) break;
+      if (no && no.index < nc.index) {
+        depth++;
+        pos = no.index + no[0].length;
+      } else {
+        depth--;
+        if (depth === 0) {
+          end = nc.index + nc[0].length;
+          break;
+        }
+        pos = nc.index + nc[0].length;
+      }
+    }
+    if (end === -1) {
+      output.push(html.slice(lastIndex, start));
+      lastIndex = start + 1;
+      cbOpen.lastIndex = lastIndex;
+      continue;
+    }
+    const block = html.slice(start, end);
+    // 旧结构（body 是嵌套 <section>）：body 内都是代码行，不在此处提取（step 12 会重建）
+    if (/<section\s+data-mp-cb-body/.test(block)) {
+      output.push(html.slice(lastIndex, start), block);
+      lastIndex = end;
+      cbOpen.lastIndex = end;
+      continue;
+    }
+    const foreign: string[] = [];
+    const cleaned = block.replace(
+      /<(?:p|h[1-6]|section|div|blockquote|table|ul|ol)(?![^>]*data-mp-cb)[\s\S]*?<\/(?:p|h[1-6]|section|div|blockquote|table|ul|ol)>/gi,
+      (foreignHtml) => {
+        foreign.push(foreignHtml);
+        return "";
+      },
+    );
+    output.push(html.slice(lastIndex, start));
+    output.push(cleaned);
+    if (foreign.length > 0) output.push(foreign.join(""));
+    lastIndex = end;
+    cbOpen.lastIndex = end;
+  }
+  output.push(html.slice(lastIndex));
+  return output.join("");
+}
+
+/** 结构防御管线：闭合未闭合标签 → 提取代码块内被吞的正文 */
+function fixWechatHtmlStructure(html: string): string {
+  return extractForeignFromCodeBlocks(fixUnclosedTags(html));
 }

@@ -386,6 +386,38 @@ describe("convertToWechatHtml", () => {
     // 代码块本身仍保留纯代码
     expect(wechat).toContain("# 配置");
   });
+
+  it("fixes unclosed code lines so WeChat does not swallow following content", () => {
+    // AI 生成的代码行 p 未闭合（字符串被截断），会把后续正文吞进代码块。
+    // fixUnclosedTags 应补上闭合，正文保持在代码块外，输出标签平衡。
+    const html =
+      "<h2>第一层拦截</h2>" +
+      '<section data-mp-cb="1" style="background-color:#0d1117;">' +
+      '<section data-mp-cb-lang="1">Python</section>' +
+      '<section data-mp-cb-body="1" style="padding:12px;">' +
+      "<p style=\"margin:0;\">def validate_agent_output(output):</p>" +
+      "<p style=\"margin:0;\"><span>address_pattern = </span><span style=\"color:#a5d6ff;\">r'^[省市区]+[市辖区]+[街道]+\\d号+" +
+      "</section></section>" +
+      "<p>上述规则的边界明确，无模糊空间。</p>" +
+      "<h2>容错兜底</h2><p>后续内容。</p>";
+
+    const wechat = convertToWechatHtml(html);
+
+    // 标签平衡（无未闭合）
+    const pOpen = (wechat.match(/<p[\s>]/g) ?? []).length;
+    const pClose = (wechat.match(/<\/p>/g) ?? []).length;
+    const spanOpen = (wechat.match(/<span/g) ?? []).length;
+    const spanClose = (wechat.match(/<\/span>/g) ?? []).length;
+    expect(pOpen).toBe(pClose);
+    expect(spanOpen).toBe(spanClose);
+    // 正文在代码块外
+    const cb = wechat.match(/<section data-mp-cb="1"[^>]*>[\s\S]*?<\/section>/)?.[0] ?? "";
+    expect(cb).not.toContain("上述规则");
+    expect(wechat.indexOf("上述规则的边界明确")).toBeGreaterThan(wechat.indexOf("</section>", wechat.indexOf("data-mp-cb")));
+    // 代码内容保留
+    expect(cb).toContain("address_pattern");
+    expect(wechat).toContain("容错兜底");
+  });
 });
 
 describe("normalizeArticleMarkup", () => {
