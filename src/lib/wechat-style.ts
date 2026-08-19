@@ -430,7 +430,9 @@ function transformListBlock(html: string, ordered: boolean): string {
         items.push(blocks.join(""));
       }
     }
-    return `<section style="margin:14px 0 20px;">${items.join("")}</section>`;
+    // 列表容器用 <div> 而非 <section>：微信对「带背景色的 section 后紧跟 section」
+    // 的渲染不稳定，会把后续内容吸进深色代码块；div 更接近正文块，避免误合并。
+    return `<div style="margin:14px 0 20px;">${items.join("")}</div>`;
   });
 }
 

@@ -116,7 +116,7 @@ describe("convertToWechatHtml", () => {
     expect(tipWechat).toContain("步骤一");
     expect(tipWechat).toContain("实用技巧");
     expect(tipWechat).toContain(bodyWechat);
-    expect(tipWechat).toMatch(/实用技巧<\/span><\/td><\/tr><\/table><section style="margin:14px 0 20px;"/);
+    expect(tipWechat).toMatch(/实用技巧<\/span><\/td><\/tr><\/table><div style="margin:14px 0 20px;"/);
   });
 
   it("converts figure to single img section for wechat (no figcaption)", () => {
@@ -277,9 +277,9 @@ describe("convertToWechatHtml", () => {
 
     const wechat = convertToWechatHtml(html);
 
-    // AI 自创 div 的视觉样式被剥掉（退化为无样式容器）
+    // AI 自创 div 的视觉样式被剥掉（退化为无样式容器，无背景/边框残留）
     expect(wechat).not.toContain("#f0f4ff");
-    expect(wechat).not.toMatch(/<div style=/);
+    expect(wechat).not.toMatch(/<div style="[^"]*(?:background|border|padding)/);
     // 列表卡片独立存在，不套在任何外层背景里
     expect(wechat).toMatch(/border-left:4px solid #3e7bfa;background-color:#f8fbff/);
     // 文字保留
@@ -300,7 +300,7 @@ describe("convertToWechatHtml", () => {
 
     // 单引号 style 的 AI 容器同样被剥掉，不出现「卡片套卡片」
     expect(wechat).not.toContain("#eef2f7");
-    expect(wechat).not.toMatch(/<div style=/i);
+    expect(wechat).not.toMatch(/<div style="[^"]*(?:background|border|padding)/i);
     expect(wechat).toMatch(/border-left:4px solid #3e7bfa;background-color:#f8fbff/);
     expect(wechat).toContain("验证层配置项（3项）");
   });
@@ -338,7 +338,7 @@ describe("convertToWechatHtml", () => {
     const wechat = convertToWechatHtml(html);
 
     // 列表卡片在代码块外（兄弟关系），代码块内不出现卡片
-    expect(wechat).toMatch(/<\/pre><section style="margin:14px 0 20px;"><table/);
+    expect(wechat).toMatch(/<\/pre><div style="margin:14px 0 20px;"><table/);
     expect(wechat).toMatch(/background-color:#f8fbff/);
     expect(wechat).toContain("最大重试次数");
   });
@@ -357,7 +357,7 @@ describe("convertToWechatHtml", () => {
     // 卡片 table 不在代码块 section 内部，代码块后跟列表卡片容器
     const cbBlock = wechat.match(/<section data-mp-cb="1"[^>]*>[\s\S]*?<\/section><\/section>/)?.[0] ?? "";
     expect(cbBlock).not.toMatch(/<table/);
-    expect(wechat).toMatch(/<\/section><\/section><section style="margin:14px 0 20px;"><table/);
+    expect(wechat).toMatch(/<\/section><\/section><div style="margin:14px 0 20px;"><table/);
     expect(wechat).toContain("最大重试次数");
   });
 
