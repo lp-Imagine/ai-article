@@ -1,7 +1,7 @@
 import type { OutlineOption } from "@/types/article";
 import { getEnvValue } from "@/lib/config-bridge";
 import { highlightCodeBlocks } from "@/lib/code-highlight";
-import { enforceArticleHtmlFormat, normalizeArticleMarkup, normalizeCalloutBlocks } from "@/lib/wechat-style";
+import { enforceArticleHtmlFormat, fixWechatHtmlStructure, normalizeArticleMarkup, normalizeCalloutBlocks } from "@/lib/wechat-style";
 import { mapWithConcurrency } from "@/lib/map-with-concurrency";
 import { analyzeContentQuality, sanitizeFactualClaimsInHtml } from "@/lib/content-quality";
 import { isTransientNetworkError, withRetry } from "@/lib/retry";
@@ -802,10 +802,13 @@ function finalizeGeneratedContent(
   const fixedContent = dedupeRepeatedBlocks(fixCodeBlocks(normalizeCalloutBlocks(safeContent)));
   const sanitized = sanitizeFactualClaimsInHtml(fixedContent);
   const highlightedContent = highlightCodeBlocks(sanitized.content);
+  // AI 输出常有不闭合的段落/列表/代码行（浏览器宽容、微信会错乱），生成后即修复，
+  // 保证保存到库的 content 结构闭合（预览/推送/博客同步都基于干净 HTML）。
+  const closedContent = fixWechatHtmlStructure(highlightedContent);
   return {
     title: fallbackTitle,
     summary: fallbackSummary,
-    content: highlightedContent,
+    content: closedContent,
     missingSections: [],
     promptVersions: { content: CONTENT_SKILL.version },
   };
@@ -1457,7 +1460,7 @@ export async function refineContentQuality(input: {
 
   const blocks = splitContentIntoRefineBlocks(input.content);
   const normalize = (html: string) =>
-    highlightCodeBlocks(dedupeRepeatedBlocks(fixCodeBlocks(normalizeCalloutBlocks(html))));
+    fixWechatHtmlStructure(highlightCodeBlocks(dedupeRepeatedBlocks(fixCodeBlocks(normalizeCalloutBlocks(html)))));
 
   if (blocks.length < 2) {
     const single = await refineHtmlBlock({
@@ -1597,8 +1600,10 @@ function splitHtmlForReformat(html: string, maxPlain: number): string[] {
 
 /** 不调用模型，仅用本地规则整理 HTML 片段（导入/AI 失败时的兜底） */
 function locallyReformatHtmlChunk(content: string): string {
-  return highlightCodeBlocks(
-    fixCodeBlocks(normalizeCalloutBlocks(enforceArticleHtmlFormat(normalizeArticleMarkup(content)))),
+  return fixWechatHtmlStructure(
+    highlightCodeBlocks(
+      fixCodeBlocks(normalizeCalloutBlocks(enforceArticleHtmlFormat(normalizeArticleMarkup(content)))),
+    ),
   );
 }
 
@@ -1700,8 +1705,10 @@ export async function reformatArticleHtml(input: {
   );
 
   const merged = out.join("\n");
-  return highlightCodeBlocks(
-    dedupeRepeatedBlocks(fixCodeBlocks(normalizeCalloutBlocks(merged))),
+  return fixWechatHtmlStructure(
+    highlightCodeBlocks(
+      dedupeRepeatedBlocks(fixCodeBlocks(normalizeCalloutBlocks(merged))),
+    ),
   );
 }
 

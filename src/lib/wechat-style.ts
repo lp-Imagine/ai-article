@@ -1192,6 +1192,6 @@ function extractForeignFromCodeBlocks(html: string): string {
 }
 
 /** 结构防御管线：闭合未闭合标签 → 提取代码块内被吞的正文 */
-function fixWechatHtmlStructure(html: string): string {
+export function fixWechatHtmlStructure(html: string): string {
   return extractForeignFromCodeBlocks(fixUnclosedTags(html));
 }
