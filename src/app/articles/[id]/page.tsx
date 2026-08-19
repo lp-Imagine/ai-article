@@ -77,6 +77,26 @@ type ArticleRecord = {
 
 type ApiResponse<T> = { code: number; message: string; data: T };
 
+/** 检测 HTML 标签是否闭合（用于「查看微信源码」自查部署版本是否生效） */
+function checkHtmlClosed(html: string): { closed: boolean; unclosed: string[] } {
+  const VOID = new Set(["br", "img", "hr", "meta", "link", "input", "wbr", "source", "col"]);
+  const re = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)(\/?)>/g;
+  const stack: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const close = m[1];
+    const tag = m[2].toLowerCase();
+    const self = m[4] === "/";
+    if (VOID.has(tag) || self) continue;
+    if (!close) stack.push(tag);
+    else {
+      const idx = stack.lastIndexOf(tag);
+      if (idx !== -1) stack.length = idx;
+    }
+  }
+  return { closed: stack.length === 0, unclosed: stack };
+}
+
 const statusLabel: Record<string, string> = {
   draft: "草稿",
   outlined: "已选大纲",
@@ -2008,7 +2028,19 @@ export default function ArticlePage({
               }}
             >
               <strong>推送微信的格式处理后源码</strong>
-              <div style={{ display: "flex", gap: "8px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                {(() => {
+                  const { closed, unclosed } = checkHtmlClosed(article.wechatHtml ?? "");
+                  return closed ? (
+                    <span style={{ fontSize: "12px", color: "#16a34a", fontWeight: 600 }}>
+                      ✓ 标签闭合
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: "12px", color: "#dc2626", fontWeight: 600 }} title={`未闭合：${unclosed.join(", ")}`}>
+                      ✗ 存在未闭合标签（可能是旧版本生成的源码，请确认已部署最新代码并重新推送）
+                    </span>
+                  );
+                })()}
                 <button
                   type="button"
                   className="btn-secondary text-sm"
