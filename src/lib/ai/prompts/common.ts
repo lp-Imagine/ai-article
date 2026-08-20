@@ -264,5 +264,5 @@ export const ARTICLE_HTML_FORMAT_RULES = `
 
 /** 润色 / 扩写用的精简版，避免占用过多上下文 */
 export const ARTICLE_HTML_FORMAT_RULES_BRIEF = `
-【HTML 格式】保留现有结构；⚠️ 禁止列表嵌套（li 内禁止再出现 ul/ol，防卡片套卡片）；代码块用 <pre><code class="language-真实语言">…</code></pre> 且必须是正文顶层的独立块，禁止放进 li/卡片容器内，列表项和卡片里只写文字、不写代码，代码示例前用「示例：」/「配置如下：」等引导文字引出；mp-tip 内仅单个 <ol>；mp-warning/mp-summary 内仅 <p>；列表项用 <li><strong>标题</strong>说明</li>；允许简单对比 <table>；禁止新增 figure/img/section/自创 class。
+【HTML 格式】保留现有结构；⚠️ 禁止列表嵌套（li 内禁止再出现 ul/ol，防卡片套卡片）；代码块用 <pre><code class="language-真实语言">…</code></pre> 且必须是正文顶层的独立块，禁止放进 li/卡片容器内，列表项和卡片里只写文字、不写代码，代码示例前用「示例：」/「配置如下：」等引导文字引出；mp-tip 内仅单个 <ol>；mp-warning/mp-summary 内仅 <p>；列表项用 <li><strong>标题</strong>说明</li>；允许简单对比 <table>；禁止新增 figure/img/section/自创 class；处理整篇稿时保留结尾 <h2>总结</h2> + <div class="mp-summary"><p>…</p></div> 卡片，若缺失则在文末补一段概括全文核心判断与可带走结论的总结（mp-summary 内仅 <p>，禁止列表/口号）。
 `.trim();

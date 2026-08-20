@@ -912,7 +912,13 @@ ${
 - 必须以 <h2>${section.heading}</h2> 开头
 - 本章目标：${section.summary}
 - 本章约 ${input.perSection} 字（去标签）；禁止重复其他章节内容
-${input.isLastSummary ? '- 最后一章可用 <div class="mp-summary"><p>...</p></div>' : ""}
+${
+  input.isLastSummary
+    ? /总结|收尾|带走/.test(section.heading)
+      ? '- 本章是全文收尾章节：收束段用 <div class="mp-summary"><p>...</p></div> 承载（mp-summary 内仅 <p>，禁止列表、禁止复述各章标题）'
+      : '- 本章结束时必须在末尾追加 <h2>总结</h2> + <div class="mp-summary"><p>一段话</p></div>：概括全文核心判断与 1-2 条可带走结论；mp-summary 内仅 <p>，禁止列表；「总结」卡片之后不再有任何内容'
+    : ""
+}
 
 ${sectionDirective(input.blueprint, input.sectionIndex - 1)}`,
           },
@@ -1144,8 +1150,9 @@ ${BLUEPRINT_JSON_INSTRUCTION}`;
           perSection,
           engineering,
           blueprint,
-          isLastSummary:
-            i === sections.length - 1 && /总结|收尾|带走/.test(section.heading),
+          // 最后一章必须收尾：若本章标题本身是总结/收尾类则用它承载总结卡片，
+          // 否则在章末追加 <h2>总结</h2> + mp-summary 卡片（见单章正文任务指令）
+          isLastSummary: i === sections.length - 1,
         });
       } catch (error) {
         console.error(
