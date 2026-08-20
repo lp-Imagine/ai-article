@@ -557,32 +557,10 @@ export async function generateOutline(input: {
       engineering,
     });
     if (parallel.length === 0) {
-      return reportOutlineDiversity(buildFallbackOutlines(
-        input.topic,
-        style,
-        audience,
-        wordCount,
-        count,
-      ));
+      throw new Error("大纲生成失败：AI 未能生成有效大纲，请稍后重试");
     }
-    // 补齐：个别方案重试后仍失败时，用与主题相关的 fallback 大纲补足到 count 套，
-    // 避免「默认 3 套大纲只出现 2 套」
-    if (parallel.length < count) {
-      const fallbacks = buildFallbackOutlines(
-        input.topic,
-        style,
-        audience,
-        wordCount,
-        count,
-      );
-      const usedIndexes = new Set(parallel.map((o) => o.index));
-      for (let i = 0; i < fallbacks.length && parallel.length < count; i++) {
-        if (!usedIndexes.has(i)) {
-          parallel.push({ ...fallbacks[i], index: parallel.length });
-        }
-      }
-      // 补齐后仍不足（fallback 被占满的极端情况）：允许少于 count，但尽量补
-    }
+    // 只返回生成成功的方案，不做模板兜底：失败的大纲宁可不要，
+    // 避免把离题/劣质模板混进用户可选方案
     return reportOutlineDiversity(parallel);
   }
 
@@ -612,13 +590,8 @@ export async function generateOutline(input: {
       ));
   }
 
-  return reportOutlineDiversity(buildFallbackOutlines(
-    input.topic,
-    style,
-    audience,
-    wordCount,
-    count,
-  ));
+  // 不做模板兜底：失败就明确失败，让任务报错、用户重试
+  throw new Error("大纲生成失败：AI 未能生成有效大纲，请稍后重试");
 }
 
 
@@ -627,7 +600,10 @@ async function generateOutlinesInParallel(
   input: Omit<OutlinePromptInput, "angle">,
 ): Promise<OutlineOption[]> {
   const { topic, style, wordCount, count, sectionCount } = input;
-  const maxTokens = Math.min(4096, 1200 + sectionCount * 260);
+  // 单套大纲 JSON（标题+定位+每章 heading/summary）在 2500 token 下经常被截断
+  // （日志：cap=2500 finish=length truncated → outline empty → 重试仍失败），
+  // 加大预算：随章节数增长，上限 8k
+  const maxTokens = Math.min(8192, 1800 + sectionCount * 450);
 
   const results = await mapWithConcurrency(
     Array.from({ length: count }, (_, i) => i),
@@ -668,61 +644,6 @@ async function generateOutlinesInParallel(
   return results
     .filter((opt): opt is OutlineOption => opt !== null)
     .map((opt, idx) => normalizeOutlineOption(opt, idx, topic, style, wordCount));
-}
-
-function buildFallbackOutlines(
-  topic: string,
-  style: string,
-  audience: string,
-  wordCount: number,
-  count: number = 3,
-): OutlineOption[] {
-  const sectionCount =
-    wordCount <= 1200 ? 3 :
-    wordCount <= 2000 ? 4 :
-    wordCount <= 3000 ? 5 :
-    6;
-
-  const allOptions: OutlineOption[] = [
-    {
-      index: 0,
-      title: `为什么你做不好${topic}？问题不在能力，在这三点`,
-      positioning: `适合${audience}的${style}内容，约 ${wordCount} 字。`,
-      sections: buildSections(topic, sectionCount, 0),
-    },
-    {
-      index: 1,
-      title: `把${topic}拆成可执行的三步（附检查标准）`,
-      positioning: `更偏方法清单与执行建议。`,
-      sections: buildSections(topic, sectionCount, 1),
-    },
-    {
-      index: 2,
-      title: `关于${topic}，我踩过的坑比你看过的文章还多`,
-      positioning: `以真实经历串联，适合提高可读性与个人风格辨识度。`,
-      sections: buildSections(topic, sectionCount, 2),
-    },
-    {
-      index: 3,
-      title: `${topic}的 4 个反直觉真相（大部分人都搞反了）`,
-      positioning: `反常识视角，适合建立"被戳中"的内容感。`,
-      sections: buildSections(topic, sectionCount, 3),
-    },
-    {
-      index: 4,
-      title: `如果你也厌倦了${topic}的泛泛而谈，试试这个方法`,
-      positioning: `场景代入型，用具体问题开篇，一步步给出答案。`,
-      sections: buildSections(topic, sectionCount, 0),
-    },
-    {
-      index: 5,
-      title: `我承认，以前对${topic}的理解太浅了`,
-      positioning: `深度长文型（约 ${wordCount} 字），适合建立专业人设。`,
-      sections: buildSections(topic, sectionCount, 1),
-    },
-  ];
-
-  return allOptions.slice(0, count).map((opt, idx) => ({ ...opt, index: idx }));
 }
 
 export type ContentProgressCallback = (
