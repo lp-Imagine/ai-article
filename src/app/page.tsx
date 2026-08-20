@@ -165,6 +165,9 @@ export default function HomePage() {
   const [ideasCategory, setIdeasCategory] = useState<IdeasCategory>("all");
   const [ideasOpen, setIdeasOpen] = useState(false);
   const [ideasEmptyReason, setIdeasEmptyReason] = useState<string | null>(null);
+  // 「先选分类再生成灵感」：点击"给我灵感"先弹分类选择，确认后按所选分类生成
+  const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
+  const [pendingIdeasCategory, setPendingIdeasCategory] = useState<IdeasCategory>("all");
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 479px)");
@@ -723,7 +726,14 @@ export default function HomePage() {
                     <button
                       type="button"
                       disabled={ideasLoading}
-                      onClick={() => (ideasOpen ? setIdeasOpen(false) : fetchIdeas(0))}
+                      onClick={() => {
+                        if (ideasOpen) {
+                          setIdeasOpen(false);
+                        } else {
+                          setPendingIdeasCategory(ideasCategory);
+                          setCategoryPickerOpen(true);
+                        }
+                      }}
                       className={`home-inspire-btn${ideasOpen ? " home-inspire-btn-active" : ""}`}
                       aria-expanded={ideasOpen}
                     >
@@ -1334,6 +1344,89 @@ export default function HomePage() {
           </span>
         </label>
       </ConfirmDialog>
+
+      {categoryPickerOpen ? (
+        <div
+          className="topic-category-overlay"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1200,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "20px",
+          }}
+          onClick={() => setCategoryPickerOpen(false)}
+        >
+          <div
+            className="topic-category-dialog"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "#fff",
+              borderRadius: "12px",
+              maxWidth: "420px",
+              width: "100%",
+              padding: "20px",
+            }}
+          >
+            <div style={{ marginBottom: "14px" }}>
+              <strong style={{ fontSize: "15px" }}>选择灵感分类</strong>
+              <p style={{ margin: "4px 0 0", fontSize: "12px", color: "#888" }}>
+                先选一个分类，再生成该领域的选题灵感
+              </p>
+            </div>
+            <div
+              className="topic-category-grid"
+              style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "8px" }}
+            >
+              {IDEA_CATEGORY_OPTIONS.map((c) => {
+                const selected = pendingIdeasCategory === c.id;
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => setPendingIdeasCategory(c.id)}
+                    style={{
+                      border: selected ? "1.5px solid #3e7bfa" : "1px solid #e5e7eb",
+                      background: selected ? "#eff6ff" : "#fff",
+                      color: selected ? "#2563eb" : "#374151",
+                      borderRadius: "8px",
+                      padding: "10px 12px",
+                      fontSize: "13px",
+                      fontWeight: selected ? 600 : 400,
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    {c.label}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "16px" }}>
+              <button
+                type="button"
+                className="btn-secondary text-sm"
+                onClick={() => setCategoryPickerOpen(false)}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="btn-primary text-sm"
+                onClick={() => {
+                  setCategoryPickerOpen(false);
+                  void fetchIdeas(0, "all", undefined, pendingIdeasCategory);
+                }}
+              >
+                生成灵感
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
