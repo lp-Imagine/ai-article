@@ -563,7 +563,6 @@ export async function generateOutline(input: {
         audience,
         wordCount,
         count,
-        engineering,
       ));
     }
     // 补齐：个别方案重试后仍失败时，用与主题相关的 fallback 大纲补足到 count 套，
@@ -575,7 +574,6 @@ export async function generateOutline(input: {
         audience,
         wordCount,
         count,
-        engineering,
       );
       const usedIndexes = new Set(parallel.map((o) => o.index));
       for (let i = 0; i < fallbacks.length && parallel.length < count; i++) {
@@ -620,7 +618,6 @@ export async function generateOutline(input: {
     audience,
     wordCount,
     count,
-    engineering,
   ));
 }
 
@@ -679,97 +676,12 @@ function buildFallbackOutlines(
   audience: string,
   wordCount: number,
   count: number = 3,
-  engineering = false,
 ): OutlineOption[] {
   const sectionCount =
     wordCount <= 1200 ? 3 :
     wordCount <= 2000 ? 4 :
     wordCount <= 3000 ? 5 :
     6;
-
-  if (engineering) {
-    const engOptions: OutlineOption[] = [
-      {
-        index: 0,
-        title: `从 Props 倒推：${topic}怎么封才好用`,
-        positioning: `偏接口设计，适合准备封装组件的同学。`,
-        sections: [
-          { heading: "先定对外契约：value / onChange / 进度与取消", summary: "给出 Props/事件类型草案，明确受控与非受控。" },
-          { heading: "内部状态机：idle → hashing → uploading → done", summary: "用状态枚举约束 UI 与请求时机。" },
-          { heading: "最小上传通路：单文件直传先跑通", summary: "一段可运行的 fetch/XHR 示例，不含分片。" },
-          { heading: "再加分片与并发池", summary: "队列 + 并发上限代码，说明为何不能无脑 Promise.all。" },
-          { heading: "断点与失败重试的边界表", summary: "列出网络中断、419、blob 变更等用例与处理。" },
-          { heading: "文档与示例：三行就能用的 README", summary: "最小用法与进阶配置对照。" },
-        ].slice(0, sectionCount),
-      },
-      {
-        index: 1,
-        title: `${topic}：我被并发打挂浏览器之后`,
-        positioning: `踩坑叙事 + 代码修正，适合有过上传翻车的读者。`,
-        sections: [
-          { heading: "翻车现场：同时拖 20 个大文件发生了什么", summary: "描述卡顿/内存/请求打满，对应现象。" },
-          { heading: "根因：无界并发 + 重复读文件", summary: "指出错误实现片段。" },
-          { heading: "修正：有界队列与切片复用", summary: "给出并发池与 chunk 读取代码。" },
-          { heading: "进度与取消如何接到 UI", summary: "AbortController 与进度聚合示例。" },
-          { heading: "回归清单：我后来每次发版必测这几条", summary: "可勾选的测试条目。" },
-          { heading: "监控：成功率与 P95 耗时怎么埋", summary: "关键上报字段示例。" },
-        ].slice(0, sectionCount),
-      },
-      {
-        index: 2,
-        title: `抄作业：一个能上生产的上传组件骨架`,
-        positioning: `目录 + 关键文件代码，适合直接落地。`,
-        sections: [
-          { heading: "目录怎么拆：hooks / uploader / ui", summary: "给出推荐文件树。" },
-          { heading: "createUploader：核心调度", summary: "调度器伪代码或 TS 实现。" },
-          { heading: "useUpload：对接 React/Vue 的薄封装", summary: "hooks 示例。" },
-          { heading: "服务端协议约定（etag / uploadId）", summary: "请求响应字段表 + 示例 JSON。" },
-          { heading: "还能再抠的性能点", summary: "worker 算 hash、可见即可上传等，各给一行思路与取舍。" },
-          { heading: "发布前检查清单", summary: "类型、 treeshake、peerDeps、changelog。" },
-        ].slice(0, sectionCount),
-      },
-      {
-        index: 3,
-        title: `Vue 与 React 两套写法对照：${topic}`,
-        positioning: `双框架对照，适合技术选型纠结期。`,
-        sections: [
-          { heading: "状态放哪：ref/reactive vs useReducer", summary: "给出两侧最小状态模型代码。" },
-          { heading: "副作用与卸载：取消请求怎么写", summary: "onUnmounted / useEffect cleanup 对照。" },
-          { heading: "可组合封装：composable 与 hook API", summary: "同一组方法签名在两套里的映射。" },
-          { heading: "UI 扩展点：slot 与 render props", summary: "自定义进度条/列表项示例。" },
-          { heading: "我怎么选：团队栈与复杂度决策树", summary: "一张简表帮读者选型。" },
-          { heading: "迁移注意：从 Vue2/Options 过来的坑", summary: "常见误用与改法。" },
-        ].slice(0, sectionCount),
-      },
-      {
-        index: 4,
-        title: `多媒体上传：图压缩、视频封面、音频波形`,
-        positioning: `偏能力扩展，适合要做素材库的产品。`,
-        sections: [
-          { heading: "按 MIME 分流的处理管道", summary: "策略表 + 分发器代码。" },
-          { heading: "图片：预览与 canvas 压缩参数", summary: "可运行压缩片段与体积对比思路。" },
-          { heading: "视频：截帧封面与时长", summary: "video + canvas 示例与兼容性。" },
-          { heading: "音频：简易波形绘制", summary: "Web Audio 关键路径。" },
-          { heading: "主线程别堵死：Worker / idle 调度", summary: "何时搬进 Worker。" },
-          { heading: "组件 API：能力开关怎么设计", summary: "Props 草案。" },
-        ].slice(0, sectionCount),
-      },
-      {
-        index: 5,
-        title: `${topic}工程化：测试、弱网与发版`,
-        positioning: `偏长期维护，适合组件负责人。`,
-        sections: [
-          { heading: "单测：并发池与进度计算", summary: "2～3 个用例骨架。" },
-          { heading: "E2E：假文件与续传路径", summary: "Playwright/Cypress 要点。" },
-          { heading: "弱网：online/offline 与自动暂停", summary: "事件监听示例。" },
-          { heading: "内存：大文件读完要释放什么", summary: "ObjectURL / buffer 注意点。" },
-          { heading: "版本与破坏性变更", summary: "semver 与 changelog 示例。" },
-          { heading: "上线门禁清单", summary: "可打印的检查表。" },
-        ].slice(0, sectionCount),
-      },
-    ];
-    return engOptions.slice(0, count).map((opt, idx) => ({ ...opt, index: idx }));
-  }
 
   const allOptions: OutlineOption[] = [
     {
