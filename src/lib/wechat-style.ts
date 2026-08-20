@@ -788,11 +788,14 @@ export function convertToWechatHtml(html: string): string {
     /<table(?![^>]*style=)([^>]*)>([\s\S]*?)<\/table>/gi,
     (_full, attrs: string, inner: string) => {
       const styled = inner
+        // 注意：替换串以 `"` 结尾、不含结尾 `>`——正则只匹配了 `<th`/`<td`
+        // 开标签本身，原标签的 `>` 会留在原文里补上，若替换串再加 `>` 会变成
+        // `>>内容`（每个单元格行首多一个 >）。
         .replace(/<th(?![^>]*style=)/gi, () => {
-          return `<th style="background-color:${ACCENT};color:#ffffff;padding:10px 12px;font-size:14px;font-weight:600;text-align:left;border:1px solid #c7d2fe;white-space:nowrap;line-height:1.5;">`;
+          return `<th style="background-color:${ACCENT};color:#ffffff;padding:10px 12px;font-size:14px;font-weight:600;text-align:left;border:1px solid #c7d2fe;white-space:nowrap;line-height:1.5;"`;
         })
         .replace(/<td(?![^>]*style=)/gi, () => {
-          return `<td style="padding:10px 12px;font-size:14px;line-height:1.7;color:#3d3d3d;border:1px solid #e5e7eb;white-space:nowrap;">`;
+          return `<td style="padding:10px 12px;font-size:14px;line-height:1.7;color:#3d3d3d;border:1px solid #e5e7eb;white-space:nowrap;"`;
         });
       return (
         `<section style="margin:20px 0;overflow-x:auto;-webkit-overflow-scrolling:touch;">` +
