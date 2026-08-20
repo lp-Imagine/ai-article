@@ -556,15 +556,36 @@ export async function generateOutline(input: {
       sectionCount,
       engineering,
     });
-    if (parallel.length > 0) return reportOutlineDiversity(parallel);
-    return reportOutlineDiversity(buildFallbackOutlines(
-      input.topic,
-      style,
-      audience,
-      wordCount,
-      count,
-      engineering,
-    ));
+    if (parallel.length === 0) {
+      return reportOutlineDiversity(buildFallbackOutlines(
+        input.topic,
+        style,
+        audience,
+        wordCount,
+        count,
+        engineering,
+      ));
+    }
+    // 补齐：个别方案重试后仍失败时，用与主题相关的 fallback 大纲补足到 count 套，
+    // 避免「默认 3 套大纲只出现 2 套」
+    if (parallel.length < count) {
+      const fallbacks = buildFallbackOutlines(
+        input.topic,
+        style,
+        audience,
+        wordCount,
+        count,
+        engineering,
+      );
+      const usedIndexes = new Set(parallel.map((o) => o.index));
+      for (let i = 0; i < fallbacks.length && parallel.length < count; i++) {
+        if (!usedIndexes.has(i)) {
+          parallel.push({ ...fallbacks[i], index: parallel.length });
+        }
+      }
+      // 补齐后仍不足（fallback 被占满的极端情况）：允许少于 count，但尽量补
+    }
+    return reportOutlineDiversity(parallel);
   }
 
   const raw = await callChat(
@@ -615,21 +636,35 @@ async function generateOutlinesInParallel(
     Array.from({ length: count }, (_, i) => i),
     getOutlineConcurrency(count),
     async (i) => {
-      try {
-        const raw = await callChat(
-          buildOutlinePrompt({ ...input, angle: outlineAngleAt(i) }),
-          { jsonMode: true, maxTokens, role: "outline" },
-        );
-        const parsed = safeParse<{ outlines?: OutlineOption[] }>(raw, {});
-        const first = parsed.outlines?.[0];
-        return first && (first.sections?.length ?? 0) > 0 ? first : null;
-      } catch (error) {
+      // 单套失败/空结果重试几次，避免「默认 3 套大纲只生成出 2 套」
+      return withRetry(
+        async () => {
+          const raw = await callChat(
+            buildOutlinePrompt({ ...input, angle: outlineAngleAt(i) }),
+            { jsonMode: true, maxTokens, role: "outline" },
+          );
+          const parsed = safeParse<{ outlines?: OutlineOption[] }>(raw, {});
+          const first = parsed.outlines?.[0];
+          if (!first || (first.sections?.length ?? 0) === 0) {
+            throw new Error(`scheme ${i + 1}/${count}: outline empty`);
+          }
+          return first;
+        },
+        {
+          attempts: 3,
+          baseDelayMs: 900,
+          shouldRetry: (error) =>
+            error instanceof Error && error.message.includes("outline empty")
+              ? true
+              : isTransientNetworkError(error),
+        },
+      ).catch((error) => {
         console.error(
-          `[generateOutline] scheme ${i + 1}/${count} failed:`,
+          `[generateOutline] scheme ${i + 1}/${count} failed after retries:`,
           error instanceof Error ? error.message : error,
         );
         return null;
-      }
+      });
     },
   );
 
