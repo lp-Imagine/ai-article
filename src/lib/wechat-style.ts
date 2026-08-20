@@ -775,24 +775,32 @@ export function convertToWechatHtml(html: string): string {
     result = result.replace(replacements[i].original, replacements[i].replacement);
   }
 
-  // ====== 12b. 数据表格 → 内联样式（跳过已有 style 的列表卡片/提示卡片）======
+  // ====== 12b. 数据表格 → 内联样式 + 横向滚动容器（跳过已有 style 的列表卡片/提示卡片）======
   // 微信对无样式的 <table> 渲染简陋：默认无边框、宽度不撑满、表头无区分，
   // 与文章整体的卡片风格（蓝色竖线、圆角）脱节。正文里的数据表格（QPS 对比、
   // 参数表等）在此统一加内联样式；thead/tbody/tfoot 一并移除——微信编辑器
   // 对它们的支持不稳定，th/td 足以表达表头与数据行。
-  // 列数多的表格在手机宽度下必须固定布局 + 允许换行：table-layout:fixed 均分
-  // 列宽保证不横向溢出，去掉 th 的 white-space:nowrap（否则表头把列撑宽，
-  // 右侧列会被裁切显示不全），单元格 word-break 换行。
+  // 列数多的表格在手机宽度下不要强行压窄列（fixed 布局内容挤成一团）：
+  // 表格保持自然列宽（white-space:nowrap），外层套 overflow-x:auto 容器——
+  // 列少时正常显示，列多/内容长时横向滑动查看全部列，不裁切。
   result = result.replace(/<\/?(?:thead|tbody|tfoot)>/gi, "");
-  result = result.replace(/<table(?![^>]*style=)/gi, () => {
-    return `<table style="width:100%;table-layout:fixed;border-collapse:collapse;margin:20px 0;border:1px solid #e5e7eb;word-break:break-word;overflow-wrap:break-word;"`;
-  });
-  result = result.replace(/<th(?![^>]*style=)/gi, () => {
-    return `<th style="background-color:${ACCENT};color:#ffffff;padding:10px 12px;font-size:14px;font-weight:600;text-align:left;border:1px solid #c7d2fe;word-break:break-word;overflow-wrap:break-word;line-height:1.5;"`;
-  });
-  result = result.replace(/<td(?![^>]*style=)/gi, () => {
-    return `<td style="padding:10px 12px;font-size:14px;line-height:1.7;color:#3d3d3d;border:1px solid #e5e7eb;word-break:break-word;overflow-wrap:break-word;"`;
-  });
+  result = result.replace(
+    /<table(?![^>]*style=)([^>]*)>([\s\S]*?)<\/table>/gi,
+    (_full, attrs: string, inner: string) => {
+      const styled = inner
+        .replace(/<th(?![^>]*style=)/gi, () => {
+          return `<th style="background-color:${ACCENT};color:#ffffff;padding:10px 12px;font-size:14px;font-weight:600;text-align:left;border:1px solid #c7d2fe;white-space:nowrap;line-height:1.5;">`;
+        })
+        .replace(/<td(?![^>]*style=)/gi, () => {
+          return `<td style="padding:10px 12px;font-size:14px;line-height:1.7;color:#3d3d3d;border:1px solid #e5e7eb;white-space:nowrap;">`;
+        });
+      return (
+        `<section style="margin:20px 0;overflow-x:auto;-webkit-overflow-scrolling:touch;">` +
+        `<table${attrs} style="width:auto;border-collapse:collapse;border:1px solid #e5e7eb;white-space:nowrap;">${styled}</table>` +
+        `</section>`
+      );
+    },
+  );
 
   // ====== 13. pre 代码块（老格式降级处理） ——
   // 如果数据库里有 <pre> 残留（手动编辑未经过 code-highlight），做一次换行转换
