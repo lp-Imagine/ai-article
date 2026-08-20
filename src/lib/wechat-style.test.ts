@@ -151,14 +151,16 @@ describe("convertToWechatHtml", () => {
 
     expect(wechat).not.toMatch(/<thead|<\/thead|<tbody|<\/tbody/i);
     expect(wechat).toMatch(
-      /<table style="width:100%;border-collapse:collapse;margin:20px 0;border:1px solid #e5e7eb;">/,
+      /<table style="width:100%;table-layout:fixed;border-collapse:collapse;margin:20px 0;border:1px solid #e5e7eb;word-break:break-word;overflow-wrap:break-word;">/,
     );
     expect(wechat).toMatch(
       /<th style="background-color:#3e7bfa;color:#ffffff;padding:10px 12px;/,
     );
     expect(wechat).toMatch(
-      /<td style="padding:10px 12px;font-size:14px;line-height:1.7;color:#3d3d3d;border:1px solid #e5e7eb;">/,
+      /<td style="padding:10px 12px;font-size:14px;line-height:1.7;color:#3d3d3d;border:1px solid #e5e7eb;word-break:break-word;overflow-wrap:break-word;">/,
     );
+    // 表头不再 nowrap 撑宽列（多列表格手机宽度下会截断右侧列）
+    expect(wechat).not.toContain("white-space:nowrap");
     expect(wechat).toContain("场景");
     expect(wechat).toContain("1850");
   });

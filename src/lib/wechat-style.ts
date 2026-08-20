@@ -780,15 +780,18 @@ export function convertToWechatHtml(html: string): string {
   // 与文章整体的卡片风格（蓝色竖线、圆角）脱节。正文里的数据表格（QPS 对比、
   // 参数表等）在此统一加内联样式；thead/tbody/tfoot 一并移除——微信编辑器
   // 对它们的支持不稳定，th/td 足以表达表头与数据行。
+  // 列数多的表格在手机宽度下必须固定布局 + 允许换行：table-layout:fixed 均分
+  // 列宽保证不横向溢出，去掉 th 的 white-space:nowrap（否则表头把列撑宽，
+  // 右侧列会被裁切显示不全），单元格 word-break 换行。
   result = result.replace(/<\/?(?:thead|tbody|tfoot)>/gi, "");
   result = result.replace(/<table(?![^>]*style=)/gi, () => {
-    return `<table style="width:100%;border-collapse:collapse;margin:20px 0;border:1px solid #e5e7eb;"`;
+    return `<table style="width:100%;table-layout:fixed;border-collapse:collapse;margin:20px 0;border:1px solid #e5e7eb;word-break:break-word;overflow-wrap:break-word;"`;
   });
   result = result.replace(/<th(?![^>]*style=)/gi, () => {
-    return `<th style="background-color:${ACCENT};color:#ffffff;padding:10px 12px;font-size:14px;font-weight:600;text-align:left;border:1px solid #c7d2fe;white-space:nowrap;"`;
+    return `<th style="background-color:${ACCENT};color:#ffffff;padding:10px 12px;font-size:14px;font-weight:600;text-align:left;border:1px solid #c7d2fe;word-break:break-word;overflow-wrap:break-word;line-height:1.5;"`;
   });
   result = result.replace(/<td(?![^>]*style=)/gi, () => {
-    return `<td style="padding:10px 12px;font-size:14px;line-height:1.7;color:#3d3d3d;border:1px solid #e5e7eb;"`;
+    return `<td style="padding:10px 12px;font-size:14px;line-height:1.7;color:#3d3d3d;border:1px solid #e5e7eb;word-break:break-word;overflow-wrap:break-word;"`;
   });
 
   // ====== 13. pre 代码块（老格式降级处理） ——
