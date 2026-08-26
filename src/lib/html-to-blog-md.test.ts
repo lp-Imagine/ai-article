@@ -35,6 +35,23 @@ describe("htmlToBlogMarkdown", () => {
     expect(md).toContain(":::");
   });
 
+  it("keeps mp-tip ordered list as markdown list", () => {
+    const md = htmlToBlogMarkdown(
+      '<div class="mp-tip"><ol><li><strong>A</strong>说明一</li><li><strong>B</strong>说明二</li></ol></div>',
+    );
+    expect(md).toContain("::: tip");
+    expect(md).toMatch(/1\.\s*<strong>A<\/strong>说明一/);
+    expect(md).toMatch(/2\.\s*<strong>B<\/strong>说明二/);
+  });
+
+  it("matches mp-warning with extra attributes", () => {
+    const md = htmlToBlogMarkdown(
+      '<div class="mp-warning" style="margin:0"><p>不要混用状态</p></div>',
+    );
+    expect(md).toContain("::: warning");
+    expect(md).toContain("不要混用状态");
+  });
+
   it("rewrites image src", () => {
     const md = htmlToBlogMarkdown(
       '<p><img src="https://cdn.example.com/a.jpg" alt="图"></p>',

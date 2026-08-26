@@ -262,11 +262,23 @@ function convertAll(
   });
 
   const callouts: string[] = [];
+  const convertCalloutInner = (inner: string): string => {
+    const trimmed = inner.trim();
+    if (!trimmed) return "";
+    if (/<(?:p|ol|ul|pre|blockquote|h[1-6]|div)\b/i.test(trimmed)) {
+      return convertAll(trimmed, rewriteSrc).trim();
+    }
+    return inlineToMd(trimmed, rewriteSrc);
+  };
   const takeCallouts = (cls: string, fence: string) => {
     s = s.replace(
-      new RegExp(`<div class="${cls}">([\\s\\S]*?)<\\/div>`, "gi"),
+      new RegExp(
+        `<div\\b[^>]*\\bclass=["'][^"']*\\b${cls}\\b[^"']*["'][^>]*>([\\s\\S]*?)<\\/div>`,
+        "gi",
+      ),
       (_m, inner) => {
-        callouts.push(`${fence}\n${inlineToMd(inner, rewriteSrc)}\n:::`);
+        const body = convertCalloutInner(inner);
+        callouts.push(body ? `${fence}\n${body}\n:::` : `${fence}\n:::`);
         return `\n\n%%CALLOUT${callouts.length - 1}%%\n\n`;
       },
     );
