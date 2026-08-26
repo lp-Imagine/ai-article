@@ -1,6 +1,7 @@
 /**
- * Sync Draftly articles to vuepressblog via GitHub Contents API + repository_dispatch.
- * Contract: vuepressblog/docs/SYNC.md
+ * Sync Draftly articles to penn-notes via GitHub Contents API + repository_dispatch.
+ * Contract: penn-notes/docs/SYNC.md
+ * 正文路径用可读 slug；sourceId 留 frontmatter；upsert 时清理同 sourceId / 旧 id 文件名的残留路径。
  */
 import { downloadToBuffer } from "@/lib/image-gen";
 import { log } from "@/lib/log";
@@ -100,6 +101,235 @@ function formatDate(d: Date): string {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+/**
+ * 标题 → 可读文件名（与 penn-notes 手写笔记风格一致）。
+ * 去掉路径非法字符与常见中英文标点，空白收成 `-`；空结果回退 fallback（通常为 sourceId）。
+ */
+export function slugFromTitle(title: string, fallback = "untitled"): string {
+  const slug = title
+    .trim()
+    .replace(/[/\\?%*:|"<>]/g, "")
+    .replace(/[：:，,？?！!；;]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return (slug || fallback).slice(0, 80);
+}
+
+function sourceIdLineRe(sourceId: string): RegExp {
+  return new RegExp(`^sourceId:\\s*${escapeRegExp(sourceId)}\\s*$`, "m");
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** List file/dir names under a repo path (Contents API). Missing dir → []. */
+async function listRepoDir(
+  dirPath: string,
+  config: GhConfig,
+): Promise<Array<{ name: string; path: string; type: string }>> {
+  const [owner, repo] = config.repo.split("/");
+  if (!owner || !repo) return [];
+
+  const encodedPath = dirPath
+    .split("/")
+    .map((p) => encodeURIComponent(p))
+    .join("/");
+
+  const getRes = await githubRequest(
+    config,
+    "GET",
+    `/repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(config.branch)}`,
+  );
+  if (!getRes.ok) return [];
+  const raw = getRes.json as unknown;
+  if (!Array.isArray(raw)) return [];
+  return (raw as Array<Record<string, unknown>>)
+    .map((item) => ({
+      name: typeof item.name === "string" ? item.name : "",
+      path: typeof item.path === "string" ? item.path : "",
+      type: typeof item.type === "string" ? item.type : "",
+    }))
+    .filter((item) => item.name && item.path);
+}
+
+/** Read utf8 text of a repo file; 404 → null. */
+async function getRepoFileText(
+  path: string,
+  config: GhConfig,
+): Promise<string | null> {
+  const [owner, repo] = config.repo.split("/");
+  if (!owner || !repo) return null;
+
+  const encodedPath = path
+    .split("/")
+    .map((p) => encodeURIComponent(p))
+    .join("/");
+
+  const getRes = await githubRequest(
+    config,
+    "GET",
+    `/repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(config.branch)}`,
+  );
+  if (!getRes.ok || typeof getRes.json.content !== "string") return null;
+  const encoding = getRes.json.encoding === "base64" ? "base64" : "utf8";
+  try {
+    return Buffer.from(getRes.json.content.replace(/\n/g, ""), encoding).toString(
+      "utf8",
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Collect paths that belong to this article but are not the preferred slug file
+ * (old id.md、改标题遗留、sync/ 旧路径、栏目迁移留下的 id 文件名).
+ */
+export async function collectStaleArticlePaths(opts: {
+  sourceId: string;
+  section: BlogSection;
+  group: string;
+  preferredPath: string;
+  config?: GhConfig;
+}): Promise<string[]> {
+  const config = opts.config ?? readGhConfig();
+  const stale = new Set<string>();
+  const idPath = `website/${opts.section}/${opts.group}/${opts.sourceId}.md`;
+  if (idPath !== opts.preferredPath) stale.add(idPath);
+  stale.add(`website/sync/${opts.section}/${opts.group}/${opts.sourceId}.md`);
+  stale.add(`website/sync/${opts.section}/${opts.sourceId}.md`);
+
+  // 全库 id 文件名（栏目迁移后仍可能残留）
+  for (const p of await findIdNamedMdPaths(opts.sourceId, config)) {
+    if (p !== opts.preferredPath) stale.add(p);
+  }
+
+  // 当前分组内：改标题后旧可读文件名靠 sourceId 识别
+  const siblings = await listRepoDir(
+    `website/${opts.section}/${opts.group}`,
+    config,
+  );
+  const idRe = sourceIdLineRe(opts.sourceId);
+  for (const item of siblings) {
+    if (item.type !== "file" || !item.name.endsWith(".md")) continue;
+    if (item.path === opts.preferredPath) continue;
+    if (item.name === `${opts.sourceId}.md`) {
+      stale.add(item.path);
+      continue;
+    }
+    const text = await getRepoFileText(item.path, config);
+    if (text && idRe.test(text)) stale.add(item.path);
+  }
+
+  return [...stale];
+}
+
+/**
+ * 决定写入路径：优先复用同分组内已有 sourceId 文件（稳定 URL），
+ * 否则用标题 slug；若仅有旧 id.md 则迁移到 slug。
+ */
+export async function resolveArticleMdPath(opts: {
+  sourceId: string;
+  title: string;
+  section: BlogSection;
+  group: string;
+  config?: GhConfig;
+}): Promise<{ mdPath: string; slug: string; stalePaths: string[] }> {
+  const config = opts.config ?? readGhConfig();
+  const slug = slugFromTitle(opts.title, opts.sourceId);
+  const slugPath = `website/${opts.section}/${opts.group}/${slug}.md`;
+  const idRe = sourceIdLineRe(opts.sourceId);
+
+  // 同分组内已有可读文件 → 继续写那份，避免标题微调改 URL
+  const siblings = await listRepoDir(
+    `website/${opts.section}/${opts.group}`,
+    config,
+  );
+  for (const item of siblings) {
+    if (item.type !== "file" || !item.name.endsWith(".md")) continue;
+    if (item.name === `${opts.sourceId}.md`) continue;
+    if (item.path === slugPath) {
+      return {
+        mdPath: slugPath,
+        slug,
+        stalePaths: await collectStaleArticlePaths({
+          sourceId: opts.sourceId,
+          section: opts.section,
+          group: opts.group,
+          preferredPath: slugPath,
+          config,
+        }),
+      };
+    }
+    const text = await getRepoFileText(item.path, config);
+    if (text && idRe.test(text)) {
+      const existingSlug = item.name.replace(/\.md$/, "");
+      return {
+        mdPath: item.path,
+        slug: existingSlug,
+        stalePaths: await collectStaleArticlePaths({
+          sourceId: opts.sourceId,
+          section: opts.section,
+          group: opts.group,
+          preferredPath: item.path,
+          config,
+        }),
+      };
+    }
+  }
+
+  // 新文或仅有 id.md：落到标题 slug，并清理 id / sync 残留
+  return {
+    mdPath: slugPath,
+    slug,
+    stalePaths: await collectStaleArticlePaths({
+      sourceId: opts.sourceId,
+      section: opts.section,
+      group: opts.group,
+      preferredPath: slugPath,
+      config,
+    }),
+  };
+}
+
+/** Recursive git tree: every website path ending with /{sourceId}.md */
+async function findIdNamedMdPaths(
+  sourceId: string,
+  config: GhConfig,
+): Promise<string[]> {
+  const [owner, repo] = config.repo.split("/");
+  if (!owner || !repo) return [];
+
+  const branchRes = await githubRequest(
+    config,
+    "GET",
+    `/repos/${owner}/${repo}/branches/${encodeURIComponent(config.branch)}`,
+  );
+  const commit = branchRes.json.commit as
+    | { commit?: { tree?: { sha?: string } } }
+    | undefined;
+  const treeSha = commit?.commit?.tree?.sha;
+  if (!branchRes.ok || !treeSha) return [];
+
+  const treeRes = await githubRequest(
+    config,
+    "GET",
+    `/repos/${owner}/${repo}/git/trees/${treeSha}?recursive=1`,
+  );
+  if (!treeRes.ok || !Array.isArray(treeRes.json.tree)) return [];
+
+  const suffix = `/${sourceId}.md`;
+  const out: string[] = [];
+  for (const node of treeRes.json.tree as Array<Record<string, unknown>>) {
+    if (node.type !== "blob" || typeof node.path !== "string") continue;
+    if (!node.path.startsWith("website/")) continue;
+    if (node.path.endsWith(suffix)) out.push(node.path);
+  }
+  return out;
 }
 
 function buildFrontmatter(fields: {
@@ -466,12 +696,14 @@ export async function syncArticleToBlog(
     article.createdAt instanceof Date ? article.createdAt : new Date(article.createdAt),
   );
   const bodyMd = htmlToBlogMarkdown(safeContent, { rewriteSrc });
-  // 写入正式栏目路径，才能匹配 VitePress 侧栏 `/web/` 等前缀
-  const mdPath = `website/${section}/${group}/${article.id}.md`;
-  const legacyPaths = [
-    `website/sync/${section}/${group}/${article.id}.md`,
-    `website/sync/${section}/${article.id}.md`,
-  ];
+  // 可读 slug；若仓库里已有同 sourceId 文件则复用其路径（稳定 URL）
+  const { mdPath, slug, stalePaths } = await resolveArticleMdPath({
+    sourceId: article.id,
+    title,
+    section,
+    group,
+    config,
+  });
 
   const fm = buildFrontmatter({
     title,
@@ -495,18 +727,18 @@ export async function syncArticleToBlog(
   );
   commitPaths.push(mdPath);
 
-  for (const legacyPath of legacyPaths) {
+  for (const stalePath of stalePaths) {
     const removed = await deleteFileIfExists(
-      legacyPath,
-      `blog-sync: remove legacy path for ${article.id}`,
+      stalePath,
+      `blog-sync: remove stale path for ${article.id}`,
       config,
     );
-    if (removed) commitPaths.push(`deleted:${legacyPath}`);
+    if (removed) commitPaths.push(`deleted:${stalePath}`);
   }
 
   await dispatchBlogSync({ sourceId: article.id, path: mdPath }, config);
 
-  const articleUrl = `${config.siteUrl}${options.section}/${group}/${article.id}`;
+  const articleUrl = `${config.siteUrl}${section}/${group}/${slug}`;
 
   return {
     path: mdPath,
