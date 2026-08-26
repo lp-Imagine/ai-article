@@ -181,7 +181,7 @@ export function sectionDirective(
     index === 0
       ? `- 开篇衔接方式：${blueprint.openingMode}`
       : index === blueprint.sectionPlans.length - 1
-        ? `- 结尾交付方式：${blueprint.endingMode}`
+        ? `- 结尾交付方式：${blueprint.endingMode}（指本章正文）；若追加总结卡片，必须是**整篇文章**的收束，非本章小结`
         : "";
   return `【全篇蓝图（本章必须服从）】
 - 全文切入角：${blueprint.angle}

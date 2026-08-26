@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { looksLikeModelReasoning, splitContentIntoRefineBlocks } from "./ai";
+import { consolidateArticleSummaries } from "./wechat-style";
 
 describe("looksLikeModelReasoning", () => {
   it("flags writing-planning text (reasoning leak)", () => {
@@ -23,6 +24,42 @@ describe("looksLikeModelReasoning", () => {
 
   it("returns false for empty input", () => {
     expect(looksLikeModelReasoning("")).toBe(false);
+  });
+});
+
+describe("consolidateArticleSummaries", () => {
+  it("keeps only the last summary block when multiple h2 summaries exist", () => {
+    const html = [
+      "<p>开篇</p>",
+      "<hr />",
+      "<h2>第一章</h2><p>正文</p>",
+      "<h2>总结</h2><div class=\"mp-summary\"><p>中间误加的总结一</p></div>",
+      "<hr />",
+      "<h2>第二章</h2><p>更多正文</p>",
+      "<h2>总结</h2><div class=\"mp-summary\"><p>全文最终总结</p></div>",
+    ].join("\n");
+
+    const fixed = consolidateArticleSummaries(html);
+
+    expect(fixed.match(/<h2[^>]*>\s*总结\s*<\/h2>/gi)).toHaveLength(1);
+    expect(fixed).toContain("全文最终总结");
+    expect(fixed).not.toContain("中间误加的总结一");
+  });
+
+  it("removes orphan mp-summary blocks except the last one", () => {
+    const html = [
+      "<h2>第一节</h2><p>内容</p>",
+      "<div class=\"mp-summary\"><p>孤儿总结 A</p></div>",
+      "<hr />",
+      "<h2>第二节</h2><p>内容</p>",
+      "<div class=\"mp-summary\"><p>孤儿总结 B</p></div>",
+    ].join("\n");
+
+    const fixed = consolidateArticleSummaries(html);
+
+    expect(fixed.match(/mp-summary/gi)).toHaveLength(1);
+    expect(fixed).toContain("孤儿总结 B");
+    expect(fixed).not.toContain("孤儿总结 A");
   });
 });
 

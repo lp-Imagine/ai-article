@@ -88,7 +88,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="app-shell">
+    <div className={clsx("app-shell", isArticleEditor && "app-shell-article")}>
       <aside className="app-sidebar">
         <div className="app-sidebar-brand">
           <div className="app-logo">
@@ -168,27 +168,30 @@ export function AppShell({ children }: { children: ReactNode }) {
         </header>
 
         <div className={clsx("app-content", isArticleEditor && "app-content-article")}>{children}</div>
-
-        <nav className="app-mobile-bottom-nav" aria-label="主导航">
-          {navItems.map(({ href, label, icon: Icon, tour }) => {
-            const active =
-              href === "/"
-                ? pathname === "/"
-                : pathname === href || pathname.startsWith(`${href}/`);
-            return (
-              <Link
-                key={href}
-                href={href}
-                data-tour={tour}
-                className={clsx("app-mobile-bottom-item", active && "app-mobile-bottom-item-active")}
-              >
-                <Icon size={20} strokeWidth={active ? 2.2 : 1.8} />
-                <span>{label}</span>
-              </Link>
-            );
-          })}
-        </nav>
       </div>
+
+      <nav
+        className="app-mobile-bottom-nav"
+        aria-label="主导航"
+      >
+        {navItems.map(({ href, label, icon: Icon, tour }) => {
+          const active =
+            href === "/"
+              ? pathname === "/"
+              : pathname === href || pathname.startsWith(`${href}/`);
+          return (
+            <Link
+              key={href}
+              href={href}
+              data-tour={tour}
+              className={clsx("app-mobile-bottom-item", active && "app-mobile-bottom-item-active")}
+            >
+              <Icon size={20} strokeWidth={active ? 2.2 : 1.8} />
+              <span>{label}</span>
+            </Link>
+          );
+        })}
+      </nav>
 
       <BackgroundTaskFloat />
       {me ? <OnboardingTour userId={me.id} /> : null}

@@ -562,15 +562,91 @@ function sanitizeCalloutBlocks(html: string): string {
   );
 }
 
+/** 全文只保留最后一处「总结」卡片，去掉中间章节误生成的重复总结 */
+export function consolidateArticleSummaries(html: string): string {
+  type SummaryBlock = { start: number; end: number; canonical: string };
+
+  const blocks: SummaryBlock[] = [];
+
+  const h2Re = /<h2[^>]*>\s*总结\s*<\/h2>/gi;
+  let h2Match: RegExpExecArray | null;
+  while ((h2Match = h2Re.exec(html)) !== null) {
+    const start = h2Match.index;
+    let end = start + h2Match[0].length;
+    const after = html.slice(end);
+    const mpMatch = after.match(/^\s*<div class="mp-summary">([\s\S]*?)<\/div>/i);
+    if (mpMatch) {
+      end += mpMatch[0].length;
+      blocks.push({
+        start,
+        end,
+        canonical: `${h2Match[0]}<div class="mp-summary">${mpMatch[1]}</div>`,
+      });
+      continue;
+    }
+    const bodyMatch = after.match(
+      /^\s*((?:<(?!h2\b|hr\b)[^>]+>[\s\S]*?)*?)(?=\s*(?:<hr[\s/>]|<h2\b|$))/i,
+    );
+    if (bodyMatch?.[1]?.trim()) {
+      end += bodyMatch[0].length;
+      blocks.push({
+        start,
+        end,
+        canonical: `${h2Match[0]}<div class="mp-summary">${bodyMatch[1].trim()}</div>`,
+      });
+    } else {
+      blocks.push({ start, end, canonical: h2Match[0] });
+    }
+  }
+
+  const orphanRe = /<div class="mp-summary">([\s\S]*?)<\/div>/gi;
+  let orphanMatch: RegExpExecArray | null;
+  while ((orphanMatch = orphanRe.exec(html)) !== null) {
+    const insideH2 = blocks.some(
+      (block) => orphanMatch!.index >= block.start && orphanMatch!.index < block.end,
+    );
+    if (insideH2) continue;
+    blocks.push({
+      start: orphanMatch.index,
+      end: orphanMatch.index + orphanMatch[0].length,
+      canonical: orphanMatch[0],
+    });
+  }
+
+  if (blocks.length <= 1) return html;
+
+  blocks.sort((a, b) => a.start - b.start);
+  const keep = blocks[blocks.length - 1];
+  let result = html;
+  for (let i = blocks.length - 2; i >= 0; i -= 1) {
+    const block = blocks[i];
+    result = result.slice(0, block.start) + result.slice(block.end);
+  }
+
+  const trimmed = result.replace(/(?:\s*<hr\s*\/?>\s*)+$/i, "").trimEnd();
+  const tail = trimmed.slice(Math.max(0, trimmed.length - 800));
+  const hasSummaryAtEnd =
+    /<h2[^>]*>\s*总结\s*<\/h2>\s*<div class="mp-summary">/i.test(tail) ||
+    /<div class="mp-summary">[\s\S]*<\/div>\s*$/i.test(tail);
+  if (!hasSummaryAtEnd && keep.canonical.includes("mp-summary")) {
+    result = `${trimmed}\n<hr />\n${keep.canonical}`;
+  } else {
+    result = trimmed;
+  }
+
+  return result.replace(/(?:\s*<hr\s*\/?>\s*){2,}/gi, "\n<hr />\n").replace(/\n{3,}/g, "\n\n");
+}
+
 /** 将「总结」章节正文包裹为 mp-summary（预览与推送共用） */
 export function wrapSummarySection(html: string): string {
-  if (/class="mp-summary"/i.test(html)) return html;
+  const consolidated = consolidateArticleSummaries(html);
 
-  return html.replace(
+  return consolidated.replace(
     /(<h2[^>]*>\s*总结\s*<\/h2>)([\s\S]*?)(?=\s*(?:<hr[\s/>]|<h2\b|$))/i,
     (_full, h2: string, body: string) => {
       const trimmed = body.trim();
       if (!trimmed) return h2 + body;
+      if (/^<div class="mp-summary">/i.test(trimmed)) return h2 + trimmed;
       return `${h2}<div class="mp-summary">${trimmed}</div>`;
     },
   );

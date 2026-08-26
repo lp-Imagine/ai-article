@@ -256,13 +256,29 @@ export const ARTICLE_HTML_FORMAT_RULES = `
 - ⚠️ 代码块必须是正文顶层的独立块：<pre><code class="language-真实语言">…</code></pre>，语言与内容匹配（python/javascript/typescript/bash/shell/sql/json/html/css 等，终端命令用 bash/shell）；禁止把 <pre>/<code> 放进 <li>、mp-tip、mp-warning、mp-summary、blockquote 等任何列表/卡片容器内；列表项和卡片里只写文字说明，不写代码；有代码的内容直接用独立代码块，不要同时用列表/卡片格式包裹；代码示例前用「示例：」或「配置如下：」等引导文字开头引出，让代码块归属清晰
 - mp-tip：div 内只能有单个 <ol>，li 结构与正文 ol 完全相同；禁止 ul、多个 p、嵌套 li、嵌套列表、写「实用技巧」等标题
 - mp-warning：div 内只用 <p>...</p>；禁止列表和「注意」标题
-- 总结：<h2>总结</h2> + <div class="mp-summary"><p>...</p></div>
+- 总结（整篇收束，非单章小结）：<h2>总结</h2> + <div class="mp-summary"><p>...</p></div>
 - 引用：<blockquote><p>...</p></blockquote>
 
 列表项统一写法：<li><strong>2-8字标题</strong>说明正文</li>（标题与说明同一行，不用 br，li 内不用 p，li 内绝不出现 <pre>/<code>/<ul>/<ol>）
 `.trim();
 
-/** 润色 / 扩写用的精简版，避免占用过多上下文 */
-export const ARTICLE_HTML_FORMAT_RULES_BRIEF = `
-【HTML 格式】保留现有结构；⚠️ 禁止列表嵌套（li 内禁止再出现 ul/ol，防卡片套卡片）；代码块用 <pre><code class="language-真实语言">…</code></pre> 且必须是正文顶层的独立块，禁止放进 li/卡片容器内，列表项和卡片里只写文字、不写代码，代码示例前用「示例：」/「配置如下：」等引导文字引出；mp-tip 内仅单个 <ol>；mp-warning/mp-summary 内仅 <p>；列表项用 <li><strong>标题</strong>说明</li>；允许简单对比 <table>；禁止新增 figure/img/section/自创 class；处理整篇稿时保留结尾 <h2>总结</h2> + <div class="mp-summary"><p>…</p></div> 卡片，若缺失则在文末补一段概括全文核心判断与可带走结论的总结（mp-summary 内仅 <p>，禁止列表/口号）。
+const ARTICLE_HTML_FORMAT_RULES_BRIEF_BASE = `
+【HTML 格式】保留现有结构；⚠️ 禁止列表嵌套（li 内禁止再出现 ul/ol，防卡片套卡片）；代码块用 <pre><code class="language-真实语言">…</code></pre> 且必须是正文顶层的独立块，禁止放进 li/卡片容器内，列表项和卡片里只写文字、不写代码，代码示例前用「示例：」/「配置如下：」等引导文字引出；mp-tip 内仅单个 <ol>；mp-warning/mp-summary 内仅 <p>；列表项用 <li><strong>标题</strong>说明</li>；允许简单对比 <table>；禁止新增 figure/img/section/自创 class
 `.trim();
+
+/** 文末「总结」卡片的内容要求（整篇收束，非单章小结） */
+export const FULL_ARTICLE_SUMMARY_RULES = `
+- 结尾「总结」针对**整篇文章**，不是某一章的小结：必须串起全文各章的核心判断与证据，梳理成 1-2 条读者可带走的结论或判断标准
+- 禁止只总结当前/最后一章；禁止逐章复述标题；禁止「本章/本节/这一章」式收束；mp-summary 内仅单个 <p>，禁止列表
+`.trim();
+
+/** 润色 / 扩写 / 整篇生成用的精简版 */
+export function buildArticleHtmlFormatRulesBrief(input?: { sectional?: boolean }): string {
+  if (input?.sectional) {
+    return `${ARTICLE_HTML_FORMAT_RULES_BRIEF_BASE}；分段写作时禁止在本章添加 <h2>总结</h2> 或 <div class="mp-summary">（全文仅最后一章统一追加一处**整篇**总结卡片，中间章节不要写「总结」标题）`;
+  }
+  return `${ARTICLE_HTML_FORMAT_RULES_BRIEF_BASE}；处理整篇稿时保留结尾 <h2>总结</h2> + <div class="mp-summary"><p>…</p></div> 卡片，若缺失则在文末补一段——${FULL_ARTICLE_SUMMARY_RULES}`;
+}
+
+/** @deprecated 优先使用 buildArticleHtmlFormatRulesBrief({ sectional }) */
+export const ARTICLE_HTML_FORMAT_RULES_BRIEF = buildArticleHtmlFormatRulesBrief();

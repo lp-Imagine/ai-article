@@ -79,7 +79,7 @@ export async function POST(request: Request) {
       if (shouldAutoReformat) {
         if (!isAiReady()) {
           reformatSkippedReason =
-            "未配置 AI API Key，已跳过自动整理格式。请到「设置 → AI 模型」填写后重试导入，或在编辑页手动点「整理格式」。";
+            "未配置 AI API Key，已跳过自动整理格式。请到「设置 → AI 模型」填写后重试导入，或在编辑页手动点「整理正文」。";
         } else {
           try {
             const job = await enqueueGenerationJob({

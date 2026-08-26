@@ -9,6 +9,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Check, ChevronRight, RefreshCw, ShieldCheck, X } from "lucide-react";
+import { createPortal } from "react-dom";
 import clsx from "clsx";
 
 type Props = {
@@ -848,44 +849,47 @@ export function SliderCaptcha({ verified, onVerifiedChange, resetSignal = 0 }: P
         {!verified ? <ChevronRight size={16} className="captcha-trigger-arrow" /> : null}
       </button>
 
-      {open ? (
-        <div
-          className="puzzle-modal-overlay"
-          role="presentation"
-          onPointerDown={(e) => {
-            if (e.target === e.currentTarget) setOpen(false);
-          }}
-        >
-          <div
-            className="puzzle-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="puzzle-modal-title"
-            onPointerDown={(e) => e.stopPropagation()}
-          >
-            <header className="puzzle-modal-header">
-              <div>
-                <p className="puzzle-modal-eyebrow">安全验证</p>
-                <h3 id="puzzle-modal-title" className="puzzle-modal-title">
-                  请完成拼图验证
-                </h3>
-              </div>
-              <button
-                type="button"
-                className="puzzle-modal-close"
-                onClick={() => setOpen(false)}
-                aria-label="关闭"
+      {open
+        ? createPortal(
+            <div
+              className="puzzle-modal-overlay"
+              role="presentation"
+              onPointerDown={(e) => {
+                if (e.target === e.currentTarget) setOpen(false);
+              }}
+            >
+              <div
+                className="puzzle-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="puzzle-modal-title"
+                onPointerDown={(e) => e.stopPropagation()}
               >
-                <X size={18} />
-              </button>
-            </header>
-            <div className="puzzle-modal-body">
-              <PuzzlePanel onSuccess={handleSuccess} />
-            </div>
-            <p className="puzzle-modal-tip">拖动下方滑块，使拼图块与缺口重合</p>
-          </div>
-        </div>
-      ) : null}
+                <header className="puzzle-modal-header">
+                  <div>
+                    <p className="puzzle-modal-eyebrow">安全验证</p>
+                    <h3 id="puzzle-modal-title" className="puzzle-modal-title">
+                      请完成拼图验证
+                    </h3>
+                  </div>
+                  <button
+                    type="button"
+                    className="puzzle-modal-close"
+                    onClick={() => setOpen(false)}
+                    aria-label="关闭"
+                  >
+                    <X size={18} />
+                  </button>
+                </header>
+                <div className="puzzle-modal-body">
+                  <PuzzlePanel onSuccess={handleSuccess} />
+                </div>
+                <p className="puzzle-modal-tip">拖动下方滑块，使拼图块与缺口重合</p>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </>
   );
 }

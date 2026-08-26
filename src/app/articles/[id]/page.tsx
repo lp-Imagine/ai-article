@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { use, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { use, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowLeft,
   AlertCircle,
@@ -1401,7 +1402,7 @@ export default function ArticlePage({
                   setBlogSyncResult(null);
                   setPushDialogOpen(true);
                 }}
-                disabled={busy !== null || !article.content}
+                disabled={Boolean(busy?.startsWith("推送")) || !article.content}
                 className="btn-primary text-sm article-topbar-publish-btn article-topbar-publish-btn-primary"
               >
                 <span className="inline-flex items-center gap-1.5">
@@ -1563,7 +1564,7 @@ export default function ArticlePage({
               </p>
             </div>
             <p className="outline-imported-hint">
-              本文由导入创建。纯文本/Markdown 导入会自动排队「整理格式」；HTML 导入已做本地规范化，可直接润色、配图或推送。需要时可手动点正文工具里的「整理格式」。
+              本文由导入创建。纯文本/Markdown 导入会自动排队整理正文；HTML 导入已做本地规范化，可直接润色、配图或推送。需要时可手动点「整理正文」。
             </p>
           </section>
         ) : null}
@@ -1629,7 +1630,7 @@ export default function ArticlePage({
               setBlogSyncResult(null);
               setPushDialogOpen(true);
             }}
-            disabled={busy !== null || !article.content}
+            disabled={Boolean(busy?.startsWith("推送")) || !article.content}
             className="workflow-btn workflow-btn-primary workflow-item-mobile-only"
           >
             <Send size={14} />
@@ -1780,20 +1781,37 @@ export default function ArticlePage({
           <div className="tool-chip-grid">
             <ActionChip busy={busy} label="生成备选标题" onClick={handleGenerateTitles} />
             <ActionChip busy={busy} label="生成摘要" onClick={handleGenerateSummary} disabled={!article.content && !article.topic} />
-            <ActionChip busy={busy} label="扩写正文" onClick={() => callAction(`/api/articles/${id}/expand`, "扩写正文")} disabled={!article.content} />
-            <ActionChip busy={busy} label="全文润色" onClick={() => callAction(`/api/articles/${id}/polish`, "全文润色")} disabled={!article.content} />
+            <ToolMenu
+              busy={busy}
+              label="改写"
+              disabled={!article.content}
+              items={[
+                { label: "扩写正文", onClick: () => callAction(`/api/articles/${id}/expand`, "扩写正文") },
+                { label: "全文润色", onClick: () => callAction(`/api/articles/${id}/polish`, "全文润色") },
+              ]}
+            />
             <ActionChip
               busy={busy}
-              label="整理格式"
+              label="整理正文"
+              activeLabel="整理格式"
               onClick={() => callAction(`/api/articles/${id}/reformat`, "整理格式")}
               disabled={!article.content}
             />
-            <ActionChip busy={busy} label="章节配图" onClick={() => callAction(`/api/articles/${id}/generate-inline-images`, "生成章节配图")} disabled={!article.content} />
-            <ActionChip
+            <ToolMenu
               busy={busy}
-              label="刷新正文格式"
-              onClick={() => callAction(`/api/articles/${id}/highlight-code`, "刷新正文格式")}
-              disabled={!article.content}
+              label="配图"
+              items={[
+                {
+                  label: "章节配图",
+                  busyLabel: "生成章节配图",
+                  onClick: () => callAction(`/api/articles/${id}/generate-inline-images`, "生成章节配图"),
+                  disabled: !article.content,
+                },
+                {
+                  label: "生成封面图",
+                  onClick: () => callAction(`/api/articles/${id}/generate-cover`, "生成封面图"),
+                },
+              ]}
             />
           </div>
         </div>
@@ -1803,7 +1821,7 @@ export default function ArticlePage({
           className={`mobile-stage-panel ${mobileStage === "publish" ? "mobile-stage-panel-active" : ""}`}
           data-stage="publish"
         >
-        {(pushResult?.draftId || blogSyncResult || pushRecords.length > 0) && (
+        {(pushResult?.draftId || blogSyncResult || pushRecords.length > 0) ? (
           <div className="space-y-2 stage-order-push">
             {pushResult && pushResult.draftId && !pushResult.draftId.startsWith("mock_draft_") ? (
               <div className="push-inline border-[rgba(5,150,105,0.25)] bg-[var(--success-soft)]">
@@ -1881,31 +1899,13 @@ export default function ArticlePage({
               </details>
             ) : null}
           </div>
+        ) : (
+          <div className="publish-stage-guide stage-order-publish-tools">
+            <p className="publish-stage-guide-title">发布前确认</p>
+            <p>标题、摘要和封面就绪后，用底部「推送」发到微信或博客。封面可在正文工具的「配图」里生成。</p>
+          </div>
         )}
 
-        <div className="stage-order-publish-tools">
-          <p className="tool-section-label tool-section-label-publish">发布工具</p>
-          <div className="tool-chip-grid">
-            <ActionChip
-              busy={busy}
-              label="文章预览"
-              onClick={() => setPreviewOpen(true)}
-              disabled={!article.content}
-            />
-            <ActionChip busy={busy} label="生成封面图" onClick={() => callAction(`/api/articles/${id}/generate-cover`, "生成封面图")} />
-            <ActionChip
-              busy={busy}
-              label="推送"
-              activeLabel="推送"
-              onClick={() => {
-                setPushResult(null);
-                setBlogSyncResult(null);
-                setPushDialogOpen(true);
-              }}
-              disabled={!article.content}
-            />
-          </div>
-        </div>
         </div>
       </div>
 
@@ -1945,7 +1945,7 @@ export default function ArticlePage({
         open={pushDialogOpen}
         onClose={() => setPushDialogOpen(false)}
         onConfirm={handlePushConfirm}
-        busy={busy !== null}
+        busy={Boolean(busy?.startsWith("推送"))}
         title={article.title ?? article.topic}
         summary={article.summary}
         coverImageUrl={article.coverImageUrl}
@@ -1998,7 +1998,7 @@ export default function ArticlePage({
               setBlogSyncResult(null);
               setPushDialogOpen(true);
             }}
-            disabled={busy !== null || !article.content}
+            disabled={Boolean(busy?.startsWith("推送")) || !article.content}
             className="mobile-editor-dock-btn mobile-editor-dock-btn-primary"
           >
             <Send size={16} />
@@ -2017,12 +2017,14 @@ function ActionChip({
   activeLabel,
   onClick,
   disabled,
+  exclusive = true,
 }: {
   busy: string | null;
   label: string;
   activeLabel?: string;
   onClick: () => void;
   disabled?: boolean;
+  exclusive?: boolean;
 }) {
   const key = activeLabel ?? label;
   const isLoading = busy === key || Boolean(activeLabel && busy?.startsWith(activeLabel));
@@ -2030,11 +2032,149 @@ function ActionChip({
     <button
       type="button"
       onClick={onClick}
-      disabled={busy !== null || disabled}
+      disabled={disabled || (exclusive ? busy !== null : isLoading)}
       className="tool-chip"
     >
       {isLoading ? `${label}中...` : label}
     </button>
+  );
+}
+
+function ToolMenu({
+  busy,
+  label,
+  items,
+  disabled,
+}: {
+  busy: string | null;
+  label: string;
+  items: Array<{
+    label: string;
+    busyLabel?: string;
+    onClick: () => void;
+    disabled?: boolean;
+  }>;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const activeItem = items.find((item) => {
+    const key = item.busyLabel ?? item.label;
+    return busy === key || Boolean(busy?.startsWith(key));
+  });
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const updateMenuPosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+
+    const rect = trigger.getBoundingClientRect();
+    const itemHeight = window.matchMedia("(max-width: 1023px)").matches ? 44 : 36;
+    const menuHeight = items.length * itemHeight + 12;
+    const bottomReserve = 132;
+    const spaceBelow = window.innerHeight - rect.bottom - bottomReserve;
+    const openUp = spaceBelow < menuHeight && rect.top > menuHeight + 12;
+    const width = Math.max(rect.width, 168);
+    let left = rect.left;
+    if (left + width > window.innerWidth - 8) {
+      left = window.innerWidth - width - 8;
+    }
+    left = Math.max(8, left);
+
+    if (openUp) {
+      setMenuStyle({
+        position: "fixed",
+        top: "auto",
+        bottom: window.innerHeight - rect.top + 6,
+        left,
+        width,
+        zIndex: 90,
+      });
+      return;
+    }
+
+    setMenuStyle({
+      position: "fixed",
+      top: rect.bottom + 6,
+      bottom: "auto",
+      left,
+      width,
+      zIndex: 90,
+    });
+  }, [items.length]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    updateMenuPosition();
+  }, [open, updateMenuPosition]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onLayout = () => updateMenuPosition();
+    window.addEventListener("scroll", onLayout, true);
+    window.addEventListener("resize", onLayout);
+    return () => {
+      window.removeEventListener("scroll", onLayout, true);
+      window.removeEventListener("resize", onLayout);
+    };
+  }, [open, updateMenuPosition]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(event: PointerEvent) {
+      const target = event.target as Node;
+      if (rootRef.current?.contains(target)) return;
+      if ((target as Element).closest?.(".tool-menu-list-portal")) return;
+      setOpen(false);
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [open]);
+
+  const menuList = open ? (
+    <div className="tool-menu-list tool-menu-list-portal" role="menu" style={menuStyle}>
+      {items.map((item) => (
+        <button
+          key={item.label}
+          type="button"
+          role="menuitem"
+          className="tool-menu-item"
+          disabled={item.disabled || busy !== null}
+          onClick={() => {
+            setOpen(false);
+            item.onClick();
+          }}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  ) : null;
+
+  return (
+    <div className="tool-menu" ref={rootRef}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="tool-chip tool-menu-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={disabled || busy !== null}
+        onClick={() => {
+          setOpen((value) => !value);
+        }}
+      >
+        {activeItem ? `${activeItem.label}中...` : label}
+        <ChevronDown size={12} className={`tool-menu-chevron${open ? " tool-menu-chevron-open" : ""}`} />
+      </button>
+      {mounted && menuList ? createPortal(menuList, document.body) : null}
+    </div>
   );
 }
 

@@ -1,7 +1,7 @@
 import type { OutlineOption } from "@/types/article";
 import { getEnvValue } from "@/lib/config-bridge";
 import { highlightCodeBlocks } from "@/lib/code-highlight";
-import { enforceArticleHtmlFormat, normalizeArticleMarkup, normalizeCalloutBlocks } from "@/lib/wechat-style";
+import { enforceArticleHtmlFormat, normalizeArticleMarkup, normalizeCalloutBlocks, consolidateArticleSummaries } from "@/lib/wechat-style";
 import { mapWithConcurrency } from "@/lib/map-with-concurrency";
 import { analyzeContentQuality, sanitizeFactualClaimsInHtml } from "@/lib/content-quality";
 import { isTransientNetworkError, withRetry } from "@/lib/retry";
@@ -41,6 +41,7 @@ import {
   buildWritingUserPayload,
   isEngineeringTopic,
   ARTICLE_HTML_FORMAT_RULES_BRIEF,
+  FULL_ARTICLE_SUMMARY_RULES,
 } from "@/lib/ai/prompts/common";
 import {
   buildOutlinePrompt,
@@ -667,7 +668,9 @@ function finalizeGeneratedContent(
   const safeContent = content
     .replace(/<h1[^>]*>[\s\S]*?<\/h1>/g, "")
     .replace(/<div class="mp-signature">[\s\S]*?<\/div>/g, "");
-  const fixedContent = dedupeRepeatedBlocks(fixCodeBlocks(normalizeCalloutBlocks(safeContent)));
+  const fixedContent = dedupeRepeatedBlocks(
+    fixCodeBlocks(normalizeCalloutBlocks(consolidateArticleSummaries(safeContent))),
+  );
   const sanitized = sanitizeFactualClaimsInHtml(fixedContent);
   const highlightedContent = highlightCodeBlocks(sanitized.content);
   return {
@@ -705,6 +708,25 @@ export function looksLikeModelReasoning(html: string): boolean {
   return false;
 }
 
+function buildLastSectionSummaryDirective(input: {
+  sectionHeading: string;
+  allSectionHeadings: string[];
+  thesis: string;
+}): string {
+  const outline = input.allSectionHeadings.map((h, i) => `${i + 1}. ${h}`).join("\n");
+  const scope = `${FULL_ARTICLE_SUMMARY_RULES}
+- 全文章节（供统筹全文，总结里不要逐条点名）：\n${outline}
+- 全文核心判断：${input.thesis}`;
+
+  if (/总结|收尾|带走/.test(input.sectionHeading)) {
+    return `- 本章正文写完后，用 <div class="mp-summary"><p>2-4 句</p></div> 承载**整篇**收束（mp-summary 内仅 <p>）
+${scope}`;
+  }
+  return `- 本章正文写完后，必须在末尾追加 <h2>总结</h2> + <div class="mp-summary"><p>2-4 句</p></div>，作为**整篇文章**的结尾总结（非本章小结）
+${scope}
+- 「总结」卡片之后不再有任何内容`;
+}
+
 async function generateContentSectionHtml(input: {
   systemCore: string;
   topic: string;
@@ -714,6 +736,7 @@ async function generateContentSectionHtml(input: {
   sectionIndex: number;
   sectionTotal: number;
   previousHeadings: string[];
+  allSectionHeadings: string[];
   perSection: number;
   engineering: boolean;
   isLastSummary: boolean;
@@ -747,10 +770,12 @@ ${
 - 本章约 ${input.perSection} 字（去标签）；禁止重复其他章节内容
 ${
   input.isLastSummary
-    ? /总结|收尾|带走/.test(section.heading)
-      ? '- 本章是全文收尾章节：收束段用 <div class="mp-summary"><p>...</p></div> 承载（mp-summary 内仅 <p>，禁止列表、禁止复述各章标题）'
-      : '- 本章结束时必须在末尾追加 <h2>总结</h2> + <div class="mp-summary"><p>一段话</p></div>：概括全文核心判断与 1-2 条可带走结论；mp-summary 内仅 <p>，禁止列表；「总结」卡片之后不再有任何内容'
-    : ""
+    ? buildLastSectionSummaryDirective({
+        sectionHeading: section.heading,
+        allSectionHeadings: input.allSectionHeadings,
+        thesis: input.blueprint.thesis,
+      })
+    : '- 禁止在本章添加 <h2>总结</h2> 或 <div class="mp-summary">；章节收束用普通 <p> 即可，不要写「总结」标题'
 }
 
 ${sectionDirective(input.blueprint, input.sectionIndex - 1)}`,
@@ -765,6 +790,7 @@ ${sectionDirective(input.blueprint, input.sectionIndex - 1)}`,
               sectionTotal: input.sectionTotal,
               section,
               previousHeadings: input.previousHeadings,
+              allSectionHeadings: input.allSectionHeadings,
               suggestedWords: input.perSection,
               engineering: input.engineering,
               articleAngle: input.blueprint.angle,
@@ -979,8 +1005,9 @@ ${BLUEPRINT_JSON_INSTRUCTION}`;
           section,
           sectionIndex: i + 1,
           sectionTotal: sections.length,
-          previousHeadings: allHeadings.filter((_, idx) => idx !== i),
-          perSection,
+              previousHeadings: allHeadings.filter((_, idx) => idx !== i),
+              allSectionHeadings: allHeadings,
+              perSection,
           engineering,
           blueprint,
           // 最后一章必须收尾：若本章标题本身是总结/收尾类则用它承载总结卡片，
@@ -1332,7 +1359,11 @@ export async function refineContentQuality(input: {
 
   const blocks = splitContentIntoRefineBlocks(input.content);
   const normalize = (html: string) =>
-    highlightCodeBlocks(dedupeRepeatedBlocks(fixCodeBlocks(normalizeCalloutBlocks(html))));
+    highlightCodeBlocks(
+      dedupeRepeatedBlocks(
+        fixCodeBlocks(normalizeCalloutBlocks(consolidateArticleSummaries(html))),
+      ),
+    );
 
   if (blocks.length < 2) {
     const single = await refineHtmlBlock({
@@ -1576,7 +1607,9 @@ export async function reformatArticleHtml(input: {
 
   const merged = out.join("\n");
   return highlightCodeBlocks(
-    dedupeRepeatedBlocks(fixCodeBlocks(normalizeCalloutBlocks(merged))),
+    dedupeRepeatedBlocks(
+      fixCodeBlocks(normalizeCalloutBlocks(consolidateArticleSummaries(merged))),
+    ),
   );
 }
 

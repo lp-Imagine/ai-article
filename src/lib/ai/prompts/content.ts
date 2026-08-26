@@ -5,7 +5,8 @@
  */
 import {
   buildOnTopicBlock,
-  ARTICLE_HTML_FORMAT_RULES_BRIEF,
+  buildArticleHtmlFormatRulesBrief,
+  FULL_ARTICLE_SUMMARY_RULES,
 } from "@/lib/ai/prompts/common";
 
 export const CONTENT_PROMPT_VERSION = "2.0.0";
@@ -49,7 +50,7 @@ ${
 - 配置项/清单一律用一层 <ul>/<ol>，禁止在 <li> 里再嵌套 <ul>/<ol>（卡片套卡片）
 
 【3. 平台与结构】
-${ARTICLE_HTML_FORMAT_RULES_BRIEF}
+${buildArticleHtmlFormatRulesBrief({ sectional: Boolean(sectional) })}
 - 章节用 <h2>，章间由系统添加 <hr />；段落以 <p> 为主
 - 术语、API、命令用 <code>；重点判断可用 <strong>，不要 Markdown
 
@@ -59,8 +60,7 @@ ${
     : `【结尾总结（必须）】
 - 全文最后必须以此收尾（禁止戛然而止、禁止停在最后一个章节标题上）：
   <h2>总结</h2> + <div class="mp-summary"><p>2-4 句</p></div>
-- 内容：一句话点明全文核心判断，再给 1-2 条读者可直接带走/执行的结论或判断标准
-- mp-summary 内只允许单个 <p>：禁止列表、禁止复述各章标题、禁止口号升华
+${FULL_ARTICLE_SUMMARY_RULES}
 - 「总结」卡片是全文最后的内容，其后不再追加任何正文`
 }
 

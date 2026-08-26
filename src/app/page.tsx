@@ -64,12 +64,6 @@ const statusMap: Record<string, { label: string; color: string }> = {
   failed: { label: "推送失败", color: "badge-danger" },
 };
 
-const workflowSteps = [
-  { step: "01", label: "定主题" },
-  { step: "02", label: "选大纲" },
-  { step: "03", label: "出正文" },
-  { step: "04", label: "推草稿" },
-];
 
 /**
  * 粘贴富文本的 HTML 片段起点是否「看起来完整」。
@@ -418,7 +412,7 @@ export default function HomePage() {
         const skip = createdJson.data.reformatSkippedReason;
         toast.show({
           message: skip
-            ? `文章已导入（${skip}）。可在编辑页手动点「整理格式」。`
+            ? `文章已导入（${skip}）。可在编辑页手动点「整理正文」。`
             : "文章已导入，可继续润色、配图或推送",
           variant: skip ? "warning" : "success",
           duration: skip ? 6000 : 4000,
@@ -653,18 +647,9 @@ export default function HomePage() {
       <PageHeader
         eyebrow="Workspace"
         title="Draftly · 内容工作台"
-        description="主题一填，大纲、正文、配图到公众号草稿箱一次做完；已有文稿也能导入继续打磨。"
+        description="输入主题，生成大纲和正文；已有文稿也可以导入继续打磨。"
         className="home-page-header"
       />
-
-      <div className="workflow-steps home-workflow-steps mb-6">
-        {workflowSteps.map((item) => (
-          <div key={item.step} className="workflow-step">
-            <p className="workflow-step-num">{item.step}</p>
-            <p className="workflow-step-label">{item.label}</p>
-          </div>
-        ))}
-      </div>
 
       <section className="home-studio">
         <div data-tour="home-create" className="home-studio-create">
