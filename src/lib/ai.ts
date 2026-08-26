@@ -1876,48 +1876,40 @@ export async function generateSummary(input: {
 
 const IMAGE_PROMPT_SYSTEM = `You are an image prompt engineer. Generate clean, descriptive English prompts for a text-to-image model.
 
-CRITICAL: This model ONLY understands natural language. YOU MUST:
-- Use plain English description only — describe the visual scene naturally
-- NEVER output Midjourney syntax (--v, --ar, --style, --s, --chaos, :: etc.)
-- NEVER output Stable Diffusion syntax (negative prompts, weights like (word:1.2), <lora:...>)
-- Keep 3-6 sentences, be specific and visual
-- The image MUST contain Chinese text as part of the design — specify the exact text and its visual treatment
-- No faces or people in the image
-- NEVER render code-like strings as on-image text: no hex color codes (#xxxxxx), no CSS/rgb()/url(), no HTML tags, no punctuation-only marks. Describe colors in plain words (e.g. "warm latte beige", "soft pink") — if a code-like token appears in this prompt, it is a color hint to follow, NOT text to draw
-- NEVER mention aspect ratio or pixel dimensions (16:9, 1:1, 2560x1440, "banner size" etc.) anywhere — the canvas ratio is set by the API, not by the prompt, and these tokens get painted onto the image as text`;
+Rules:
+- Plain English scene description only. 3-6 sentences. No Midjourney or Stable Diffusion syntax.
+- No faces or people.
+- Never mention pixel sizes, aspect ratios, hex codes, CSS, or rgb().
+- On-image lettering is only the Chinese strings you are explicitly told to paint. Do not invent extra captions, watermarks, English slogans, brand names, or corner labels.
+- If an English phrase in this instruction is a style hint, it is NOT text to draw.`;
 
 /**
- * 锁定参考图 lookbook（漏洞原理那张）：
- * 暖米色纸底 + 粉/杏/薄荷/淡紫块面 + 深棕描边（背景干净，无三角/点点装饰）
+ * penn-notes 封面气质：冷灰白底 + 左上淡蓝光晕 + 左标题右大图形。
+ * 禁止写入 Apple / blog / guidelines 等英文词，生图模型会把它们画成水印。
  */
 const DOODLE_LOOKBOOK = [
-  "CRITICAL LOOKBOOK (match this reference teaching doodle exactly — colors first):",
-  "Canvas background is warm latte beige paper — never pure white, never cool gray, never navy, never black.",
-  "Subtle paper texture only — clean warm sketchbook page with NO decorative icons, NO warning triangles, NO scattered dots, NO exclamation marks in the background.",
-  "All outlines are warm dark-brown ink, slightly wobbly hand-drawn strokes of uneven thickness — not pure black UI lines, not vector-perfect.",
-  "Filled shapes use soft desaturated pastels with matte flat coloring and heavily rounded corners, plus very soft light drop shadows under cards.",
-  "Signature fills: pale sky-blue panels, blush pink boxes, soft apricot/peach boxes, mint green result cards, lavender summary arrow, coral accent ribbon.",
-  "Text ink is dark brown/charcoal for readability. Atmosphere is warm, friendly, educational kawaii tech comic — never cyberpunk neon, never glassmorphism, never photoreal 3D, never muddy gray wash.",
+  "Full-bleed wide banner. Cool pale-gray field with a soft translucent blue wash from the upper left, fading across the canvas.",
+  "Palette: pale gray, white, charcoal, and one restrained blue. Flat vector. No paper grain, no graph-paper grid.",
+  "Do not put the whole design inside a small centered white card. Use the full canvas.",
+  "No cute stickers, no neon, no 3D glass, no dark header strips, no colored rectangles clipped at the edges.",
 ].join(" ");
 
-/** 章节配图：手绘科普信息图 */
+/** 章节配图：左因 → 中机制 → 右果 */
 
 const SECTION_FLOW_LAYOUTS = [
-  "LEFT_TO_RIGHT STORY: left cause panel → middle 1-2 mechanism boxes → right result; large summary arrow band across the bottom",
-  "TOP_TITLE THREE_PANELS: short title top-left; three equal rounded panels left-to-right (before → change → after) with a bottom conclusion ribbon",
-  "CAUSE_STACK_RESULT: left trigger; stacked dual flaw/step boxes in the middle; celebratory result on the right; bottom equation arrow",
-  "COMPARE_THEN_PICK: two soft boxes on the left (option A vs B); arrow to a chosen path; right side shows the outcome badge",
+  "left-to-right: cause box, then one or two mechanism boxes, then a result box; a thin blue connector under them",
+  "short title top-left; three equal rounded boxes left-to-right for before, change, after; a thin conclusion line under them",
+  "trigger on the left; two stacked step boxes in the middle; result on the right; thin blue connectors",
+  "two option boxes on the left; a thin arrow to the chosen path; outcome on the right",
 ] as const;
 
-/** 封面：同一 lookbook，内容仍是主副标题 + 主视觉 */
 const COVER_STYLE_DOODLE =
-  `${DOODLE_LOOKBOOK} Cover banner in the SAME sketchbook look. Bold Chinese headline + short keyword subtitle in dark brown ink. One large cute doodle hero metaphor matching the topic (server, browser, stopwatch, puzzle, queue, shield as simplified icons). Use blush pink / apricot / mint / lavender accents on cream-beige paper. No glass chip rows, no neon. No aspect ratio or pixel dimension mentions.`;
+  `${DOODLE_LOOKBOOK} Left side: a very large charcoal Chinese headline with a smaller blue tagline under it. Right side: a BIG geometric composition filling most of the right half — several overlapping translucent blue circles of different sizes, thin connecting arcs, and one simplified topic object (stacked translucent slabs, a clock face, or a node cluster). The right composition should feel substantial, not a tiny icon floating above the title.`;
 
 const COVER_LAYOUT_VARIANTS = [
-  "LEFT_TITLE_RIGHT_HERO: bold Chinese headline + subtitle on the left third; right two-thirds shows one large hand-drawn doodle hero metaphor related to the topic",
-  "BOTTOM_TITLE_CENTER_HERO: dominant cute doodle illustration centered in the upper area; bottom cream band has bold dark Chinese headline and pastel subtitle",
-  "TITLE_OVER_SCENE: short bold headline near top-left; a horizontal hand-drawn scene with 1-2 soft pastel panels fills the mid canvas without extra Chinese labels",
-  "DIAGONAL_SPLIT: soft peach/pink wash diagonally divides canvas; headline on the cream-beige side, doodle tech object on the pastel side",
+  "Asymmetric split: type on the left, oversized geometric composition on the right filling most of that half.",
+  "Type left-aligned. Right side is a cluster of overlapping translucent circles plus one large simplified object, sitting in a soft blue wash.",
+  "Type on the left. Right side has stacked translucent slabs or concentric rings occupying most of the height.",
 ] as const;
 
 
@@ -2006,7 +1998,7 @@ function fallbackStoryboard(sectionHeading: string, plainSection: string): Secti
       role: "step",
       label: bits[1],
       caption: "关键一步",
-      visual: "middle pastel process box with simple doodle icon",
+      visual: "middle light-gray process box with simple geometric icon",
     });
     panels.push({
       role: "result",
@@ -2019,13 +2011,13 @@ function fallbackStoryboard(sectionHeading: string, plainSection: string): Secti
       role: "cause",
       label: "问题",
       caption: softClipLabel(heading, 14),
-      visual: "broken pipe or error icon doodle in a rounded box",
+      visual: "broken pipe or error geometric icon in an outlined box",
     });
     panels.push({
       role: "step",
       label: "做法",
       caption: "拆解处理",
-      visual: "toolbox and checklist doodle",
+      visual: "toolbox and checklist geometric icons",
     });
     panels.push({
       role: "result",
@@ -2057,7 +2049,7 @@ export async function generateSectionImagePrompt(
       [
         {
           role: "system",
-          content: `你是技术科普插画分镜师。根据「本章标题+正文」，提炼一张手绘教学信息图的分镜（像「漏洞原理」那种：左因→中机制→右果+底部总结箭头）。
+          content: `你是信息图分镜师。根据「本章标题+正文」，提炼一张分镜：左因→中机制→右果，底部一句总结。
 
 规则：
 - title：2-8 字总题（如「漏洞原理」「超时定位」「分段提效」），不要整段章节标题
@@ -2065,7 +2057,7 @@ export async function generateSectionImagePrompt(
   - role: cause | step | flaw | result
   - label: 2-10 字短标签（完整可读）
   - caption: 4-14 字补充说明（完整可读）
-  - visual: 英文简述该格要画什么（cute icon / browser / server / arrow…）
+  - visual: 英文简述该格要画什么（geometric icon / stacked layers / clock / nodes / arrow）
 - summary: 底部总结，最多 18 字，优先「A + B = 结论」或「425秒→105秒」这种公式感
 - 内容必须忠于本章正文，禁止编造本章没有的漏洞/报错/数字
 - 不要输出长句子；所有中文都要短而完整，避免生图截断
@@ -2265,11 +2257,11 @@ function pickCoverVisualVariant(topic: string, title: string) {
   for (let i = 0; i < topic.length; i++) hash = (hash + topic.charCodeAt(i)) | 0;
   const layout = COVER_LAYOUT_VARIANTS[Math.abs(hash) % COVER_LAYOUT_VARIANTS.length];
   const theme = pickCoverTheme(topic, title);
-  // 冷暖只微调强调色，背景始终锁死参考图的拿铁米色纸
+  // 冷暖只微调蓝的深浅，构图仍是左标题右图形
   const tint =
     theme === "cool"
-      ? "Lean accents slightly toward pale sky-blue and lilac, still on latte-beige paper."
-      : "Lean accents slightly toward blush pink and apricot, still on latte-beige paper.";
+      ? "Accents lean slightly lighter blue."
+      : "Accents lean slightly deeper blue.";
   const styleAnchor = `${COVER_STYLE_DOODLE} ${tint}`;
   return { layout, theme, styleAnchor };
 }
@@ -2324,38 +2316,32 @@ export async function generateCoverPrompt(
   const prompt = await callChat([
     {
       role: "system",
-      content: IMAGE_PROMPT_SYSTEM + `\n\nCreate a WeChat article COVER banner in the SAME hand-drawn educational doodle style as teaching infographics (cream paper, pastel panels, cute simplified icons). Content stays a cover: bold Chinese headline + one short keyword tagline + one hero doodle — NOT a multi-panel vulnerability storyboard. The canvas is a wide horizontal banner already fixed by the API — do NOT mention aspect ratio or dimensions in the prompt.
+      content: IMAGE_PROMPT_SYSTEM + `\n\nWrite a prompt for a wide article COVER.
 
-STYLE ANCHOR (fixed for this cover):
+STYLE:
 ${variant.styleAnchor}
 
-LAYOUT (use exactly this composition):
+LAYOUT:
 ${variant.layout}
 
-TOPIC VISUALS:
-- Domain: ${domainHint}
-- Pick ONE large hand-drawn doodle hero metaphor that fits the article (cute server, browser window, stopwatch, queue boxes, puzzle pieces, shield outline — flat pastel, not 3D render)
-- Tiny floating doodle badges OK for decoration — icons only, no extra Chinese labels
+HERO:
+- Topic domain: ${domainHint}
+- Occupy the RIGHT HALF of the canvas with a LARGE geometric composition: 3 to 5 overlapping translucent blue circles of different sizes, thin arcs connecting them, plus one simplified object for the topic.
+- The composition should be big enough to balance the headline. Not a tiny icon. Not a window thumbnail. Not centered above the title. Not a small white card.
 
-SUBTITLE = KEYWORD SUMMARY (mandatory):
-- Read title/summary/content and extract the article's core keywords (tools, errors, methods, metrics)
-- Compress into ONE punchy Chinese tagline of 6-14 characters, e.g. 「网关超时 · 五步提效」「425秒压到105秒」
-- Seed keywords for reference: ${JSON.stringify(seedKeywords)}
-- FORBIDDEN as subtitle: status fragments like 「大纲正常」「正文失败」「生成成功」; chapter headings; truncated mid-phrases
+TEXT (the only lettering on the image):
+- Headline exactly 「${headline}」 — very large, bold, charcoal, LEFT aligned
+- Tagline exactly your subtitle — smaller, restrained blue, under the headline
+- No other Chinese. No English slogans, watermarks, corner labels, or extra captions.
+- If the headline contains Latin like Node.js or Prompt, paint those words fully — never cut them off.
 
-TEXT RULES (critical):
-- The ONLY Chinese text on the image: headline 「${headline}」 and your final subtitle tagline
-- Headline: large, bold, dark charcoal ink — copy 「${headline}」 EXACTLY
-- Subtitle: smaller pastel or charcoal keyword tagline — never truncate
-- NEVER paint outline/section headings (开篇/核心/第N章)
-- NEVER use a horizontal row of frosted glass keyword chips at the bottom
-- NEVER paint the raw articleTopic as a corner watermark
-- BACKGROUND must be warm cream / off-white paper, bright and clean — not navy cyber, not muddy gray
+SUBTITLE:
+- 6-14 Chinese characters compressing the article keywords
+- Seed keywords: ${JSON.stringify(seedKeywords)}
+- Forbidden: 「大纲正常」「正文失败」「生成成功」, chapter headings
 
 Output JSON: { "prompt": string, "subtitle": string, "keywords": string[] }
-- "subtitle": the final 6-14 char keyword tagline
-- "keywords": 3-5 short keywords extracted from the article content
-- In "prompt": describe visuals in English; Chinese text must match headline + subtitle exactly.`,
+- "prompt" describes the scene in English; Chinese strings must match headline + subtitle exactly.`,
     },
     {
       role: "user",
@@ -2408,8 +2394,8 @@ Output JSON: { "prompt": string, "subtitle": string, "keywords": string[] }
     `${variant.styleAnchor} ${variant.layout}. ` +
       `Bold Chinese headline 「${headline}」 with keyword subtitle 「${subtitle}」. ` +
       `Keywords: ${finalKeywords.join(", ")}. ` +
-      `One large hand-drawn pastel doodle hero about ${domainHint}. ` +
-      `Cream paper background. No keyword chip row. No chapter headings.`,
+      `Large geometric hero on the right about ${domainHint}, overlapping translucent circles and thin node lines. ` +
+      `Soft blue glow from the upper left. No extra lettering.`,
     headline,
     subtitle,
     variant,
@@ -2456,18 +2442,11 @@ function reinforceCoverPrompt(
 
   // 丢掉摘要原文，避免模型再抄「大纲正常」——只保留最终要画的字
   const hints = [
-    variant.styleAnchor,
-    `Layout: ${variant.layout}.`,
-    `Headline text must be exactly 「${headline}」 — large, bold, complete. Never truncate.`,
-    `Subtitle text must be exactly 「${safeSubtitle}」 — keyword tagline. Never use 大纲正常 or other status fragments.`,
-    `The ONLY Chinese strings allowed on the image are 「${headline}」 and 「${safeSubtitle}」.`,
-    "All on-image text must be complete phrases — never cut off Chinese or English mid-word.",
-    "BACKGROUND: warm latte beige paper, subtle paper grain only — clean empty space, no warning triangles, no scattered dots. Pastel blush/apricot/mint/lavender accents, brown doodle outlines.",
-    "FORBIDDEN: 大纲正常、正文失败、生成成功, and any chapter headings.",
-    "FORBIDDEN: horizontal row of 3-4 small glass cards with keyword labels at the bottom.",
-    "FORBIDDEN: pure white studio bg, cool gray wash, dark navy cyber backgrounds, neon glow, photoreal 3D renders, glassmorphism.",
-    "FORBIDDEN: text in top-left or top-right corners as watermarks.",
-    "No photoreal faces. Cute simplified doodle icons OK. No cluttered chip/tag rows.",
+    "Full-bleed pale-gray canvas with a faint blue wash from the upper left. Not a small centered white card.",
+    `Headline exactly 「${headline}」 on the LEFT, very large and complete.`,
+    `Tagline exactly 「${safeSubtitle}」 under it, smaller, restrained blue.`,
+    "RIGHT HALF: oversized overlapping translucent blue circles plus one simplified object. Not a tiny icon above the title.",
+    "No other lettering. No English slogans. No corner watermarks. No graph-paper grid. No colored blocks clipped at the edges.",
   ];
 
   if (LIFESTYLE_COVER_KEYWORD_RE.test(cleaned)) {
