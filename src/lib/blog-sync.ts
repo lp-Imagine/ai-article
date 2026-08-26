@@ -12,7 +12,14 @@ import {
   guessImageExt,
   htmlToBlogMarkdown,
 } from "@/lib/html-to-blog-md";
-import { BLOG_SECTIONS, type BlogSection, inferBlogGroup, inferBlogPlacement, isValidBlogGroup } from "@/lib/blog-sync-constants";
+import {
+  BLOG_SECTIONS,
+  SECTION_GROUPS,
+  type BlogSection,
+  inferBlogGroup,
+  inferBlogPlacement,
+  isValidBlogGroup,
+} from "@/lib/blog-sync-constants";
 import { getEnvValue } from "@/lib/config-bridge";
 
 export { BLOG_SECTIONS, type BlogSection };
@@ -198,9 +205,13 @@ export async function collectStaleArticlePaths(opts: {
 }): Promise<string[]> {
   const config = opts.config ?? readGhConfig();
   const stale = new Set<string>();
-  const idPath = `website/${opts.section}/${opts.group}/${opts.sourceId}.md`;
-  if (idPath !== opts.preferredPath) stale.add(idPath);
-  stale.add(`website/sync/${opts.section}/${opts.group}/${opts.sourceId}.md`);
+  const groups = SECTION_GROUPS[opts.section] ?? [{ id: opts.group }];
+
+  for (const { id: group } of groups) {
+    const idPath = `website/${opts.section}/${group}/${opts.sourceId}.md`;
+    if (idPath !== opts.preferredPath) stale.add(idPath);
+    stale.add(`website/sync/${opts.section}/${group}/${opts.sourceId}.md`);
+  }
   stale.add(`website/sync/${opts.section}/${opts.sourceId}.md`);
 
   // 全库 id 文件名（栏目迁移后仍可能残留）
@@ -208,21 +219,23 @@ export async function collectStaleArticlePaths(opts: {
     if (p !== opts.preferredPath) stale.add(p);
   }
 
-  // 当前分组内：改标题后旧可读文件名靠 sourceId 识别
-  const siblings = await listRepoDir(
-    `website/${opts.section}/${opts.group}`,
-    config,
-  );
+  // 栏目内所有分组：改分组 / 改标题后旧可读文件名靠 sourceId 识别
   const idRe = sourceIdLineRe(opts.sourceId);
-  for (const item of siblings) {
-    if (item.type !== "file" || !item.name.endsWith(".md")) continue;
-    if (item.path === opts.preferredPath) continue;
-    if (item.name === `${opts.sourceId}.md`) {
-      stale.add(item.path);
-      continue;
+  for (const { id: group } of groups) {
+    const siblings = await listRepoDir(
+      `website/${opts.section}/${group}`,
+      config,
+    );
+    for (const item of siblings) {
+      if (item.type !== "file" || !item.name.endsWith(".md")) continue;
+      if (item.path === opts.preferredPath) continue;
+      if (item.name === `${opts.sourceId}.md`) {
+        stale.add(item.path);
+        continue;
+      }
+      const text = await getRepoFileText(item.path, config);
+      if (text && idRe.test(text)) stale.add(item.path);
     }
-    const text = await getRepoFileText(item.path, config);
-    if (text && idRe.test(text)) stale.add(item.path);
   }
 
   return [...stale];
