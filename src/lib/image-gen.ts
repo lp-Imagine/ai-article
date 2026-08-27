@@ -11,6 +11,17 @@ const DEFAULT_IMAGE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v
 const DEFAULT_IMAGE_MODEL = "qwen-image-2.0";
 const DEFAULT_IMAGE_TIMEOUT_MS = 180_000;
 
+/** 各模型单边像素上限（Qwen-Image 等为 2048；超出会被静默降分辨率） */
+const QWEN_MAX_SIDE = 2048;
+const QWEN_MAX_PIXELS = QWEN_MAX_SIDE * QWEN_MAX_SIDE;
+
+/** 封面 16:9，在 Qwen 限制内尽量高 */
+const DEFAULT_COVER_SIZE = "2048x1152";
+/** 章节配图 1:1 最高清 */
+const DEFAULT_INLINE_SIZE = "2048x2048";
+
+export type ImageKind = "cover" | "inline";
+
 /** HTTP 状态可重试时打上标记，供 withRetry 判定 */
 class RetryableImageError extends Error {
   readonly retryable = true;
@@ -47,6 +58,165 @@ export function getImageEndpointConfig() {
   return { baseUrl, model, apiKey };
 }
 
+function isQwenImageModel(model: string): boolean {
+  return /qwen-image/i.test(model);
+}
+
+function isDalle3Model(model: string): boolean {
+  return /dall-e-3/i.test(model);
+}
+
+/** 解析 2048x1152 / 2048*1152 */
+export function parseImageSize(size: string): { width: number; height: number } | null {
+  const normalized = size.trim().replace(/\*/g, "x");
+  const match = normalized.match(/^(\d+)x(\d+)$/i);
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width < 64 || height < 64) {
+    return null;
+  }
+  return { width, height };
+}
+
+/** 将尺寸限制在模型允许范围内，并对齐 16 像素（Qwen 输出惯例） */
+export function clampImageSize(
+  width: number,
+  height: number,
+  opts?: { maxSide?: number; maxPixels?: number },
+): { width: number; height: number } {
+  const maxSide = opts?.maxSide ?? QWEN_MAX_SIDE;
+  const maxPixels = opts?.maxPixels ?? QWEN_MAX_PIXELS;
+
+  let w = width;
+  let h = height;
+
+  if (w > maxSide) {
+    h = Math.round((h * maxSide) / w);
+    w = maxSide;
+  }
+  if (h > maxSide) {
+    w = Math.round((w * maxSide) / h);
+    h = maxSide;
+  }
+  while (w * h > maxPixels) {
+    w = Math.max(512, Math.floor(w * 0.92));
+    h = Math.max(512, Math.floor(h * 0.92));
+  }
+
+  w = Math.max(512, Math.floor(w / 16) * 16);
+  h = Math.max(512, Math.floor(h / 16) * 16);
+  return { width: w, height: h };
+}
+
+function formatSizeString(width: number, height: number, separator: "x" | "*"): string {
+  return `${width}${separator}${height}`;
+}
+
+/** 按模型与用途选择生成尺寸（可通过 IMAGE_COVER_SIZE / IMAGE_INLINE_SIZE 覆盖） */
+export function resolveImageSize(kind: ImageKind, model: string): string {
+  const profile = getModelImageProfile(model);
+  const envKey = kind === "cover" ? "IMAGE_COVER_SIZE" : "IMAGE_INLINE_SIZE";
+  const configured = readConfig(envKey, "");
+
+  const parsed = configured ? parseImageSize(configured) : null;
+  const base = parsed ?? (kind === "cover" ? profile.cover : profile.inline);
+
+  const { width, height } = clampImageSize(base.width, base.height, {
+    maxSide: profile.maxSide,
+    maxPixels: profile.maxPixels,
+  });
+
+  return formatSizeString(width, height, profile.sizeSeparator);
+}
+
+type ModelImageProfile = {
+  cover: { width: number; height: number };
+  inline: { width: number; height: number };
+  maxSide: number;
+  maxPixels: number;
+  sizeSeparator: "x" | "*";
+};
+
+function isSeedreamModel(model: string): boolean {
+  return /seedream|doubao/i.test(model);
+}
+
+/** 各模型家族的默认尺寸与上限（画质主要由 size 决定，不是 quality 参数） */
+export function getModelImageProfile(model: string): ModelImageProfile {
+  if (isQwenImageModel(model)) {
+    return {
+      cover: { width: 2048, height: 1152 },
+      inline: { width: 2048, height: 2048 },
+      maxSide: QWEN_MAX_SIDE,
+      maxPixels: QWEN_MAX_PIXELS,
+      sizeSeparator: "*",
+    };
+  }
+
+  if (isDalle3Model(model)) {
+    return {
+      cover: { width: 1792, height: 1024 },
+      inline: { width: 1024, height: 1024 },
+      maxSide: 1792,
+      maxPixels: 1792 * 1024,
+      sizeSeparator: "x",
+    };
+  }
+
+  if (isSeedreamModel(model)) {
+    // 豆包 Seedream：旧版 2560x1440 只是 2K 档位的下限，并非最高清
+    // 官方 2K 16:9 推荐 2848x1600；4.0/4.5 支持 4K 方图
+    const seedream5 = /seedream-5/i.test(model);
+    return {
+      cover: { width: 2848, height: 1600 },
+      inline: seedream5
+        ? { width: 2048, height: 2048 }
+        : { width: 4096, height: 4096 },
+      maxSide: seedream5 ? 4096 : 4096,
+      maxPixels: seedream5 ? 4_194_304 : 16_777_216,
+      sizeSeparator: "x",
+    };
+  }
+
+  return {
+    cover: parseImageSize(DEFAULT_COVER_SIZE)!,
+    inline: parseImageSize(DEFAULT_INLINE_SIZE)!,
+    maxSide: QWEN_MAX_SIDE,
+    maxPixels: QWEN_MAX_PIXELS,
+    sizeSeparator: "x",
+  };
+}
+
+function buildGenerationPayload(prompt: string, model: string, kind: ImageKind): Record<string, unknown> {
+  const size = resolveImageSize(kind, model);
+  const body: Record<string, unknown> = {
+    model,
+    prompt,
+    n: 1,
+    size,
+    watermark: false,
+  };
+
+  if (isQwenImageModel(model)) {
+    body.prompt_extend = true;
+    body.negative_prompt =
+      "low resolution, blurry, worst quality, jpeg artifacts, distorted, watermark, oversaturated";
+  } else if (isDalle3Model(model)) {
+    const quality = readConfig("IMAGE_QUALITY", "hd");
+    if (quality === "hd" || quality === "standard") {
+      body.quality = quality;
+    }
+  } else {
+    const quality = readConfig("IMAGE_QUALITY", "");
+    if (quality === "hd" || quality === "standard") {
+      body.quality = quality;
+    }
+  }
+
+  return body;
+}
+
 function formatImageHttpError(status: number, body: string, baseUrl: string, model: string) {
   const snippet = body.replace(/\s+/g, " ").trim().slice(0, 180);
   const hint =
@@ -57,9 +227,14 @@ function formatImageHttpError(status: number, body: string, baseUrl: string, mod
 }
 
 /** 调用图片接口：带超时与瞬时错误重试，避免请求挂死拖垮整个任务 */
-async function requestImageUrl(prompt: string, label: string): Promise<string> {
+async function requestImageUrl(
+  prompt: string,
+  label: string,
+  kind: ImageKind,
+): Promise<string> {
   const { baseUrl, model, apiKey } = getImageEndpointConfig();
   const timeoutMs = getImageTimeoutMs();
+  const payload = buildGenerationPayload(prompt, model, kind);
 
   return withRetry(
     async () => {
@@ -71,13 +246,7 @@ async function requestImageUrl(prompt: string, label: string): Promise<string> {
             "Content-Type": "application/json",
             Authorization: `Bearer ${apiKey}`,
           },
-          body: JSON.stringify({
-            model,
-            prompt,
-            n: 1,
-            size: "2560x1440",
-            watermark: false,
-          }),
+          body: JSON.stringify(payload),
         },
         timeoutMs,
         label,
@@ -89,7 +258,6 @@ async function requestImageUrl(prompt: string, label: string): Promise<string> {
           "image generation failed",
           label,
         );
-        // 限流/网关抖动值得重试；404、401 等配置类错误立即失败
         throw isRetryableHttpStatus(res.status)
           ? new RetryableImageError(message)
           : new Error(message);
@@ -126,13 +294,11 @@ export async function generateCoverImage(
     };
   }
 
-  return { url: await requestImageUrl(prompt, "image generation failed"), source: "ai" };
+  return { url: await requestImageUrl(prompt, "image generation failed", "cover"), source: "ai" };
 }
 
 export async function downloadToBuffer(url: string): Promise<Buffer | null> {
   if (!url || url.startsWith("https://placehold.co")) return null;
-  // SSRF 防护：只允许公开 http(s) 图片。封面 URL 来自用户可写入的文章字段，
-  // 若不校验，服务端可能被诱导去抓内网/云元数据地址。
   try {
     assertSafeImportUrl(url);
   } catch {
@@ -144,7 +310,7 @@ export async function downloadToBuffer(url: string): Promise<Buffer | null> {
   return Buffer.from(arrayBuffer);
 }
 
-/** 生成文章章节穿插配图（正方形 1:1，满足豆包最小像素要求） */
+/** 生成文章章节穿插配图（正方形 1:1，满足豆包 / Qwen 最高像素要求） */
 export async function generateSectionImage(
   prompt: string,
 ): Promise<{ url: string; source: "ai" | "placeholder" }> {
@@ -157,5 +323,5 @@ export async function generateSectionImage(
     };
   }
 
-  return { url: await requestImageUrl(prompt, "section image failed"), source: "ai" };
+  return { url: await requestImageUrl(prompt, "section image failed", "inline"), source: "ai" };
 }
