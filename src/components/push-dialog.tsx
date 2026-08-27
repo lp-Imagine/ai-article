@@ -1,5 +1,6 @@
 "use client";
 
+import { createPortal } from "react-dom";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   BLOG_SECTIONS,
@@ -72,6 +73,11 @@ export default function PushDialog({
   const [tagsInput, setTagsInput] = useState(defaultTags);
   const [draft, setDraft] = useState(false);
   const [manualOverride, setManualOverride] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const groups = SECTION_GROUPS[section] ?? SECTION_GROUPS.misc;
   // 切换 section 后旧分组可能不在新分组列表里，渲染期回落到首项，
@@ -84,6 +90,16 @@ export default function PushDialog({
     () => [title, summary ?? "", tagsInput || defaultTags],
     [title, summary, tagsInput, defaultTags],
   );
+
+  useEffect(() => {
+    if (!open) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open, busy, onClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -109,9 +125,9 @@ export default function PushDialog({
   const groupLabel = groups.find((g) => g.id === group)?.label ?? group;
   const canConfirm = pushWechat || (pushBlog && blogSyncConfigured);
 
-  if (!open) return null;
+  if (!open || !mounted) return null;
 
-  return (
+  return createPortal(
     <div
       className="push-dialog-overlay mobile-dialog-sheet"
       onClick={onClose}
@@ -346,7 +362,8 @@ export default function PushDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

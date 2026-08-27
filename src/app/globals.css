@@ -461,7 +461,7 @@ body::before {
 }
 
 .page-title {
-  margin-top: 6px;
+  margin-top: 10px;
   font-family: var(--font-serif), serif;
   font-size: clamp(1.75rem, 2vw, 2.25rem);
   font-weight: 700;
@@ -4831,12 +4831,40 @@ textarea::placeholder {
   }
 
   .settings-footer {
-    position: sticky;
+    position: fixed;
+    left: 10px;
+    right: 10px;
     bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+    z-index: 60;
+    margin-top: 0;
+    padding: 8px;
+    border-radius: 16px;
+    justify-content: stretch;
+    box-shadow: 0 8px 28px rgba(15, 40, 80, 0.12);
+  }
+
+  .settings-footer-hint {
+    display: none !important;
+  }
+
+  .settings-footer-save {
+    width: 100%;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .settings-content {
+    padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
   }
 
   .mobile-dialog-sheet {
     align-items: flex-end !important;
+    top: 0 !important;
+    right: 0 !important;
+    left: 0 !important;
+    bottom: calc(64px + env(safe-area-inset-bottom, 0px)) !important;
     padding: 0 !important;
   }
 
@@ -4844,18 +4872,28 @@ textarea::placeholder {
   .mobile-dialog-sheet .push-dialog {
     width: 100% !important;
     max-width: 100% !important;
-    max-height: 92vh !important;
+    max-height: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
     border-radius: 20px 20px 0 0 !important;
     margin: 0 !important;
   }
 
   .push-dialog-body {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
     padding: 18px 18px 12px;
     gap: 16px;
   }
 
   .push-dialog-actions {
-    padding: 12px 18px calc(12px + env(safe-area-inset-bottom, 0px));
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    flex-shrink: 0 !important;
+    padding: 12px 18px 16px;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
   }
 
   .progress-dialog-overlay {
