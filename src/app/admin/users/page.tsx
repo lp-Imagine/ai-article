@@ -186,9 +186,8 @@ export default function AdminUsersPage() {
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="Admin"
         title="用户管理"
-        description="查看、禁用、重置密码或删除已注册用户。每个用户的文章与设置相互隔离。"
+        description="管理账号权限与状态，各用户数据相互隔离。"
       />
 
       <SectionCard title={`全部用户${total > 0 ? ` · ${total}` : ""}`}>

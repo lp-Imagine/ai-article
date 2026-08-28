@@ -333,9 +333,8 @@ export default function SettingsPage() {
   return (
     <>
       <PageHeader
-        eyebrow="Configuration"
         title="设置"
-        description="配置 AI 接口与微信公众号接入。左侧切换分类，底部统一保存。"
+        description="配置模型与发布渠道。"
       />
 
       <div className="settings-layout">

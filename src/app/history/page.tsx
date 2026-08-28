@@ -213,9 +213,8 @@ export default function HistoryPage() {
       />
 
       <PageHeader
-        eyebrow="Archive"
-        title="历史记录"
-        description="过往创建的所有文章，点击继续编辑或查看进度。"
+        title="历史"
+        description="过往文章，点开继续编辑。"
       />
 
       <SectionCard

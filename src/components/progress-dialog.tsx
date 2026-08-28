@@ -29,6 +29,7 @@ export function ProgressDialog({
   error,
   startedAt,
   onCancel,
+  onMinimize,
 }: {
   open: boolean;
   title: string;
@@ -39,11 +40,14 @@ export function ProgressDialog({
   /** 任务真实开始时间（ms），离开页面再返回时用于续计时 */
   startedAt?: number | null;
   onCancel?: () => void;
+  /** 收起弹窗、任务继续在后台跑，不取消 */
+  onMinimize?: () => void;
 }) {
   const [elapsed, setElapsed] = useState(() => elapsedSecondsFrom(startedAt));
 
   const allDone = steps.every((s) => s.status === "done" || s.status === "error");
   const hasError = Boolean(error || steps.some((s) => s.status === "error"));
+  const running = !allDone && !hasError;
 
   useEffect(() => {
     if (!open) return;
@@ -81,17 +85,30 @@ export function ProgressDialog({
               {title}
             </h2>
           </div>
-          <span
-            className={`progress-dialog-badge ${
-              hasError
-                ? "progress-dialog-badge-error"
-                : allDone
-                  ? "progress-dialog-badge-done"
-                  : "progress-dialog-badge-running"
-            }`}
-          >
-            {hasError ? "失败" : allDone ? "已完成" : "进行中"}
-          </span>
+          <div className="progress-dialog-header-side">
+            <span
+              className={`progress-dialog-badge ${
+                hasError
+                  ? "progress-dialog-badge-error"
+                  : allDone
+                    ? "progress-dialog-badge-done"
+                    : "progress-dialog-badge-running"
+              }`}
+            >
+              {hasError ? "失败" : allDone ? "已完成" : "进行中"}
+            </span>
+            {running && onMinimize ? (
+              <button
+                type="button"
+                className="progress-dialog-minimize"
+                onClick={onMinimize}
+                aria-label="收起，后台继续"
+                title="收起，后台继续"
+              >
+                <X size={16} strokeWidth={2.2} />
+              </button>
+            ) : null}
+          </div>
         </header>
 
         {showImageProgress && (
@@ -148,10 +165,19 @@ export function ProgressDialog({
         </section>
 
         <footer className="progress-dialog-footer">
-          {!allDone && !hasError && onCancel ? (
-            <button type="button" onClick={onCancel} className="progress-dialog-cancel">
-              取消任务
-            </button>
+          {running ? (
+            <div className="progress-dialog-actions">
+              {onMinimize ? (
+                <button type="button" onClick={onMinimize} className="progress-dialog-continue">
+                  后台继续
+                </button>
+              ) : null}
+              {onCancel ? (
+                <button type="button" onClick={onCancel} className="progress-dialog-cancel">
+                  取消任务
+                </button>
+              ) : null}
+            </div>
           ) : null}
 
           {hasError ? (
@@ -161,7 +187,9 @@ export function ProgressDialog({
           ) : (
             <div className="progress-dialog-footer-meta">
               <p className="progress-dialog-elapsed">已进行 {formatElapsed(elapsed)}</p>
-              <p className="progress-dialog-hint">可切换页面，任务会在后台继续；返回本文可查看进度</p>
+              <p className="progress-dialog-hint">
+                点「后台继续」可切走页面；任务继续跑，返回本文可再看进度
+              </p>
             </div>
           )}
         </footer>

@@ -288,9 +288,8 @@ export default function SchedulesPage() {
   return (
     <>
       <PageHeader
-        eyebrow="Schedule"
         title="定时任务"
-        description="设置主题与频率，系统到点自动完成 大纲 → 正文 →（可选）推送微信草稿，全程无需人工干预。"
+        description="到点自动写大纲与正文，可选推送微信草稿。"
       />
 
       <div className="schedules-page">

@@ -6,7 +6,6 @@ import { CalendarClock, Clock3, Home, LogOut, Settings, Sparkles, Users } from "
 import clsx from "clsx";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { BackgroundTaskFloat } from "@/components/background-task-float";
-import { BackgroundTaskSidebarHint } from "@/components/background-task-sidebar-hint";
 import { OnboardingTour } from "@/components/onboarding-tour";
 import { clearSessionAndGoLogin, isUnauthorizedResponse } from "@/lib/session-client";
 
@@ -20,13 +19,13 @@ type MeUser = {
 const baseNavItems = [
   { href: "/", label: "工作台", icon: Home, tour: "nav-home" },
   { href: "/history", label: "历史", icon: Clock3, tour: "nav-history" },
-  { href: "/schedules", label: "定时任务", icon: CalendarClock, tour: "nav-schedules" },
+  { href: "/schedules", label: "定时", icon: CalendarClock, tour: "nav-schedules" },
   { href: "/settings", label: "设置", icon: Settings, tour: "nav-settings" },
 ];
 
 function pageTitleForPath(pathname: string): string | null {
   if (pathname === "/") return "工作台";
-  if (pathname === "/history") return "历史记录";
+  if (pathname === "/history") return "历史";
   if (pathname === "/schedules") return "定时任务";
   if (pathname === "/settings") return "设置";
   if (pathname.startsWith("/articles/")) return "文章编辑";
@@ -92,7 +91,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <aside className="app-sidebar">
         <div className="app-sidebar-brand">
           <div className="app-logo">
-            <Sparkles size={18} strokeWidth={2.2} />
+            <Sparkles size={16} strokeWidth={2.2} />
           </div>
           <div>
             <p className="app-brand-title">Draftly</p>
@@ -121,7 +120,6 @@ export function AppShell({ children }: { children: ReactNode }) {
         </nav>
 
         <div className="app-sidebar-footer">
-          <BackgroundTaskSidebarHint />
           {me ? (
             <div className="app-sidebar-user">
               <div className="app-sidebar-user-meta">
@@ -135,9 +133,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 退出
               </button>
             </div>
-          ) : (
-            <p>选题 → 大纲 → 正文 → 推送</p>
-          )}
+          ) : null}
         </div>
       </aside>
 
@@ -145,20 +141,16 @@ export function AppShell({ children }: { children: ReactNode }) {
         <header className="app-mobile-header">
           <div className="app-mobile-brand">
             <div className="app-logo">
-              <Sparkles size={16} strokeWidth={2.2} />
+              <Sparkles size={14} strokeWidth={2.2} />
             </div>
             <div className="app-mobile-brand-text">
-              <span className="app-brand-title">Draftly</span>
-              {mobileTitle ? <span className="app-mobile-page-title">{mobileTitle}</span> : null}
+              <span className="app-brand-title">{mobileTitle || "Draftly"}</span>
             </div>
           </div>
           {me ? (
             <div className="app-mobile-user">
               <div className="app-mobile-user-meta">
                 <span className="app-mobile-user-name">{me.displayName || me.username}</span>
-                {me.role === "SUPER_ADMIN" ? (
-                  <span className="app-mobile-user-role">管理员</span>
-                ) : null}
               </div>
               <button type="button" className="app-mobile-logout" onClick={() => void logout()} aria-label="退出登录">
                 <LogOut size={18} />
@@ -171,7 +163,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </div>
 
       <nav
-        className="app-mobile-bottom-nav"
+        className={clsx("app-mobile-bottom-nav", isArticleEditor && "app-mobile-bottom-nav-hidden")}
         aria-label="主导航"
       >
         {navItems.map(({ href, label, icon: Icon, tour }) => {
@@ -200,12 +192,12 @@ export function AppShell({ children }: { children: ReactNode }) {
 }
 
 export function PageHeader({
-  eyebrow,
   title,
   description,
   actions,
   className,
 }: {
+  /** @deprecated 营销 eyebrow 已弃用，保留参数以免破坏调用方 */
   eyebrow?: string;
   title: string;
   description?: string;
@@ -215,9 +207,11 @@ export function PageHeader({
   return (
     <header className={clsx("page-header", className)}>
       <div className="page-header-main">
-        {eyebrow ? <p className="page-eyebrow">{eyebrow}</p> : null}
-        <h1 className="page-title">{title}</h1>
-        {description ? <p className="page-description">{description}</p> : null}
+        <div className="page-header-copy">
+          <span className="page-header-mark" aria-hidden />
+          <h1 className="page-title">{title}</h1>
+          {description ? <p className="page-description">{description}</p> : null}
+        </div>
       </div>
       {actions ? <div className="page-header-actions">{actions}</div> : null}
     </header>
@@ -251,6 +245,12 @@ export function SectionCard({
   );
 }
 
-export function FieldLabel({ children }: { children: ReactNode }) {
-  return <label className="field-label">{children}</label>;
+export function FieldLabel({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return <label className={clsx("field-label", className)}>{children}</label>;
 }

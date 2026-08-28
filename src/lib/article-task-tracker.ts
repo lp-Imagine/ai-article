@@ -39,6 +39,10 @@ export function isOutlineBackgroundTaskLabel(label: string) {
   return label === "生成大纲" || label === "重新生成大纲";
 }
 
+export function isPushBackgroundTaskLabel(label: string) {
+  return label.startsWith("推送");
+}
+
 export const ARTICLE_BACKGROUND_TASKS_CHANGED = "mp-article-background-tasks-change";
 export const ARTICLE_BACKGROUND_TASK_FINISHED = "mp-article-background-task-finished";
 

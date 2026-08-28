@@ -645,9 +645,8 @@ export default function HomePage() {
   return (
     <>
       <PageHeader
-        eyebrow="Workspace"
-        title="Draftly · 内容工作台"
-        description="输入主题，生成大纲和正文；已有文稿也可以导入继续打磨。"
+        title="工作台"
+        description="写主题出大纲与正文，或导入旧稿继续打磨。"
         className="home-page-header"
       />
 
@@ -761,11 +760,12 @@ export default function HomePage() {
                         </div>
                         <div className="topic-ideas-toolbar-side">
                           {ideasFilter !== "history" ? (
-                            <label className="topic-ideas-category-field">
+                            <label className="topic-ideas-category-field" title="灵感分类">
                               <span className="topic-ideas-category-label">分类</span>
                               <select
                                 value={ideasCategory}
                                 disabled={ideasLoading}
+                                aria-label="灵感分类"
                                 onChange={(e) => {
                                   const next = e.target.value as IdeasCategory;
                                   if (next === ideasCategory) return;

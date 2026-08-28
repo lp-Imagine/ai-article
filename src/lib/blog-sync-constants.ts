@@ -3,6 +3,30 @@ export type BlogSection = (typeof BLOG_SECTIONS)[number];
 
 export type BlogGroupOption = { id: string; label: string };
 
+/** 与 penn-notes 顶栏 nav 文案一致 */
+export const SECTION_LABELS: Record<BlogSection, string> = {
+  web: "JS & 框架",
+  ui: "样式",
+  tech: "工具",
+  computer: "浏览器",
+  agent: "AI Agent",
+  misc: "杂项",
+};
+
+/** penn-notes 顶栏顺序（不含首页/动态等） */
+export const BLOG_SECTION_NAV_ORDER: BlogSection[] = [
+  "web",
+  "ui",
+  "tech",
+  "agent",
+  "computer",
+  "misc",
+];
+
+export function formatBlogGroupPath(section: BlogSection, group: string): string {
+  return `/${section}/${group}/`;
+}
+
 /** 与 penn-notes / vuepressblog 侧栏分组对齐 */
 export const SECTION_GROUPS: Record<BlogSection, BlogGroupOption[]> = {
   web: [

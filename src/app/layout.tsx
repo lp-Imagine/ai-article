@@ -23,7 +23,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="zh-CN">
-      <body className="antialiased">
+      <body className="draftly-body antialiased">
         <PointerCaptureGuard />
         <ToastProvider>
           <AppShell>{children}</AppShell>

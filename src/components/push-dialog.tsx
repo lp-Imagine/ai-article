@@ -3,8 +3,10 @@
 import { createPortal } from "react-dom";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  BLOG_SECTIONS,
+  BLOG_SECTION_NAV_ORDER,
   SECTION_GROUPS,
+  SECTION_LABELS,
+  formatBlogGroupPath,
   inferBlogGroup,
   inferBlogPlacement,
   type BlogSection,
@@ -34,15 +36,6 @@ type Props = {
   targetWords?: number | null;
   blogSyncConfigured?: boolean;
   defaultTags?: string;
-};
-
-const SECTION_LABELS: Record<BlogSection, string> = {
-  web: "JS & 框架",
-  ui: "样式",
-  tech: "工具备忘",
-  computer: "浏览器",
-  agent: "AI Agent",
-  misc: "杂项",
 };
 
 function parseTags(raw: string): string[] {
@@ -80,8 +73,6 @@ export default function PushDialog({
   }, []);
 
   const groups = SECTION_GROUPS[section] ?? SECTION_GROUPS.misc;
-  // 切换 section 后旧分组可能不在新分组列表里，渲染期回落到首项，
-  // 不用 effect 回写 state（那会多一次级联渲染，且中间帧是非法组合）
   const group = groups.some((g) => g.id === pickedGroup)
     ? pickedGroup
     : (groups[0]?.id ?? "misc");
@@ -123,6 +114,7 @@ export default function PushDialog({
   const previewTags = useMemo(() => parseTags(tagsInput), [tagsInput]);
   const sectionLabel = SECTION_LABELS[section];
   const groupLabel = groups.find((g) => g.id === group)?.label ?? group;
+  const blogPath = formatBlogGroupPath(section, group);
   const canConfirm = pushWechat || (pushBlog && blogSyncConfigured);
 
   if (!open || !mounted) return null;
@@ -209,9 +201,9 @@ export default function PushDialog({
                     disabled={busy}
                   />
                   <span>
-                    <span className="font-medium">博客</span>
+                    <span className="font-medium">Penn Notes 博客</span>
                     <span className="mt-0.5 block text-xs text-[var(--muted)]">
-                      同步到你配置的 GitHub 博客仓库并触发部署
+                      同步到 GitHub 仓库并触发部署
                     </span>
                   </span>
                 </label>
@@ -224,57 +216,65 @@ export default function PushDialog({
           </div>
 
           {blogSyncConfigured && pushBlog ? (
-            <div className="rounded-lg border border-[var(--line)] bg-[var(--surface)] p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <Label>博客分类（自动判断）</Label>
-                  <p className="mt-1.5 text-sm font-medium text-[var(--foreground)]">
-                    {sectionLabel} / {groupLabel}
+            <div className="push-blog-panel">
+              <div className="push-blog-preview-head">
+                <div className="push-blog-preview-main">
+                  <p className="push-blog-preview-kicker">博客归档位置</p>
+                  <p className="push-blog-preview-title">
+                    {sectionLabel}
+                    <span className="push-blog-preview-sep">·</span>
+                    {groupLabel}
                   </p>
-                  <p className="mt-1 text-xs text-[var(--muted)]">
+                  <p className="push-blog-preview-path" title={blogPath}>
+                    website{blogPath}
+                  </p>
+                  <p className="push-blog-preview-hint">
                     {manualOverride
-                      ? "已手动调整栏目/分类"
-                      : "已根据标题、摘要、标签自动选择"}
+                      ? "已手动指定栏目与侧栏分组"
+                      : "已根据标题、摘要、标签自动匹配 Penn Notes 结构"}
                   </p>
                 </div>
                 <button
                   type="button"
-                  className="shrink-0 text-xs font-medium text-[var(--accent)]"
+                  className="push-blog-adjust-btn"
                   onClick={() => setManualOverride((v) => !v)}
                   disabled={busy}
                 >
-                  {manualOverride ? "收起" : "手动调整"}
+                  {manualOverride ? "收起" : "调整"}
                 </button>
               </div>
 
               {manualOverride ? (
-                <div className="mt-3 space-y-3 border-t border-[var(--line)] pt-3">
-                  <div>
-                    <Label>顶栏栏目</Label>
+                <div className="push-blog-fields">
+                  <div className="push-blog-field">
+                    <label className="push-blog-field-label" htmlFor="push-blog-section">
+                      站点栏目
+                    </label>
                     <select
-                      className="mt-2 w-full rounded-lg border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--foreground)]"
+                      id="push-blog-section"
+                      className="push-blog-field-control"
                       value={section}
                       onChange={(e) => {
                         const next = e.target.value as BlogSection;
                         setSection(next);
-                        setGroup(
-                          inferBlogGroup(next, [title, summary ?? "", tagsInput]),
-                        );
+                        setGroup(inferBlogGroup(next, [title, summary ?? "", tagsInput]));
                       }}
                       disabled={busy}
                     >
-                      {BLOG_SECTIONS.filter((k) => k !== "misc").map((key) => (
+                      {BLOG_SECTION_NAV_ORDER.map((key) => (
                         <option key={key} value={key}>
                           {SECTION_LABELS[key]}
                         </option>
                       ))}
-                      <option value="misc">{SECTION_LABELS.misc}</option>
                     </select>
                   </div>
-                  <div>
-                    <Label>侧栏分类</Label>
+                  <div className="push-blog-field">
+                    <label className="push-blog-field-label" htmlFor="push-blog-group">
+                      侧栏分组
+                    </label>
                     <select
-                      className="mt-2 w-full rounded-lg border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--foreground)]"
+                      id="push-blog-group"
+                      className="push-blog-field-control"
                       value={group}
                       onChange={(e) => setGroup(e.target.value)}
                       disabled={busy}
@@ -289,25 +289,29 @@ export default function PushDialog({
                 </div>
               ) : null}
 
-              <div className="mt-3">
-                <Label>标签（逗号分隔，可选）</Label>
+              <div className="push-blog-field push-blog-field-full">
+                <label className="push-blog-field-label" htmlFor="push-blog-tags">
+                  标签
+                </label>
                 <input
-                  className="mt-2 w-full rounded-lg border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--foreground)]"
+                  id="push-blog-tags"
+                  className="push-blog-field-control"
                   value={tagsInput}
                   onChange={(e) => setTagsInput(e.target.value)}
                   placeholder="JavaScript, Vue"
                   disabled={busy}
                 />
+                <p className="push-blog-field-hint">逗号分隔，写入 frontmatter tags</p>
               </div>
 
-              <label className="mt-3 flex items-center gap-2 text-sm text-[var(--muted)]">
+              <label className="push-blog-draft">
                 <input
                   type="checkbox"
                   checked={draft}
                   onChange={(e) => setDraft(e.target.checked)}
                   disabled={busy}
                 />
-                以草稿写入博客（draft: true）
+                <span>以草稿写入（draft: true）</span>
               </label>
             </div>
           ) : null}

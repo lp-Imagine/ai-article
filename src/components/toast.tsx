@@ -50,31 +50,11 @@ type ToastApi = {
 
 const ToastContext = createContext<ToastContextValue | null>(null);
 
-const VARIANT_STYLES: Record<ToastVariant, { ring: string; bg: string; icon: string; badge: string }> = {
-  success: {
-    ring: "border-[rgba(34,197,94,0.25)]",
-    bg: "bg-[rgba(255,255,255,0.88)]",
-    icon: "✓",
-    badge: "bg-[var(--success)] text-white",
-  },
-  error: {
-    ring: "border-[rgba(239,68,68,0.25)]",
-    bg: "bg-[rgba(255,255,255,0.88)]",
-    icon: "✕",
-    badge: "bg-[var(--danger)] text-white",
-  },
-  info: {
-    ring: "border-[rgba(0,113,227,0.22)]",
-    bg: "bg-[rgba(255,255,255,0.92)]",
-    icon: "ⓘ",
-    badge: "bg-[var(--accent)] text-white",
-  },
-  warning: {
-    ring: "border-[rgba(245,158,11,0.25)]",
-    bg: "bg-[rgba(255,255,255,0.88)]",
-    icon: "!",
-    badge: "bg-[var(--warning)] text-white",
-  },
+const VARIANT_ICONS: Record<ToastVariant, string> = {
+  success: "✓",
+  error: "✕",
+  info: "ⓘ",
+  warning: "!",
 };
 
 let toastCounter = 0;
@@ -164,58 +144,45 @@ function ToastViewport({
   onDismiss: (id: string) => void;
 }) {
   return (
-    <div className="pointer-events-none fixed top-4 left-1/2 z-[100] flex -translate-x-1/2 flex-col items-stretch gap-2 max-md:top-3 sm:top-6">
-      {toasts.map((toast) => {
-        const style = VARIANT_STYLES[toast.variant];
-        return (
-          <div
-            key={toast.id}
-            role="alert"
-            className={`pointer-events-auto flex max-w-[min(560px,calc(100vw-2rem))] items-start gap-3 rounded-2xl px-4 py-3.5 border ${style.ring} ${style.bg} backdrop-blur-xl shadow-[var(--shadow-sm)]`}
-            style={{
-              animation: "toast-in 180ms ease-out",
-              boxShadow: toast.variant === "success"
-                ? "0 0 20px rgba(74,222,128,0.15)"
-                : toast.variant === "error"
-                  ? "0 0 20px rgba(248,113,113,0.15)"
-                  : toast.variant === "warning"
-                    ? "0 0 20px rgba(255,183,77,0.15)"
-                    : "0 0 20px rgba(0,113,227,0.15)",
-            }}
+    <div className="toast-viewport" aria-live="polite" aria-relevant="additions">
+      {toasts.map((toast) => (
+        <div
+          key={toast.id}
+          role="alert"
+          className={`toast-item toast-item-${toast.variant}`}
+        >
+          <span
+            className={`toast-item-icon toast-item-icon-${toast.variant}`}
+            aria-hidden
           >
-            <span
-              className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold ${style.badge}`}
-              aria-hidden
-            >
-              {style.icon}
-            </span>
-            <div className="min-w-0 flex-1">
-              {toast.title && (
-                <div className="text-sm font-semibold text-[var(--foreground)]">{toast.title}</div>
-              )}
-              <div className="text-sm leading-relaxed text-[var(--muted)]">{toast.message}</div>
-              {toast.action && (
-                <button
-                  onClick={() => {
-                    toast.action!.onClick();
-                    onDismiss(toast.id);
-                  }}
-                  className="mt-2 text-xs font-semibold text-[var(--accent)] hover:underline"
-                >
-                  {toast.action.label}
-                </button>
-              )}
-            </div>
-            <button
-              onClick={() => onDismiss(toast.id)}
-              aria-label="关闭"
-              className="ml-2 -mr-1 -mt-1 rounded p-1 text-[rgba(0,0,0,0.25)] hover:text-[var(--foreground)] transition-colors"
-            >
-              ✕
-            </button>
+            {VARIANT_ICONS[toast.variant]}
+          </span>
+          <div className="toast-item-body">
+            {toast.title ? <p className="toast-item-title">{toast.title}</p> : null}
+            <p className="toast-item-message">{toast.message}</p>
+            {toast.action ? (
+              <button
+                type="button"
+                onClick={() => {
+                  toast.action!.onClick();
+                  onDismiss(toast.id);
+                }}
+                className="toast-item-action"
+              >
+                {toast.action.label}
+              </button>
+            ) : null}
           </div>
-        );
-      })}
+          <button
+            type="button"
+            onClick={() => onDismiss(toast.id)}
+            aria-label="关闭"
+            className="toast-item-close"
+          >
+            ✕
+          </button>
+        </div>
+      ))}
     </div>
   );
 }
@@ -225,7 +192,6 @@ export function useToast(): ToastApi {
   if (!ctx) {
     throw new Error("useToast must be used inside <ToastProvider>");
   }
-  // Intentionally omit `toasts` so callers can safely put this in effect deps.
   return useMemo(
     () => ({
       show: ctx.show,
