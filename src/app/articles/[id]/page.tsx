@@ -13,6 +13,7 @@ import {
   FileText,
   Image as ImageIcon,
   ListTree,
+  Loader2,
   RefreshCw,
   Save,
   Send,
@@ -40,6 +41,7 @@ import {
   startArticleBackgroundTask,
   reconcileBackgroundTaskAfterRequestFailure,
   waitForGenerationJob,
+  type ArticleBackgroundTask,
   type ArticleBackgroundTaskFinishedDetail,
   type GenerationJobSnapshot,
 } from "@/lib/article-task-tracker";
@@ -144,6 +146,7 @@ export default function ArticlePage({
   }>({ open: false, title: "", steps: [], startedAt: null });
   const [progressKey, setProgressKey] = useState(0);
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
+  const [backgroundTask, setBackgroundTask] = useState<ArticleBackgroundTask | null>(null);
 
   const toast = useToast();
   const abortRef = useRef<AbortController | null>(null);
@@ -352,6 +355,16 @@ export default function ArticlePage({
       mountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!id) return;
+    const syncBackgroundTask = () => {
+      setBackgroundTask(getArticleBackgroundTask(id));
+    };
+    syncBackgroundTask();
+    window.addEventListener(ARTICLE_BACKGROUND_TASKS_CHANGED, syncBackgroundTask);
+    return () => window.removeEventListener(ARTICLE_BACKGROUND_TASKS_CHANGED, syncBackgroundTask);
+  }, [id]);
 
   useEffect(() => {
     if (!id || loading) return;
@@ -571,6 +584,22 @@ export default function ArticlePage({
     };
   }, [id, loading, toast, resetProgressState, refresh]);
 
+  const outlinesPreview = Array.isArray(article?.outline) ? article.outline : [];
+  const isOutlineGeneratingPreview =
+    isOutlineBackgroundTaskLabel(busy ?? "") ||
+    (backgroundTask != null && isOutlineBackgroundTaskLabel(backgroundTask.label));
+  const waitingForOutlinePreview =
+    Boolean(article) &&
+    isOutlineGeneratingPreview &&
+    outlinesPreview.length === 0 &&
+    !article?.content?.trim();
+
+  useEffect(() => {
+    if (!waitingForOutlinePreview) return;
+    setMobileStage("outline");
+    setOutlinePanelOpen(true);
+  }, [waitingForOutlinePreview]);
+
   function cancelCurrent() {
     cancelArticleBackgroundTask(id);
     try {
@@ -604,6 +633,34 @@ export default function ArticlePage({
       variant: "info",
       duration: 2800,
     });
+  }
+
+  function reopenProgressDialog() {
+    const task = getArticleBackgroundTask(id) ?? backgroundTask;
+    if (!task) return;
+    progressDismissedRef.current = false;
+    setProgressKey((key) => key + 1);
+    setProgress({
+      open: true,
+      title: task.title,
+      steps: [
+        { label: "准备工作", status: "done" },
+        {
+          label: isOutlineBackgroundTaskLabel(task.label)
+            ? "正在生成大纲方案"
+            : task.label === "生成章节配图"
+              ? "正在生成配图"
+              : "调用 AI 生成中",
+          status: "running",
+        },
+        { label: "保存到草稿", status: "pending" },
+      ],
+      generatedCount: 0,
+      totalCount: 1,
+      error: null,
+      startedAt: task.startedAt,
+    });
+    setBusy((current) => current ?? task.label);
   }
 
   function applyInlineImagePollProgress(content: string, sessionId: number) {
@@ -1392,6 +1449,11 @@ export default function ArticlePage({
 
   const outlines = Array.isArray(article.outline) ? article.outline : [];
   const hasSelectedOutline = typeof article.selectedOutlineIndex === "number";
+  const isOutlineGenerating =
+    isOutlineBackgroundTaskLabel(busy ?? "") ||
+    (backgroundTask != null && isOutlineBackgroundTaskLabel(backgroundTask.label));
+  const waitingForOutline = isOutlineGenerating && outlines.length === 0 && !article.content?.trim();
+  const showOutlineTaskBanner = waitingForOutline && !progress.open;
   const statusClass = statusVariant[article.status] ?? "badge-muted";
   const viewingOutline = outlines.find((o) => o.index === activeOutlineView) ?? outlines[0];
   const viewingSelected = viewingOutline?.index === article.selectedOutlineIndex;
@@ -1490,7 +1552,7 @@ export default function ArticlePage({
               预览
             </span>
           </button>
-          {!article.content?.trim() ? (
+          {!article.content?.trim() && !waitingForOutline ? (
             <button
               type="button"
               onClick={() => callAction(`/api/articles/${id}/generate-content`, "生成正文")}
@@ -1560,6 +1622,18 @@ export default function ArticlePage({
                 </button>
               </div>
             ) : null}
+          </div>
+        ) : null}
+
+        {showOutlineTaskBanner ? (
+          <div className="article-task-banner" role="status">
+            <div className="article-task-banner-main">
+              <Loader2 size={16} className="article-task-banner-spinner" aria-hidden />
+              <span>正在生成大纲方案，完成后可选择写作方向</span>
+            </div>
+            <button type="button" className="article-task-banner-action" onClick={reopenProgressDialog}>
+              查看进度
+            </button>
           </div>
         ) : null}
 
@@ -1710,7 +1784,61 @@ export default function ArticlePage({
               本文由导入创建。纯文本/Markdown 导入会自动排队整理正文；HTML 导入已做本地规范化，可直接润色、配图或推送。需要时可手动点「整理正文」。
             </p>
           </section>
-        ) : null}
+        ) : waitingForOutline ? (
+          <section className="outline-panel stage-order-outline outline-panel-generating" aria-busy="true">
+            <div className="outline-panel-head">
+              <p className="outline-panel-title inline-flex items-center gap-2">
+                <ListTree size={15} />
+                大纲方案
+              </p>
+              <span className="outline-generating-badge">
+                <Loader2 size={12} className="outline-generating-badge-icon" aria-hidden />
+                生成中
+              </span>
+            </div>
+            <div className="outline-generating-body">
+              <div className="outline-generating-status">
+                <p className="outline-generating-title">AI 正在构思多个写作方向</p>
+                <p className="outline-generating-desc">根据主题生成多套大纲，通常需要 30–60 秒，完成后请选择一个方案</p>
+              </div>
+              <div className="outline-generating-skeleton" aria-hidden="true">
+                <div className="outline-skeleton-tab-strip">
+                  <div className="outline-skeleton-tab" />
+                  <div className="outline-skeleton-tab" />
+                  <div className="outline-skeleton-tab" />
+                </div>
+                {[0, 1, 2].map((idx) => (
+                  <div key={idx} className="outline-skeleton-section">
+                    <div className="outline-skeleton-line outline-skeleton-line-short" />
+                    <div className="outline-skeleton-line" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        ) : (
+          <section className="outline-panel stage-order-outline outline-panel-empty">
+            <div className="outline-panel-head">
+              <p className="outline-panel-title inline-flex items-center gap-2">
+                <ListTree size={15} />
+                大纲方案
+              </p>
+            </div>
+            <div className="outline-empty-body">
+              <p className="outline-empty-title">尚未生成大纲</p>
+              <p className="outline-empty-desc">先生成大纲并选定写作方向，再进入标题封面与正文编辑。</p>
+              <button
+                type="button"
+                className="btn-primary text-sm outline-empty-action"
+                disabled={busy !== null}
+                onClick={() => void callAction(`/api/articles/${id}/generate-outline`, "生成大纲")}
+              >
+                <RefreshCw size={14} />
+                生成大纲
+              </button>
+            </div>
+          </section>
+        )}
 
         <div className="outline-stage-actions mobile-stage-actions">
           <WorkflowButton
@@ -1724,19 +1852,21 @@ export default function ArticlePage({
               )
             }
           />
-          <WorkflowButton
-            busy={busy}
-            label="生成正文"
-            icon={<FileText size={14} />}
-            onClick={() => {
-              setMobileStage("content");
-              setOutlinePanelOpen(false);
-              void callAction(`/api/articles/${id}/generate-content`, "生成正文");
-            }}
-            disabled={!hasSelectedOutline}
-            title={hasSelectedOutline ? undefined : "请先选择一个大纲"}
-            className="workflow-btn-primary"
-          />
+          {!waitingForOutline ? (
+            <WorkflowButton
+              busy={busy}
+              label="生成正文"
+              icon={<FileText size={14} />}
+              onClick={() => {
+                setMobileStage("content");
+                setOutlinePanelOpen(false);
+                void callAction(`/api/articles/${id}/generate-content`, "生成正文");
+              }}
+              disabled={!hasSelectedOutline}
+              title={hasSelectedOutline ? undefined : "请先选择一个大纲"}
+              className="workflow-btn-primary"
+            />
+          ) : null}
         </div>
         </div>
 
@@ -1813,6 +1943,21 @@ export default function ArticlePage({
         </div>
 
         <div className="editor-panel stage-order-editor">
+          {waitingForOutline ? (
+            <div className="editor-waiting-outline">
+              <div className="editor-waiting-outline-icon" aria-hidden>
+                <Loader2 size={28} className="editor-waiting-outline-spinner" />
+              </div>
+              <p className="editor-waiting-outline-title">大纲生成中，请稍候</p>
+              <p className="editor-waiting-outline-desc">
+                完成后可在左侧查看多套方案并选择方向，再编辑标题封面与生成正文。
+              </p>
+              <button type="button" className="btn-secondary text-sm" onClick={reopenProgressDialog}>
+                查看生成进度
+              </button>
+            </div>
+          ) : (
+            <>
           <div className="editor-panel-head">
             <div className="editor-tabs" role="tablist" aria-label="编辑内容">
               <button
@@ -1977,6 +2122,8 @@ export default function ArticlePage({
               ) : null}
             </div>
           </div>
+            </>
+          )}
         </div>
         </div>
 
@@ -2143,6 +2290,16 @@ export default function ArticlePage({
           {saving ? "保存中" : "保存"}
         </button>
         {mobileStage === "outline" ? (
+          waitingForOutline ? (
+            <button
+              type="button"
+              onClick={reopenProgressDialog}
+              className="mobile-editor-dock-btn mobile-editor-dock-btn-primary"
+            >
+              <Loader2 size={16} className="animate-spin" />
+              大纲生成中
+            </button>
+          ) : (
           <button
             type="button"
             onClick={() => {
@@ -2156,6 +2313,7 @@ export default function ArticlePage({
             <FileText size={16} />
             {busy === "生成正文" ? "生成中" : "生成正文"}
           </button>
+          )
         ) : mobileStage === "content" ? (
           <button
             type="button"

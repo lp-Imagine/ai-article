@@ -2922,6 +2922,214 @@ body::before {
   font-weight: 700;
 }
 
+.outline-panel-generating .outline-panel-head {
+  background: linear-gradient(180deg, rgba(0, 113, 227, 0.06), var(--surface-muted));
+}
+
+.outline-generating-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid rgba(0, 113, 227, 0.15);
+}
+
+.outline-generating-badge-icon {
+  animation: spin 1s linear infinite;
+}
+
+.outline-generating-body {
+  padding: 4px 14px 16px;
+}
+
+.outline-generating-status {
+  padding: 16px 4px 18px;
+  text-align: center;
+}
+
+.outline-generating-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--foreground);
+}
+
+.outline-generating-desc {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.outline-generating-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.outline-skeleton-tab-strip {
+  display: flex;
+  gap: 8px;
+}
+
+.outline-skeleton-tab {
+  flex: 1;
+  height: 48px;
+  border-radius: 12px;
+  background: rgba(15, 40, 80, 0.06);
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+.outline-skeleton-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.outline-skeleton-line {
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(15, 40, 80, 0.08);
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+.outline-skeleton-line-short {
+  width: 38%;
+}
+
+.outline-empty-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 18px 16px 20px;
+}
+
+.outline-empty-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.outline-empty-desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.outline-empty-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.article-task-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(0, 113, 227, 0.18);
+  background: var(--accent-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.article-task-banner-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: var(--foreground);
+}
+
+.article-task-banner-spinner {
+  flex-shrink: 0;
+  color: var(--accent);
+  animation: spin 1s linear infinite;
+}
+
+.article-task-banner-action {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 113, 227, 0.22);
+  background: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  transition: background 0.18s, border-color 0.18s;
+}
+
+.article-task-banner-action:hover {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(0, 113, 227, 0.35);
+}
+
+.editor-waiting-outline {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 320px;
+  padding: 48px 24px;
+  text-align: center;
+}
+
+.editor-waiting-outline-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.editor-waiting-outline-spinner {
+  animation: spin 1s linear infinite;
+}
+
+.editor-waiting-outline-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.editor-waiting-outline-desc {
+  margin: 0;
+  max-width: 360px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .editor-head-tools {
   display: none;
   flex-wrap: wrap;
