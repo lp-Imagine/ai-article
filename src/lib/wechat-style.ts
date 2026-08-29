@@ -155,127 +155,12 @@ function paragraphToListItem(pInner: string, index: number): string {
   return `<li><strong>要点 ${index}</strong>${clean}</li>`;
 }
 
-/**
- * 从片段中抽出代码块（已高亮的 data-mp-cb section 或 <pre>…</pre>），
- * 文字与代码分离，避免塞进列表卡片 / tip 卡片。
- */
-function extractCodeBlocksFromFragment(inner: string): { text: string; blocks: string[] } {
-  const ranges: Array<{ start: number; end: number; html: string }> = [];
-
-  const cbRe = /<section\s+data-mp-cb="1"/gi;
-  let m: RegExpExecArray | null;
-  while ((m = cbRe.exec(inner)) !== null) {
-    const end = findSectionBlockEnd(inner, m.index);
-    if (end === -1) continue;
-    ranges.push({ start: m.index, end, html: inner.slice(m.index, end) });
-    cbRe.lastIndex = end;
-  }
-
-  const preRe = /<pre\b[\s\S]*?<\/pre>/gi;
-  while ((m = preRe.exec(inner)) !== null) {
-    const start = m.index;
-    const end = start + m[0].length;
-    if (ranges.some((r) => start < r.end && end > r.start)) continue;
-    ranges.push({ start, end, html: m[0] });
-  }
-
-  ranges.sort((a, b) => a.start - b.start);
-  const blocks = ranges.map((r) => r.html);
-  let text = "";
-  let cursor = 0;
-  for (const r of ranges) {
-    text += inner.slice(cursor, r.start);
-    cursor = r.end;
-  }
-  text += inner.slice(cursor);
-  return { text, blocks };
-}
-
-function openListTag(tag: string, attrs: string, startAt: number): string {
-  const cleaned = attrs.replace(/\s*start\s*=\s*(["']?)\d+\1/gi, "");
-  if (tag.toLowerCase() === "ol" && startAt > 1) {
-    return `<${tag}${cleaned} start="${startAt}">`;
-  }
-  return `<${tag}${cleaned}>`;
-}
-
-/**
- * 列表项内的代码块提到列表外（有序表用 start 续号），卡片只留文字。
- * 预览里 ol/ul li 会渲染成浅色卡片，代码嵌进去会被包在卡片内。
- */
-function hoistCodeBlocksFromLists(html: string): string {
-  return html.replace(/<(ol|ul)(\s[^>]*)?>([\s\S]*?)<\/\1>/gi, (_full, tag: string, attrs = "", inner: string) => {
-    const parts: string[] = [];
-    let listOpen = false;
-    let itemCount = 0;
-
-    const flushList = () => {
-      if (listOpen) {
-        parts.push(`</${tag}>`);
-        listOpen = false;
-      }
-    };
-
-    const ensureList = () => {
-      if (!listOpen) {
-        parts.push(openListTag(tag, attrs, itemCount + 1));
-        listOpen = true;
-      }
-    };
-
-    const liRe = /<li(?:\s[^>]*)?>([\s\S]*?)<\/li>/gi;
-    let liMatch: RegExpExecArray | null;
-    while ((liMatch = liRe.exec(inner)) !== null) {
-      const { text, blocks } = extractCodeBlocksFromFragment(liMatch[1]);
-      const cleaned = text.replace(/\s+/g, " ").trim();
-
-      if (cleaned) {
-        ensureList();
-        parts.push(`<li>${cleaned}</li>`);
-        itemCount += 1;
-      }
-
-      if (blocks.length > 0) {
-        flushList();
-        parts.push(...blocks);
-      }
-    }
-
-    flushList();
-    return parts.join("");
-  });
-}
-
-/** tip / warning / summary / blockquote 内残留代码块提到卡片外 */
-function hoistCodeBlocksFromCallouts(html: string): string {
-  let result = html.replace(
-    /<div class="(mp-tip|mp-warning|mp-summary)">([\s\S]*?)<\/div>/gi,
-    (_full, cls: string, inner: string) => {
-      const { text, blocks } = extractCodeBlocksFromFragment(inner);
-      if (blocks.length === 0) return _full;
-      const body = text.trim() ? `<div class="${cls}">${text.trim()}</div>` : "";
-      return body + blocks.join("");
-    },
-  );
-
-  result = result.replace(/<blockquote>([\s\S]*?)<\/blockquote>/gi, (_full, inner: string) => {
-    const { text, blocks } = extractCodeBlocksFromFragment(inner);
-    if (blocks.length === 0) return _full;
-    const body = text.trim() ? `<blockquote>${text.trim()}</blockquote>` : "";
-    return body + blocks.join("");
-  });
-
-  return result;
-}
-
 /** 生成后兜底：把 mp-tip / mp-warning 等 callout 修正为微信可渲染的固定结构 */
 export function enforceArticleHtmlFormat(html: string): string {
-  // 先抽出列表内代码，避免后续 collectListItems / tip 重整把代码拍扁
-  let result = hoistCodeBlocksFromLists(html);
+  let result = html;
 
   result = result.replace(/<div class="mp-tip">([\s\S]*?)<\/div>/gi, (_full, inner: string) => {
-    const { text: withoutCode, blocks } = extractCodeBlocksFromFragment(inner);
-    let body = withoutCode.trim();
+    let body = inner.trim();
     body = body.replace(/<ul(\s[^>]*)?>/gi, "<ol$1>").replace(/<\/ul>/gi, "</ol>");
 
     const listItems = collectListItems(body);
@@ -291,51 +176,39 @@ export function enforceArticleHtmlFormat(html: string): string {
       if (item) mergedItems.push(item.replace(/^<li>|<\/li>$/g, ""));
     });
 
-    let tipHtml: string;
     if (mergedItems.length === 0) {
-      tipHtml = body ? `<div class="mp-tip">${body}</div>` : "";
-    } else {
-      const ol = `<ol>${mergedItems.map((item) => `<li>${item}</li>`).join("")}</ol>`;
-      tipHtml = `<div class="mp-tip">${ol}</div>`;
+      return `<div class="mp-tip">${body}</div>`;
     }
-    return tipHtml + blocks.join("");
+
+    const ol = `<ol>${mergedItems.map((item) => `<li>${item}</li>`).join("")}</ol>`;
+    return `<div class="mp-tip">${ol}</div>`;
   });
 
   result = result.replace(/<div class="mp-warning">([\s\S]*?)<\/div>/gi, (_full, inner: string) => {
-    const { text: withoutCode, blocks } = extractCodeBlocksFromFragment(inner);
-    const body = withoutCode.trim();
+    const body = inner.trim();
     if (!/<(?:ol|ul)\b/i.test(body)) {
-      const warn = body ? `<div class="mp-warning">${body}</div>` : "";
-      return warn + blocks.join("");
+      return `<div class="mp-warning">${body}</div>`;
     }
 
     const paragraphs = collectListItems(body).map((item) => `<p>${item}</p>`);
     if (paragraphs.length === 0) {
-      const warn = body ? `<div class="mp-warning">${body}</div>` : "";
-      return warn + blocks.join("");
+      return `<div class="mp-warning">${body}</div>`;
     }
-    return `<div class="mp-warning">${paragraphs.join("")}</div>` + blocks.join("");
+    return `<div class="mp-warning">${paragraphs.join("")}</div>`;
   });
 
   result = result.replace(/<div class="mp-summary">([\s\S]*?)<\/div>/gi, (_full, inner: string) => {
-    const { text: withoutCode, blocks } = extractCodeBlocksFromFragment(inner);
-    const body = withoutCode.trim();
-    let summaryHtml: string;
+    const body = inner.trim();
     if (/<p(?:\s[^>]*)?>/i.test(body)) {
-      summaryHtml = body ? `<div class="mp-summary">${body}</div>` : "";
-    } else {
-      const paragraphs = body
-        .split(/\n{2,}/)
-        .map((part) => part.trim())
-        .filter(Boolean)
-        .map((part) => `<p>${part}</p>`);
-      summaryHtml = paragraphs.length > 0 ? `<div class="mp-summary">${paragraphs.join("")}</div>` : "";
+      return `<div class="mp-summary">${body}</div>`;
     }
-    return summaryHtml + blocks.join("");
+    const paragraphs = body
+      .split(/\n{2,}/)
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => `<p>${part}</p>`);
+    return `<div class="mp-summary">${paragraphs.join("")}</div>`;
   });
-
-  // tip/warning 内残留（列表抽出后仍可能留在卡片里）再提到外面
-  result = hoistCodeBlocksFromCallouts(result);
 
   return result;
 }
@@ -451,16 +324,7 @@ function transformListBlock(html: string, ordered: boolean): string {
     let liMatch: RegExpExecArray | null;
     while ((liMatch = liRe.exec(inner)) !== null) {
       const liInner = liMatch[1];
-      // 兜底：卡片只承载文字，代码块独立渲染（否则会被压成一行并在卡片内截断）
-      const { text: liText, blocks } = extractCodeBlocksFromFragment(liInner);
-
-      if (!liText.trim() && blocks.length > 0) {
-        counter++;
-        items.push(blocks.join(""));
-        continue;
-      }
-
-      const parsed = parseListItemTitleBody(liText);
+      const parsed = parseListItemTitleBody(liInner);
       if (parsed) {
         if (ordered) {
           counter++;
@@ -470,16 +334,13 @@ function transformListBlock(html: string, ordered: boolean): string {
         }
       } else {
         counter++;
-        const normalized = normalizeListItemInner(liText);
+        const normalized = normalizeListItemInner(liInner);
         const strongSplit = normalized.match(/^<strong(?:\s[^>]*)?>([\s\S]*?)<\/strong>\s*([\s\S]+)$/i);
         if (ordered && strongSplit && stripTags(strongSplit[1]) && stripTags(strongSplit[2]).length >= 2) {
           items.push(buildOrderedListCard(counter, stripTags(strongSplit[1]), strongSplit[2].trim()));
         } else {
-          items.push(buildPlainListItem(ordered ? counter : null, liText, ordered));
+          items.push(buildPlainListItem(ordered ? counter : null, liInner, ordered));
         }
-      }
-      if (blocks.length > 0) {
-        items.push(blocks.join(""));
       }
     }
     return `<section style="margin:14px 0 20px;">${items.join("")}</section>`;

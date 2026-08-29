@@ -84,59 +84,6 @@ describe("enforceArticleHtmlFormat", () => {
       '<div class="mp-warning"><p><strong>误区</strong>不要混用状态</p></div>',
     );
   });
-
-  it("hoists code blocks out of list items so preview cards no longer wrap code", () => {
-    const code =
-      '<section data-mp-cb="1"><section data-mp-cb-lang="1">JSX</section><section data-mp-cb-body="1"><span>const x = 1</span></section></section>';
-    const html =
-      "<ol>" +
-      "<li><strong>状态分区管理</strong>从根源消除 hydration mismatch。示例：" +
-      code +
-      "</li>" +
-      "<li><strong>Hydration隔离</strong>跳过 hydration 步骤。</li>" +
-      "</ol>";
-
-    const fixed = enforceArticleHtmlFormat(html);
-    const listItems = fixed.match(/<li[\s\S]*?<\/li>/gi) ?? [];
-
-    for (const item of listItems) {
-      expect(item).not.toMatch(/data-mp-cb|<pre\b/i);
-    }
-    expect(fixed).toMatch(
-      /<\/ol><section data-mp-cb="1"[\s\S]*?<\/section><ol start="2">/,
-    );
-    expect(fixed).toContain("<li><strong>状态分区管理</strong>从根源消除 hydration mismatch。示例：</li>");
-    expect(fixed).toContain("<li><strong>Hydration隔离</strong>跳过 hydration 步骤。</li>");
-    expect(fixed).toContain('data-mp-cb-lang="1">JSX</section>');
-  });
-
-  it("hoists pre/code out of list items and keeps ordered numbering continuous", () => {
-    const html =
-      '<ol><li><strong>第一步</strong>说明<pre><code class="language-js">a()</code></pre></li>' +
-      "<li><strong>第二步</strong>继续</li></ol>";
-
-    const fixed = enforceArticleHtmlFormat(html);
-    const listItems = fixed.match(/<li[\s\S]*?<\/li>/gi) ?? [];
-
-    for (const item of listItems) {
-      expect(item).not.toMatch(/<pre\b/i);
-    }
-    expect(fixed).toContain('<pre><code class="language-js">a()</code></pre>');
-    expect(fixed).toContain('<ol start="2"><li><strong>第二步</strong>继续</li></ol>');
-  });
-
-  it("hoists code blocks out of mp-tip cards", () => {
-    const code = '<pre><code class="language-bash">npx migrate</code></pre>';
-    const html = `<div class="mp-tip"><ol><li><strong>执行</strong>跑迁移：${code}</li></ol></div>`;
-
-    const fixed = enforceArticleHtmlFormat(html);
-    const tip = fixed.match(/<div class="mp-tip">[\s\S]*?<\/div>/i)?.[0] ?? "";
-
-    expect(fixed).toMatch(/^<div class="mp-tip">/);
-    expect(tip).not.toMatch(/<pre\b/i);
-    expect(fixed).toContain('<pre><code class="language-bash">npx migrate</code></pre>');
-    expect(fixed).toContain("<li><strong>执行</strong>跑迁移：</li>");
-  });
 });
 
 describe("prependWechatDigest", () => {
@@ -227,41 +174,6 @@ describe("convertToWechatHtml", () => {
     expect(wechat).toContain('border:1px solid #dbeafe;');
     expect(wechat).not.toContain("border:1px solid #e5e7eb;");
     expect(wechat).not.toMatch(/<td style="padding:10px 12px;font-size:14px;/);
-  });
-
-  it("extracts code blocks out of list cards so they stay scrollable (no flattening inside the card)", () => {
-    const code = "def check_format(data):\n  if not re.match(r'^OD\\d{12}', data):\n    return True";
-    const html =
-      "<ol><li><strong>数据格式校验</strong>匹配业务规则，伪代码：" +
-      `<pre><code class="language-python">${code}</code></pre>` +
-      "命令自动生效。</li></ol>";
-
-    const wechat = convertToWechatHtml(html);
-
-    const cards = wechat.match(/<table[^>]*>[\s\S]*?<\/table>/g) ?? [];
-    expect(cards.length).toBeGreaterThan(0);
-    for (const card of cards) {
-      expect(card).not.toMatch(/data-mp-cb|<pre|<code/i);
-    }
-    expect(wechat).toMatch(/<\/table>[\s\S]*?(?:<pre|<section[^>]*data-mp-cb)/);
-    expect(wechat).toContain("数据格式校验");
-    expect(wechat).toContain("命令自动生效");
-  });
-
-  it("extracts already-highlighted code blocks out of list cards", () => {
-    const cb =
-      '<section data-mp-cb="1"><section data-mp-cb-lang="1">Bash</section><section data-mp-cb-body="1"><span>npx ts-migrate migrate --decorators</span></section></section>';
-    const html = `<ol><li><strong>第一步</strong>执行迁移命令：${cb}命令自动转换。</li></ol>`;
-
-    const wechat = convertToWechatHtml(html);
-
-    const cards = wechat.match(/<table[^>]*>[\s\S]*?<\/table>/g) ?? [];
-    for (const card of cards) {
-      expect(card).not.toMatch(/data-mp-cb/i);
-    }
-    expect(wechat).toMatch(/<\/table>[\s\S]*?<section[^>]*data-mp-cb="1"/);
-    expect(wechat).toContain("npx ts-migrate migrate");
-    expect(wechat).toContain("命令自动转换");
   });
 });
 
