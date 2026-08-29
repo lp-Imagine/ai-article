@@ -175,6 +175,37 @@ describe("convertToWechatHtml", () => {
     expect(wechat).not.toContain("border:1px solid #e5e7eb;");
     expect(wechat).not.toMatch(/<td style="padding:10px 12px;font-size:14px;/);
   });
+
+  it("keeps code inside list items but avoids table so WeChat can scroll", () => {
+    const code =
+      '<section data-mp-cb="1">' +
+      '<section data-mp-cb-lang="1">JavaScript</section>' +
+      '<section data-mp-cb-body="1"><span>// app/cart/page.js (RSC)</span><br><span>\'use client\'</span></section>' +
+      "</section>";
+    const html =
+      "<ol>" +
+      "<li><strong>页面结构</strong>：创建Server Component页面，代码如下：示例：" +
+      code +
+      "</li>" +
+      "<li><strong>状态定义</strong>说明文字足够长。</li>" +
+      "</ol>";
+
+    const wechat = convertToWechatHtml(html);
+
+    // 含代码的项：section 卡片，不进 table/td
+    expect(wechat).toMatch(/页面结构[\s\S]*?data-mp-cb="1"/);
+    expect(wechat).toContain("use client");
+    expect(wechat).toMatch(/overflow:auto/);
+
+    // 代码不应落在任何 table 单元格里
+    const tables = [...wechat.matchAll(/<table[\s\S]*?<\/table>/gi)].map((m) => m[0]);
+    for (const table of tables) {
+      expect(table).not.toMatch(/data-mp-cb|<pre\b|use client/i);
+    }
+
+    // 纯文字项仍走 table 卡片
+    expect(wechat).toMatch(/<table[\s\S]*?状态定义[\s\S]*?<\/table>/);
+  });
 });
 
 describe("normalizeArticleMarkup", () => {

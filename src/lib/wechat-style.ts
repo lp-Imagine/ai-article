@@ -314,6 +314,62 @@ function buildPlainListItem(counter: number | null, inner: string, ordered: bool
   );
 }
 
+/** 含代码块的列表项：微信 table/td 无法横滑，改用 section 流式卡片，代码原样保留在项内 */
+function listItemHasCodeBlock(inner: string): boolean {
+  return /<section\s+data-mp-cb="1"/i.test(inner) || /<pre\b/i.test(inner);
+}
+
+/** 解析标题与正文，但不做空白压缩，避免拍扁代码块 */
+function parseListItemTitleBodyKeepCode(inner: string): { title: string; body: string } | null {
+  const trimmed = inner.trim().replace(/^<p(?:\s[^>]*)?>/i, "").replace(/<\/p>\s*$/i, "");
+  const match = trimmed.match(/^<strong(?:\s[^>]*)?>([\s\S]*?)<\/strong>\s*([\s\S]+)$/i);
+  if (!match) return null;
+  const title = stripTags(match[1]).trim();
+  const body = match[2].trim().replace(/^[：:]\s*/, "");
+  if (!title || stripTags(body).replace(/\s+/g, "").length < 2) return null;
+  return { title, body };
+}
+
+function buildOrderedListSectionCard(counter: number, title: string, bodyHtml: string): string {
+  return (
+    `<section style="margin:0 0 12px;border:1px solid ${LIST_CARD.border};background-color:${LIST_CARD.bg};border-radius:10px;overflow:visible;">` +
+    `<section style="padding:14px 16px;">` +
+    `<section style="margin:0 0 8px;line-height:1.5;">` +
+    `<span style="display:inline-block;width:26px;height:26px;line-height:26px;text-align:center;background-color:${ACCENT};color:#ffffff;border-radius:50%;font-size:13px;font-weight:bold;margin-right:10px;vertical-align:middle;">${counter}</span>` +
+    `<span style="font-size:15px;font-weight:bold;color:${LIST_CARD.title};vertical-align:middle;">${title}</span>` +
+    `</section>` +
+    `<section style="font-size:14px;color:${LIST_CARD.body};line-height:1.75;margin:0;text-align:justify;">${bodyHtml}</section>` +
+    `</section></section>`
+  );
+}
+
+function buildUnorderedListSectionCard(title: string, bodyHtml: string): string {
+  return (
+    `<section style="margin:0 0 12px;border:1px solid ${LIST_CARD.border};border-left:4px solid ${ACCENT};background-color:${LIST_CARD.bg};border-radius:0 10px 10px 0;overflow:visible;">` +
+    `<section style="padding:14px 16px;">` +
+    `<section style="font-size:15px;font-weight:bold;color:${LIST_CARD.title};margin:0 0 6px;line-height:1.5;">${title}</section>` +
+    `<section style="font-size:14px;color:${LIST_CARD.body};line-height:1.75;margin:0;text-align:justify;">${bodyHtml}</section>` +
+    `</section></section>`
+  );
+}
+
+function buildPlainListItemWithCode(counter: number | null, inner: string, ordered: boolean): string {
+  const content = inner.trim();
+  if (ordered && counter !== null) {
+    return (
+      `<section style="margin:0 0 10px;overflow:visible;">` +
+      `<span style="display:inline-block;width:26px;height:26px;line-height:26px;text-align:center;background-color:${ACCENT};color:#ffffff;border-radius:50%;font-size:13px;font-weight:bold;margin:0 10px 8px 0;vertical-align:middle;">${counter}</span>` +
+      `<section style="font-size:15px;color:#3a3a3a;line-height:1.8;">${content}</section>` +
+      `</section>`
+    );
+  }
+  return (
+    `<section style="margin:0 0 10px;padding-left:8px;border-left:3px solid ${ACCENT};overflow:visible;">` +
+    `<section style="font-size:15px;color:#3a3a3a;line-height:1.8;">${content}</section>` +
+    `</section>`
+  );
+}
+
 function transformListBlock(html: string, ordered: boolean): string {
   const tag = ordered ? "ol" : "ul";
   const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "gi");
@@ -324,6 +380,23 @@ function transformListBlock(html: string, ordered: boolean): string {
     let liMatch: RegExpExecArray | null;
     while ((liMatch = liRe.exec(inner)) !== null) {
       const liInner = liMatch[1];
+
+      // 含代码块：不用 table（微信 td 无法横滑），用 section 卡片并把代码留在项内
+      if (listItemHasCodeBlock(liInner)) {
+        counter++;
+        const parsed = parseListItemTitleBodyKeepCode(liInner);
+        if (parsed) {
+          items.push(
+            ordered
+              ? buildOrderedListSectionCard(counter, parsed.title, parsed.body)
+              : buildUnorderedListSectionCard(parsed.title, parsed.body),
+          );
+        } else {
+          items.push(buildPlainListItemWithCode(ordered ? counter : null, liInner, ordered));
+        }
+        continue;
+      }
+
       const parsed = parseListItemTitleBody(liInner);
       if (parsed) {
         if (ordered) {
