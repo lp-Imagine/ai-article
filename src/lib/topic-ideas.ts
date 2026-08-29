@@ -56,10 +56,12 @@ type TopicIdeasResult = {
 };
 
 const SECTION_TAGS: Record<BlogSection, string[]> = {
-  web: ["前端", "React", "Vue", "TypeScript", "组件", "工程化"],
+  web: ["前端", "React", "Vue", "TypeScript", "组件", "框架"],
   ui: ["UI", "CSS", "设计系统", "交互", "可访问性", "动效"],
-  tech: ["AI", "效率", "工作流", "自动化", "工具链", "实践"],
-  computer: ["系统", "网络", "性能", "浏览器", "调试", "故障定位"],
+  engineering: ["工程化", "Git", "npm", "工具链", "CI", "构建"],
+  backend: ["后端", "Node.js", "数据库", "MySQL", "服务端", "API"],
+  tech: ["文档", "GitHub", "备忘", "收藏", "Markdown", "效率"],
+  computer: ["浏览器", "Chrome", "扩展", "渲染", "调试", "性能"],
   agent: ["Agent", "Cursor", "提示词", "工作流", "MCP", "工具链"],
   misc: ["方法论", "案例", "复盘", "清单", "对比", "生活", "职场", "商业", "理财", "教育"],
 };
@@ -147,15 +149,28 @@ const HOT_TOPIC_SEEDS: Record<BlogSection | "all", string[]> = {
     "\u6697\u9ed1\u6a21\u5f0f\u4e0d\u53ea\u662f\u6362\u8272\uff1a\u4e00\u5957\u65b9\u6848\u652f\u6491\u4e24\u79cd\u4e3b\u9898",
     "\u5fae\u52a8\u6548\u7684\u6027\u4ef7\u6bd4\uff1a\u54ea\u4e9b\u503c\u5f97\u505a\uff0c\u54ea\u4e9b\u662f\u8fc7\u5ea6\u8bbe\u8ba1",
   ],
+  engineering: [
+    "前端 monorepo 治理：Turborepo 还是 Nx",
+    "GitHub Actions 进阶：矩阵构建、缓存与自托管 Runner",
+    "从 package.json 到发布流水线：npm 发包踩坑清单",
+    "工程化配置怎么分层：共享 presets 还是各仓自管",
+    "YAML / Docker 入门后，本地环境还能怎么统一",
+    "构建变慢怎么办：Vite / webpack 排查路径",
+  ],
+  backend: [
+    "把 LLM 嵌进现有后端：架构怎么切、超时怎么治",
+    "Node.js 服务稳定性：超时、重试与熔断怎么配",
+    "MySQL 索引设计：我怎么用执行计划定位慢查询",
+    "Prisma / ORM 落地：迁移与事务边界怎么定",
+    "全栈项目里前后端契约怎么定，才不会互相拖后腿",
+    "数据库连接池打满：一次真实排障复盘",
+  ],
   tech: [
-    "\u591a\u6a21\u578b\u534f\u4f5c\u6b63\u5728\u6539\u53d8\u5f00\u53d1\u6d41\u7a0b\u5417",
-    "\u4e2a\u4eba\u77e5\u8bc6\u5e93 + AI\uff0c\u5230\u5e95\u8be5\u600e\u4e48\u642d\u624d\u4e0d\u5403\u7070",
-    "\u4ece\u811a\u672c\u5230\u5e73\u53f0\uff1a\u5c0f\u81ea\u52a8\u5316\u9879\u76ee\u5982\u4f55\u6f14\u8fdb",
-    "Cursor Rules / AGENTS.md \u6700\u4f73\u5b9e\u8df5\uff1a\u5982\u4f55\u8ba9 AI \u6309\u4f60\u7684\u89c4\u8303\u5199\u4ee3\u7801",
-    "\u5411\u91cf\u6570\u636e\u5e93\u9009\u578b\uff1aMilvus / Qdrant / pgvector \u5b9e\u6d4b\u5bf9\u6bd4",
-    "GitHub Actions \u8fdb\u9636\uff1a\u77e9\u9635\u6784\u5efa\u3001\u7f13\u5b58\u4e0e\u81ea\u6258\u7ba1 Runner",
-    "\u628a LLM \u5d4c\u8fdb\u73b0\u6709\u540e\u7aef\uff1a\u67b6\u6784\u600e\u4e48\u5207\u3001\u8d85\u65f6\u600e\u4e48\u6cbb",
-    "Prompt Cache \u548c Context Window \u7ba1\u7406\u7684\u5de5\u7a0b\u5b9e\u8df5",
+    "GitHub 高级搜索：我怎么在海量仓库里找答案",
+    "Markdown 写作备忘：标题、表格与代码块约定",
+    "资源收藏怎么整理才不吃灰",
+    "个人知识库文档结构：我试过的三种目录法",
+    "常用命令与速查表：怎么维护才跟得上工具更新",
   ],
   computer: [
     "\u4e00\u6b21\u7f51\u7edc\u8d85\u65f6\u6392\u969c\uff1a\u5982\u4f55\u5728 30 \u5206\u949f\u5185\u9501\u5b9a\u6839\u56e0",

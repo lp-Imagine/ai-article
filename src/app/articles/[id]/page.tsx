@@ -126,7 +126,7 @@ export default function ArticlePage({
   const [pushResult, setPushResult] = useState<{ draftId: string; status: string } | null>(null);
   const [blogSyncResult, setBlogSyncResult] = useState<{ path: string; url: string } | null>(null);
   const [pushRecords, setPushRecords] = useState<PublishRecord[]>([]);
-  // 服务器是否配置了博客同步 Token。未配置时推送弹窗不展示博客选项。
+  // 超管且已配置 Penn Notes Token 时，推送弹窗才展示同步选项。
   const [blogSyncConfigured, setBlogSyncConfigured] = useState(false);
   const [editorTab, setEditorTab] = useState<"meta" | "content">("meta");
   const [activeOutlineView, setActiveOutlineView] = useState(0);
@@ -2165,7 +2165,7 @@ export default function ArticlePage({
                   <Check size={16} className="push-success-card-icon" aria-hidden />
                   <div className="push-success-card-text">
                     <p className="push-success-card-title">博客同步成功</p>
-                    <p className="push-success-card-desc">文章已同步，部署将自动触发</p>
+                    <p className="push-success-card-desc">文章已写入站点，部署将自动触发</p>
                   </div>
                 </div>
                 <a
@@ -2224,7 +2224,7 @@ export default function ArticlePage({
         ) : (
           <div className="publish-stage-guide stage-order-publish-tools">
             <p className="publish-stage-guide-title">发布前确认</p>
-            <p>标题、摘要和封面就绪后，用底部「推送」发到微信或博客。封面可在正文工具的「配图」里生成。</p>
+            <p>标题、摘要和封面就绪后，用底部「推送」发到微信；管理员还可同步到博客。封面可在正文工具的「配图」里生成。</p>
           </div>
         )}
 

@@ -1,16 +1,17 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { findOwnedArticle, requireUser, withAuthUserConfig } from "@/lib/api-auth";
-import { isBlogSyncConfigured, syncArticleToBlog } from "@/lib/blog-sync";
 import {
-  BLOG_SECTIONS,
-  isValidBlogGroup,
-  type BlogSection,
-} from "@/lib/blog-sync-constants";
+  findOwnedArticle,
+  requireSuperAdmin,
+  withAuthUserConfig,
+} from "@/lib/api-auth";
+import { getBlogCatalog, isCatalogGroup, isCatalogSection } from "@/lib/blog-catalog";
+import { isBlogSyncConfigured, syncArticleToBlog } from "@/lib/blog-sync";
+import type { BlogSection } from "@/lib/blog-sync-constants";
 
 const bodySchema = z.object({
-  section: z.enum(BLOG_SECTIONS).optional(),
+  section: z.string().trim().min(1).max(40).optional(),
   group: z.string().trim().min(1).max(40).optional(),
   tags: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
   draft: z.boolean().optional(),
@@ -20,7 +21,7 @@ export async function POST(
   req: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const user = await requireUser();
+  const user = await requireSuperAdmin();
   if (user instanceof NextResponse) return user;
   const { id } = await context.params;
 
@@ -30,7 +31,7 @@ export async function POST(
         {
           code: 1004,
           message:
-            "尚未配置博客同步。请在 /settings「博客同步」中填写 GitHub Token（需 contents:write + actions:write）。",
+            "尚未配置博客同步。请在 /settings「博客」中填写 GitHub Token（需 contents:write + actions:write）。",
           data: null,
         },
         { status: 400 },
@@ -74,19 +75,32 @@ export async function POST(
       );
     }
 
-    if (
-      parsed.section &&
-      parsed.group &&
-      !isValidBlogGroup(parsed.section as BlogSection, parsed.group)
-    ) {
-      return NextResponse.json(
-        {
-          code: 1001,
-          message: `栏目 ${parsed.section} 下不支持分组 ${parsed.group}`,
-          data: null,
-        },
-        { status: 400 },
-      );
+    if (parsed.section || parsed.group) {
+      const catalog = await getBlogCatalog();
+      if (parsed.section && !isCatalogSection(catalog, parsed.section)) {
+        return NextResponse.json(
+          {
+            code: 1001,
+            message: `无效栏目 section: ${parsed.section}`,
+            data: null,
+          },
+          { status: 400 },
+        );
+      }
+      if (
+        parsed.section &&
+        parsed.group &&
+        !isCatalogGroup(catalog, parsed.section, parsed.group)
+      ) {
+        return NextResponse.json(
+          {
+            code: 1001,
+            message: `栏目 ${parsed.section} 下不支持分组 ${parsed.group}`,
+            data: null,
+          },
+          { status: 400 },
+        );
+      }
     }
 
     try {
@@ -102,7 +116,7 @@ export async function POST(
           createdAt: article.createdAt,
         },
         {
-          section: parsed.section,
+          section: parsed.section as BlogSection | undefined,
           group: parsed.group,
           tags: parsed.tags,
           draft: parsed.draft,

@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
-import { requireUser, withAuthUserConfig } from "@/lib/api-auth";
+import { requireSuperAdmin, withAuthUserConfig } from "@/lib/api-auth";
 import { getEnvValue } from "@/lib/config-bridge";
 
-const DEFAULT_REPO = "lp-Imagine/vuepressblog";
+const DEFAULT_REPO = "lp-Imagine/penn-notes";
 const DEFAULT_BRANCH = "master";
 
 export async function GET() {
-  const user = await requireUser();
+  const user = await requireSuperAdmin();
   if (user instanceof NextResponse) return user;
 
   return withAuthUserConfig(user, async () => {

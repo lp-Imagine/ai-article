@@ -23,11 +23,10 @@ type AppConfig = {
 
 type SettingsSection = "ai" | "writing" | "wechat" | "blog";
 
-const navSections: { id: SettingsSection; label: string; icon: typeof Bot }[] = [
+const baseNavSections: { id: SettingsSection; label: string; icon: typeof Bot }[] = [
   { id: "ai", label: "AI 模型", icon: Bot },
   { id: "writing", label: "写作默认", icon: PenLine },
   { id: "wechat", label: "微信公众号", icon: MessageSquare },
-  { id: "blog", label: "博客同步", icon: Globe },
 ];
 
 export default function SettingsPage() {
@@ -41,16 +40,34 @@ export default function SettingsPage() {
   const [testingAuxiliary, setTestingAuxiliary] = useState(false);
   const [testingWechat, setTestingWechat] = useState(false);
   const [testingBlog, setTestingBlog] = useState(false);
+  const [refreshingCatalog, setRefreshingCatalog] = useState(false);
+  const [catalogHint, setCatalogHint] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [activeSection, setActiveSection] = useState<SettingsSection>("ai");
+
+  const navSections = useMemo(
+    () =>
+      isAdmin
+        ? [...baseNavSections, { id: "blog" as const, label: "博客", icon: Globe }]
+        : baseNavSections,
+    [isAdmin],
+  );
 
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/api/configs");
-        const json = await readApiResponse<Record<string, string>>(res);
+        const [configRes, meRes] = await Promise.all([
+          fetch("/api/configs"),
+          fetch("/api/auth/me", { cache: "no-store" }),
+        ]);
+        const json = await readApiResponse<Record<string, string>>(configRes);
         if (json.code === 0 && json.data) {
           const list: AppConfig[] = Object.entries(json.data).map(([key, value]) => ({ key, value }));
           setConfigs(list);
+        }
+        const meJson = await meRes.json().catch(() => null);
+        if (meRes.ok && meJson?.code === 0) {
+          setIsAdmin(meJson.data?.role === "SUPER_ADMIN");
         }
       } catch (err) {
         toast.show({
@@ -62,6 +79,10 @@ export default function SettingsPage() {
       }
     })();
   }, []);
+
+  useEffect(() => {
+    if (!isAdmin && activeSection === "blog") setActiveSection("ai");
+  }, [isAdmin, activeSection]);
 
   function getValue(key: string): string {
     return configs.find((c) => c.key === key)?.value ?? "";
@@ -266,18 +287,18 @@ export default function SettingsPage() {
     },
     {
       key: "blogGithubRepo",
-      label: "博客仓库",
-      placeholder: "owner/repo",
+      label: "仓库",
+      placeholder: "lp-Imagine/penn-notes",
     },
     {
       key: "blogGithubBranch",
-      label: "博客仓库分支",
+      label: "分支",
       placeholder: "master",
     },
     {
       key: "blogSiteUrl",
-      label: "博客站点 URL",
-      placeholder: "https://username.github.io/repo/",
+      label: "站点 URL",
+      placeholder: "https://penn-notes.draftly.cn/",
     },
   ];
 
@@ -309,7 +330,7 @@ export default function SettingsPage() {
           variant: "success",
         });
       } else {
-        toast.show({ message: json.data?.error || json.message || "博客验证失败", variant: "error" });
+        toast.show({ message: json.data?.error || json.message || "连通验证失败", variant: "error" });
       }
     } catch (err) {
       toast.show({
@@ -318,6 +339,33 @@ export default function SettingsPage() {
       });
     } finally {
       setTestingBlog(false);
+    }
+  }
+
+  async function handleRefreshCatalog() {
+    setRefreshingCatalog(true);
+    try {
+      const res = await fetch("/api/blog/catalog?refresh=1", { cache: "no-store" });
+      const json = await res.json();
+      if (json.code !== 0 || !json.data?.sections) {
+        throw new Error(json.message || "刷新栏目失败");
+      }
+      const names = (json.data.sections as Array<{ label: string }>)
+        .map((s) => s.label)
+        .join(" · ");
+      const source = json.data.source === "github" ? "已从仓库拉取" : "已回退本地目录";
+      setCatalogHint(`${source}：${names}`);
+      toast.show({
+        message: `${source}，共 ${json.data.sections.length} 个栏目`,
+        variant: "success",
+      });
+    } catch (err) {
+      toast.show({
+        message: err instanceof Error ? err.message : "刷新栏目失败",
+        variant: "error",
+      });
+    } finally {
+      setRefreshingCatalog(false);
     }
   }
 
@@ -543,10 +591,10 @@ export default function SettingsPage() {
             </SectionCard>
           )}
 
-          {activeSection === "blog" && (
+          {activeSection === "blog" && isAdmin ? (
             <SectionCard
-              title="博客同步配置"
-              description="将文章同步到你配置的 GitHub 博客仓库对应栏目，并触发 Actions 自动部署。Token 仅保存在你的账号下，其他人不会看到。"
+              title="博客同步"
+              description="仅超级管理员可用。将文章写入博客对应栏目，并触发 Actions 部署。Token 仅保存在你的账号下。"
             >
               <div className="config-group mb-5">
                 <div className="config-group-title">
@@ -582,18 +630,29 @@ export default function SettingsPage() {
               <div className="info-banner">
                 <Globe size={18} className="info-banner-icon" />
                 <p>
-                  Token 在 GitHub 「Settings → Developer settings → Personal access tokens」生成，
-                  至少勾选 <code>contents:write</code> 与 <code>actions:write</code>。保存后点下方「验证博客连通」可一键测试访问权限。
+                  栏目与侧栏分组会自动扫描仓库 <code>website/</code> 目录，博客侧新增栏目后点「刷新栏目」即可，无需改代码。
+                  Token 需具备 <code>contents:write</code> 与 <code>actions:write</code>。
                 </p>
               </div>
+              {catalogHint ? (
+                <p className="mt-3 text-xs leading-relaxed text-[var(--muted)]">{catalogHint}</p>
+              ) : null}
 
-              <div className="mt-5 flex justify-end border-t border-[var(--line)] pt-5">
-                <button onClick={handleTestBlog} disabled={testingBlog} className="btn-secondary text-sm">
-                  {testingBlog ? "验证中..." : "验证博客连通"}
+              <div className="mt-5 flex flex-wrap justify-end gap-2 border-t border-[var(--line)] pt-5">
+                <button
+                  type="button"
+                  onClick={handleRefreshCatalog}
+                  disabled={refreshingCatalog || !blogConfigured}
+                  className="btn-secondary text-sm"
+                >
+                  {refreshingCatalog ? "刷新中..." : "刷新栏目"}
+                </button>
+                <button type="button" onClick={handleTestBlog} disabled={testingBlog} className="btn-secondary text-sm">
+                  {testingBlog ? "验证中..." : "验证连通"}
                 </button>
               </div>
             </SectionCard>
-          )}
+          ) : null}
 
           <div className="settings-footer">
             <p className="settings-footer-hint">
@@ -602,7 +661,7 @@ export default function SettingsPage() {
                 : activeSection === "wechat"
                   ? "修改配置后记得保存。微信凭证可在上方卡片内验证连通性。"
                   : activeSection === "blog"
-                    ? "修改配置后记得保存。博客仓库与 Token 可在上方卡片内验证连通性。"
+                    ? "修改配置后记得保存。仓库与 Token 可在上方验证；栏目结构可一键刷新。"
                     : "修改配置后记得保存。"}
             </p>
             <button onClick={handleSave} disabled={saving} className="btn-primary text-sm settings-footer-save">

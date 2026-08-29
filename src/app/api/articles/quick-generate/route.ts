@@ -50,7 +50,8 @@ export async function POST(request: Request) {
       type: "quick_generate",
       payload: {
         autoPush: input.autoPush === true,
-        autoPushBlog: input.autoPushBlog === true,
+        // 博客同步仅超级管理员
+        autoPushBlog: user.role === "SUPER_ADMIN" && input.autoPushBlog === true,
       },
     });
 

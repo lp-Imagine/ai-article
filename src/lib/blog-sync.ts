@@ -18,8 +18,13 @@ import {
   type BlogSection,
   inferBlogGroup,
   inferBlogPlacement,
-  isValidBlogGroup,
 } from "@/lib/blog-sync-constants";
+import {
+  catalogGroups,
+  getBlogCatalog,
+  isCatalogGroup,
+  isCatalogSection,
+} from "@/lib/blog-catalog";
 import { getEnvValue } from "@/lib/config-bridge";
 
 export { BLOG_SECTIONS, type BlogSection };
@@ -42,7 +47,7 @@ export type BlogSyncArticle = {
 
 export type BlogSyncOptions = {
   /** 省略时根据标题/摘要/关键词自动推断 */
-  section?: BlogSection;
+  section?: string;
   /** 侧栏分组，如 javascript / css / docs；省略时自动推断 */
   group?: string;
   tags?: string[];
@@ -81,13 +86,13 @@ function readGhConfig(): GhConfig {
   const token = readEnv("BLOG_GITHUB_TOKEN");
   if (!token) {
     throw new Error(
-      "尚未配置博客同步。请在 /settings「博客同步」中填写 GitHub Token（需 contents:write + actions:write）。",
+      "尚未配置博客同步。请在 /settings「博客」中填写 GitHub Token（需 contents:write + actions:write）。",
     );
   }
-  const repo = readEnv("BLOG_GITHUB_REPO") || "lp-Imagine/vuepressblog";
+  const repo = readEnv("BLOG_GITHUB_REPO") || "lp-Imagine/penn-notes";
   const branch = readEnv("BLOG_GITHUB_BRANCH") || "master";
   const siteUrl = (
-    readEnv("BLOG_SITE_URL") || "https://lp-imagine.github.io/vuepressblog/"
+    readEnv("BLOG_SITE_URL") || "https://penn-notes.draftly.cn/"
   ).replace(/\/?$/, "/");
   return { token, repo, branch, siteUrl };
 }
@@ -681,20 +686,23 @@ export async function syncArticleToBlog(
     article.summary ?? "",
   ];
   const inferred = inferBlogPlacement(hintBlob);
+  const catalog = await getBlogCatalog();
   const section =
-    options.section && (BLOG_SECTIONS as readonly string[]).includes(options.section)
+    options.section && isCatalogSection(catalog, options.section)
       ? options.section
       : inferred.section;
-  if (options.section && !(BLOG_SECTIONS as readonly string[]).includes(options.section)) {
+  if (options.section && !isCatalogSection(catalog, options.section)) {
     throw new Error(`无效栏目 section: ${options.section}`);
   }
 
   const config = readGhConfig();
   const draft = options.draft === true;
   const group =
-    options.group && isValidBlogGroup(section, options.group)
+    options.group && isCatalogGroup(catalog, section, options.group)
       ? options.group
-      : inferBlogGroup(section, hintBlob);
+      : (BLOG_SECTIONS as readonly string[]).includes(section)
+        ? inferBlogGroup(section as BlogSection, hintBlob)
+        : (catalogGroups(catalog, section)[0]?.id ?? "misc");
 
   const safeContent = scrubSecretsForPublish(article.content);
 
@@ -713,7 +721,7 @@ export async function syncArticleToBlog(
   const { mdPath, slug, stalePaths } = await resolveArticleMdPath({
     sourceId: article.id,
     title,
-    section,
+    section: section as BlogSection,
     group,
     config,
   });
@@ -723,7 +731,7 @@ export async function syncArticleToBlog(
     date,
     summary: article.summary?.trim() || undefined,
     tags,
-    section,
+    section: section as BlogSection,
     group,
     sourceId: article.id,
     cover: coverPath,

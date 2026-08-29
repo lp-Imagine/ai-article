@@ -6,6 +6,13 @@ import { isSecretKey } from "@/lib/config-bridge";
 /** 当 SecretKey 已配置但不在前端回显原值时使用；前端保存时会跳过该键。 */
 export const SECRET_PLACEHOLDER = "********";
 
+const BLOG_CONFIG_KEYS = new Set([
+  "blogGithubToken",
+  "blogGithubRepo",
+  "blogGithubBranch",
+  "blogSiteUrl",
+]);
+
 export async function GET() {
   const user = await requireUser();
   if (user instanceof NextResponse) return user;
@@ -17,9 +24,10 @@ export async function GET() {
     });
 
     const map: Record<string, string> = {};
+    const isAdmin = user.role === "SUPER_ADMIN";
     for (const cfg of configs) {
-      // SecretKey 不回显原值；用占位符表示「已配置但请重新输入以更新」。
-      // 前端识别到 SECRET_PLACEHOLDER 时会在保存时跳过该键，避免覆盖已有 token。
+      // 博客相关配置仅超管可见
+      if (BLOG_CONFIG_KEYS.has(cfg.configKey) && !isAdmin) continue;
       map[cfg.configKey] = isSecretKey(cfg.configKey)
         ? SECRET_PLACEHOLDER
         : cfg.configValue;
@@ -55,10 +63,16 @@ async function saveConfigs(req: Request) {
       );
     }
 
+    const isAdmin = user.role === "SUPER_ADMIN";
     for (const [key, value] of Object.entries(body)) {
       if (typeof value !== "string") continue;
-      // 占位符表示前端没有改这个 secret，跳过以免覆盖数据库原值
       if (value === SECRET_PLACEHOLDER) continue;
+      if (BLOG_CONFIG_KEYS.has(key) && !isAdmin) {
+        return NextResponse.json(
+          { code: 403, message: "仅超级管理员可配置博客同步", data: null },
+          { status: 403 },
+        );
+      }
       await db.appConfig.upsert({
         where: {
           userId_configKey: { userId: user.id, configKey: key },

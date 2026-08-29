@@ -1,9 +1,13 @@
 import { PrismaClient } from "@prisma/client";
 import { syncArticleToBlog } from "../src/lib/blog-sync";
+import { BLOG_SECTIONS, type BlogSection } from "../src/lib/blog-sync-constants";
 
 const db = new PrismaClient();
 const id = process.argv[2] || "cmrxngdq9000zpzulezqj56nc";
-const section = (process.argv[3] || "web") as "web" | "ui" | "tech" | "computer" | "agent" | "misc";
+const sectionArg = process.argv[3] || "web";
+const section = (
+  (BLOG_SECTIONS as readonly string[]).includes(sectionArg) ? sectionArg : "web"
+) as BlogSection;
 const group = process.argv[4] || "javascript";
 
 async function main() {

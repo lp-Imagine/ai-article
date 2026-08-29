@@ -1312,22 +1312,21 @@ export default function HomePage() {
             </span>
           </span>
         </label>
-        <label className="confirm-dialog-check-row">
-          <input
-            type="checkbox"
-            checked={quickAutoPushBlog}
-            disabled={!blogSyncConfigured}
-            onChange={(e) => setQuickAutoPushBlog(e.target.checked)}
-          />
-          <span>
-            生成完成后<strong>自动同步到博客</strong>
-            <span className="confirm-dialog-check-hint">
-              {blogSyncConfigured
-                ? "同步到已配置的 GitHub 博客仓库"
-                : "需先在「设置 → 博客同步」配置 GitHub Token"}
+        {blogSyncConfigured ? (
+          <label className="confirm-dialog-check-row">
+            <input
+              type="checkbox"
+              checked={quickAutoPushBlog}
+              onChange={(e) => setQuickAutoPushBlog(e.target.checked)}
+            />
+            <span>
+              生成完成后<strong>自动同步到博客</strong>
+              <span className="confirm-dialog-check-hint">
+                写入已配置仓库的对应栏目并触发部署
+              </span>
             </span>
-          </span>
-        </label>
+          </label>
+        ) : null}
       </ConfirmDialog>
 
       {categoryPickerOpen ? (

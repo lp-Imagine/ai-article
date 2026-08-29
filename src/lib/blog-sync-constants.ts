@@ -1,4 +1,13 @@
-export const BLOG_SECTIONS = ["web", "ui", "tech", "computer", "agent", "misc"] as const;
+export const BLOG_SECTIONS = [
+  "web",
+  "ui",
+  "engineering",
+  "backend",
+  "tech",
+  "computer",
+  "agent",
+  "misc",
+] as const;
 export type BlogSection = (typeof BLOG_SECTIONS)[number];
 
 export type BlogGroupOption = { id: string; label: string };
@@ -7,6 +16,8 @@ export type BlogGroupOption = { id: string; label: string };
 export const SECTION_LABELS: Record<BlogSection, string> = {
   web: "JS & 框架",
   ui: "样式",
+  engineering: "工程化",
+  backend: "后端",
   tech: "工具",
   computer: "浏览器",
   agent: "AI Agent",
@@ -17,6 +28,8 @@ export const SECTION_LABELS: Record<BlogSection, string> = {
 export const BLOG_SECTION_NAV_ORDER: BlogSection[] = [
   "web",
   "ui",
+  "engineering",
+  "backend",
   "tech",
   "agent",
   "computer",
@@ -27,7 +40,7 @@ export function formatBlogGroupPath(section: BlogSection, group: string): string
   return `/${section}/${group}/`;
 }
 
-/** 与 penn-notes / vuepressblog 侧栏分组对齐 */
+/** 与 penn-notes / docs/SYNC.md 侧栏分组对齐 */
 export const SECTION_GROUPS: Record<BlogSection, BlogGroupOption[]> = {
   web: [
     { id: "javascript", label: "JavaScript" },
@@ -41,10 +54,20 @@ export const SECTION_GROUPS: Record<BlogSection, BlogGroupOption[]> = {
     { id: "css", label: "CSS" },
     { id: "misc", label: "其它" },
   ],
+  engineering: [
+    { id: "git", label: "Git" },
+    { id: "npm", label: "npm" },
+    { id: "toolchain", label: "工具链" },
+    { id: "misc", label: "其它" },
+  ],
+  backend: [
+    { id: "nodejs", label: "Node.js" },
+    { id: "mysql", label: "MySQL" },
+    { id: "misc", label: "其它" },
+  ],
   tech: [
     { id: "docs", label: "常用文档" },
     { id: "github", label: "GitHub" },
-    { id: "nodejs", label: "Node.js" },
     { id: "bookmarks", label: "资源收藏" },
     { id: "misc", label: "其它" },
   ],
@@ -81,6 +104,18 @@ const SECTION_HINTS: Array<{ section: BlogSection; re: RegExp; weight: number }>
     re: /选型|基准|benchmark|slo|推理|上下文|context\s*window|api\s*价格|调用成本/i,
     weight: 3,
   },
+  // 工程化（从原 tech 拆出）
+  {
+    section: "engineering",
+    re: /\bgit\b(?!hub)|npm|pnpm|yarn|webpack|vite|rollup|esbuild|turborepo|\bnx\b|monorepo|工程化|工具链|yaml|docker|ci\/?cd|github\s*actions|package\.json/i,
+    weight: 6,
+  },
+  // 后端（从原 tech 拆出）
+  {
+    section: "backend",
+    re: /node\.?js|mysql|postgres|postgresql|sqlite|mongodb|redis|数据库|后端|服务端|express|koa|nestjs|prisma|orm|sql\b/i,
+    weight: 6,
+  },
   // 浏览器
   {
     section: "computer",
@@ -93,16 +128,16 @@ const SECTION_HINTS: Array<{ section: BlogSection; re: RegExp; weight: number }>
     re: /\bcss\b|scss|less|tailwind|flex|grid|布局|样式|动画|html5|\bhtml\b|响应式|视觉/i,
     weight: 5,
   },
-  // 工具备忘
+  // 工具备忘（文档 / GitHub / 收藏）
   {
     section: "tech",
-    re: /\bgit\b|github|npm|pnpm|yarn|node\.?js|mysql|sql|yaml|markdown|docker|linux|命令行|备忘|文档|收藏/i,
+    re: /github|markdown|备忘|文档|收藏|bookmarks|常用文档/i,
     weight: 5,
   },
   // JS & 框架
   {
     section: "web",
-    re: /javascript|typescript|\bjs\b|\bts\b|vue|react|next\.?js|nuxt|webpack|vite|es6|promise|async|前端框架|组件库|element|antd/i,
+    re: /javascript|typescript|\bjs\b|\bts\b|vue|react|next\.?js|nuxt|es6|promise|async|前端框架|组件库|element|antd/i,
     weight: 5,
   },
   // 杂项
@@ -120,9 +155,14 @@ const TAG_TO_GROUP: Array<{ re: RegExp; group: string }> = [
   { re: /javascript|typescript|\bjs\b|\bts\b|promise|es6|async/i, group: "javascript" },
   { re: /\bcss\b|flex|grid|布局|样式|tailwind|scss/i, group: "css" },
   { re: /\bhtml\b/i, group: "html" },
-  { re: /git(?!hub)|npm|mysql|yaml|markdown|命令|docker|linux/i, group: "docs" },
+  { re: /\bgit\b(?!hub)/i, group: "git" },
+  { re: /\bnpm\b|pnpm|yarn|package\.json/i, group: "npm" },
+  { re: /toolchain|工具链|yaml|docker|webpack|vite|ci\/?cd|monorepo/i, group: "toolchain" },
+  { re: /mysql|postgres|sql|数据库/i, group: "mysql" },
+  { re: /node\.?js|express|koa|nestjs|prisma|后端|服务端/i, group: "nodejs" },
+  { re: /markdown|常用文档|备忘/i, group: "docs" },
   { re: /github/i, group: "github" },
-  { re: /node/i, group: "nodejs" },
+  { re: /收藏|bookmarks/i, group: "bookmarks" },
   { re: /浏览器|chrome|extension|扩展/i, group: "browser" },
   { re: /提示词|prompt/i, group: "prompts" },
   { re: /工作流|workflow|pipeline|编排/i, group: "workflow" },
