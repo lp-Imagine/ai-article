@@ -17,7 +17,7 @@ describe("softClipLabel", () => {
 });
 
 describe("buildInfographicPrompt", () => {
-  it("limits cards to three and asks for complete Chinese + margins", () => {
+  it("uses soft clay style, three cards, and forbids title plaques", () => {
     const prompt = buildInfographicPrompt(
       {
         title: "RAG私有检索故障",
@@ -34,13 +34,14 @@ describe("buildInfographicPrompt", () => {
       3,
     );
 
-    expect(prompt).toContain("Topic context (do not paint as a title): RAG私有检索故障");
+    expect(prompt).toContain("soft claymorphism");
+    expect(prompt).toContain("warm cream");
+    expect(prompt).not.toContain("RAG私有检索故障");
     expect(prompt).not.toMatch(/Top-left Chinese title/);
-    expect(prompt).toContain("Do NOT paint any separate title");
-    expect(prompt).toContain("Card 3:");
+    expect(prompt).toContain("标题设计");
+    expect(prompt).toContain("Clay card 3:");
     expect(prompt).not.toContain("多余第四格");
     expect(prompt).toContain("Never crop");
     expect(prompt).toContain("no ghosted layers");
-    expect(prompt).toContain("no Trigger");
   });
 });

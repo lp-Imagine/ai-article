@@ -1918,34 +1918,35 @@ Rules:
 - If an English phrase in this instruction is a style hint, it is NOT text to draw.`;
 
 /**
- * penn-notes 封面气质：冷灰白底 + 左上淡蓝光晕 + 左标题右大图形。
+ * 封面气质：软 3D 黏土科技风（暖奶油底 + 左标题右大装置）。
  * 禁止写入 Apple / blog / guidelines 等英文词，生图模型会把它们画成水印。
  */
 const DOODLE_LOOKBOOK = [
-  "Full-bleed wide banner filling the entire canvas edge to edge. Cool pale-gray field with a soft translucent blue wash from the upper left.",
-  "Palette: pale gray, white, charcoal, and one restrained blue. Flat 2D vector only.",
-  "CRITICAL: paint directly on the canvas. Never put the design inside a floating rounded white card, phone mockup, slide frame, or inset panel.",
-  "No paper grain, no graph-paper grid, no sticky notes, no binder tabs, no torn paper scraps.",
-  "No cute stickers, no neon, no 3D glass spheres, no shiny orbs, no dark header strips, no colored rectangles clipped at the edges.",
-  "No people, faces, avatars, profile silhouettes, or user icons. No microscopic illegible text, fake UI chrome, or lorem-ipsum glyphs.",
+  "Full-bleed wide banner, soft claymorphism / matte 3D illustration style.",
+  "Warm cream or soft ivory background with gentle studio lighting and soft contact shadows. No neon, no cyberpunk glow, no dark space scene.",
+  "Palette: cream, soft white, charcoal text, peach-orange accents, and one calm sky-blue accent.",
+  "CRITICAL: paint edge to edge on the canvas. Never put the design inside a floating white card, phone mockup, slide frame, or inset panel.",
+  "No paper grain, no torn paper, no sticky notes, no graph-paper, no brand logos, no dense UI screenshots.",
+  "No realistic humans. A simple cute matte 3D robot mascot is allowed only as the right-side hero if it fits the topic.",
+  "No microscopic illegible text, fake UI chrome, lorem-ipsum glyphs, or placeholder labels like 标题设计.",
 ].join(" ");
 
-/** 章节配图：左因 → 中机制 → 右果 */
+/** 章节配图：左因 → 中机制 → 右果（软 3D 三块，无总标题） */
 
 const SECTION_FLOW_LAYOUTS = [
-  "left-to-right three equal rounded cards: cause, mechanism, result; thin blue connector under them; generous side margins; no title above",
-  "three equal rounded cards left-to-right for before, change, after; thin conclusion line under them; nothing outside the card row; no title above",
-  "three equal rounded cards for problem, approach, outcome; thin blue connectors between cards only; keep all content inset from edges; no title above",
-  "three equal rounded cards for option A, option B, chosen outcome; thin arrow between them; no side ornaments; no title above",
+  "left-to-right three equal soft 3D rounded clay blocks: cause, mechanism, result; thin soft connector under them; generous side margins; absolutely no title above",
+  "three equal matte clay cards left-to-right for before, change, after; soft shadow under each; thin conclusion line below; no title block",
+  "three soft 3D pillowy panels for problem, approach, outcome; gentle orange/blue accents; keep all content inset; no corner title",
+  "three equal clay blocks for option A, option B, chosen outcome; one soft arrow between them; no side ornaments; no title above",
 ] as const;
 
 const COVER_STYLE_DOODLE =
-  `${DOODLE_LOOKBOOK} Left side: a very large charcoal Chinese headline with a smaller blue tagline under it. Right side: a BIG flat geometric composition filling most of the right half — several overlapping translucent FLAT blue discs of different sizes (2D, not 3D glass balls), thin connecting arcs, and one simplified topic object (stacked translucent slabs, a clock face, or a node cluster). The right composition should feel substantial, not a tiny icon floating above the title.`;
+  `${DOODLE_LOOKBOOK} Left side: a very large charcoal Chinese headline with a smaller peach-orange or sky-blue tagline under it. Right side: one LARGE soft matte 3D hero — either a cute rounded robot with simple digital eyes, or a soft clay tech device / stacked rounded slabs / friendly node cluster. Soft shadows, rounded edges, toy-like but clean. The hero should feel substantial and fill most of the right half.`;
 
 const COVER_LAYOUT_VARIANTS = [
-  "Asymmetric split painted full-bleed: type on the left, oversized flat geometric composition on the right filling most of that half.",
-  "Type left-aligned on the open canvas. Right side is a cluster of overlapping flat translucent discs plus one large simplified object, sitting in a soft blue wash.",
-  "Type on the left. Right side has stacked translucent slabs or concentric flat rings occupying most of the height. No inset card frame.",
+  "Asymmetric full-bleed split: bold type on the left, oversized soft 3D clay hero on the right.",
+  "Type left-aligned on warm cream canvas. Right side: a cute matte robot or soft clay gadget sitting among 1-2 floating rounded cards with icons only (no readable micro-text on those cards).",
+  "Type on the left. Right side: stacked soft 3D platforms or a round clay mascot holding a simple tablet. Cozy desk vibe without clutter.",
 ] as const;
 
 
@@ -2020,38 +2021,38 @@ function fallbackStoryboard(sectionHeading: string, plainSection: string): Secti
       role: "cause",
       label: bits[0],
       caption: "起点",
-      visual: "simple rounded geometric icon for the starting concept",
+      visual: "soft clay icon for the starting concept",
     });
     panels.push({
       role: "step",
       label: bits[1],
       caption: "关键一步",
-      visual: "simple geometric process icon",
+      visual: "soft clay process arrow icon",
     });
     panels.push({
       role: "result",
       label: bits[2] || softClipLabel(summary, 8),
       caption: "结果",
-      visual: "simple checkmark geometric icon",
+      visual: "soft clay checkmark icon",
     });
   } else {
     panels.push({
       role: "cause",
       label: "问题",
       caption: softClipLabel(heading, 10),
-      visual: "broken pipe or error geometric icon",
+      visual: "soft clay warning or broken-link icon",
     });
     panels.push({
       role: "step",
       label: "做法",
       caption: "拆解处理",
-      visual: "checklist geometric icon",
+      visual: "soft clay checklist icon",
     });
     panels.push({
       role: "result",
       label: "效果",
       caption: softClipLabel(summary, 10),
-      visual: "checkmark geometric icon",
+      visual: "soft clay success checkmark icon",
     });
   }
   return { title, panels: panels.slice(0, 3), summary };
@@ -2077,16 +2078,16 @@ export async function generateSectionImagePrompt(
       [
         {
           role: "system",
-          content: `你是信息图分镜师。根据「本章标题+正文」，提炼一张分镜：左因→中机制→右果，底部一句总结。
+          content: `你是信息图分镜师。根据「本章标题+正文」，提炼一张软 3D 黏土风分镜：左因→中机制→右果，底部一句总结。图上不会出现总标题。
 
 规则：
-- title：2-8 字内部主题词（如「漏洞原理」「超时定位」「RAG漏检」），仅供分镜，不会画进图里；禁止半截词
+- title：2-8 字内部主题词（仅供分镜，绝不画进图），禁止半截词，禁止输出「标题设计」
 - panels：正好 3 个（不够就合并），每个含 role/label/caption/visual
   - role: cause | step | flaw | result
   - label: 2-8 字短标签，必须是完整可读词组
   - caption: 4-10 字补充说明，完整可读
-  - visual: 英文简述单一几何图标（geometric icon / stacked layers / clock / nodes / arrow）
-- summary: 底部总结，最多 16 字，优先「A→B」或「缺索引→漏检索」这种公式感（会出现在图底部）
+  - visual: 英文简述单一软 3D 黏土图标（soft clay icon / stacked slabs / clock / nodes / arrow）
+- summary: 底部总结，最多 16 字，优先「A→B」公式感（会出现在图底部）
 - 内容必须忠于本章正文，禁止编造本章没有的漏洞/报错/数字
 - 所有中文必须短而完整，宁可少字也不要截断
 
@@ -2290,7 +2291,7 @@ const LIGHT_COVER_TOPIC_RE =
 
 function pickCoverTheme(topic: string, title: string): "warm" | "cool" {
   const corpus = `${topic}${title}`;
-  // 仍按主题微调冷暖，但都走手绘奶油纸风，不再出深色霓虹封面
+  // 软 3D 黏土风以暖奶油为主；偏前端/设计主题略加点天蓝
   if (LIGHT_COVER_TOPIC_RE.test(corpus)) return "cool";
   return "warm";
 }
@@ -2300,11 +2301,10 @@ function pickCoverVisualVariant(topic: string, title: string) {
   for (let i = 0; i < topic.length; i++) hash = (hash + topic.charCodeAt(i)) | 0;
   const layout = COVER_LAYOUT_VARIANTS[Math.abs(hash) % COVER_LAYOUT_VARIANTS.length];
   const theme = pickCoverTheme(topic, title);
-  // 冷暖只微调蓝的深浅，构图仍是左标题右图形
   const tint =
     theme === "cool"
-      ? "Accents lean slightly lighter blue."
-      : "Accents lean slightly deeper blue.";
+      ? "Keep cream background; accents lean soft sky-blue with a touch of peach."
+      : "Keep cream background; accents lean peach-orange with a touch of sky-blue.";
   const styleAnchor = `${COVER_STYLE_DOODLE} ${tint}`;
   return { layout, theme, styleAnchor };
 }
@@ -2373,15 +2373,16 @@ ${variant.layout}
 
 HERO:
 - Topic domain: ${domainHint}
-- Occupy the RIGHT HALF of the canvas with a LARGE geometric composition: 3 to 5 overlapping translucent blue circles of different sizes, thin arcs connecting them, plus one simplified object for the topic.
-- The composition should be big enough to balance the headline. Not a tiny icon. Not a window thumbnail. Not centered above the title. Not a small white card.
+- Occupy the RIGHT HALF with ONE large soft matte 3D clay hero: a cute rounded robot OR a soft clay tech device / stacked rounded platforms related to the topic.
+- Soft studio light, gentle shadows, rounded toy-like forms. Not flat vector circles. Not neon glass. Not a tiny icon.
+- At most two small floating clay cards with icons only — never paint readable text or logos on those cards.
 
 TEXT (the only lettering on the image):
 - Headline exactly 「${headline}」 — very large, bold, charcoal, LEFT aligned. No trailing question mark.
-- Tagline exactly your subtitle — smaller, restrained blue, under the headline
+- Tagline exactly your subtitle — smaller, peach-orange or sky-blue, under the headline
 - No other Chinese. No English slogans, watermarks, corner labels, tiny illegible glyphs, or extra captions.
 - If the headline contains Latin like Node.js or Prompt, paint those words fully — never cut them off.
-- Never draw a floating white card/frame around the layout. Full-bleed only.
+- Never draw a floating white card/frame around the whole layout. Full-bleed cream canvas only.
 
 SUBTITLE:
 - 6-14 Chinese characters compressing the article keywords
@@ -2450,8 +2451,8 @@ Output JSON: { "prompt": string, "subtitle": string, "keywords": string[] }
     `${variant.styleAnchor} ${variant.layout}. ` +
       `Bold Chinese headline 「${headline}」 with keyword subtitle 「${subtitle}」. ` +
       `Keywords: ${finalKeywords.join(", ")}. ` +
-      `Large geometric hero on the right about ${domainHint}, overlapping translucent circles and thin node lines. ` +
-      `Soft blue glow from the upper left. No extra lettering.`,
+      `Large soft matte 3D clay hero on the right about ${domainHint}: cute rounded robot or soft clay device. ` +
+      `Warm cream background, soft shadows. No extra lettering.`,
     headline,
     subtitle,
     variant,
@@ -2499,12 +2500,12 @@ function reinforceCoverPrompt(
   // 丢掉摘要原文，避免模型再抄「大纲正常」——只保留最终要画的字
   const safeHeadline = normalizeCoverHeadline(headline) || headline;
   const hints = [
-    "Full-bleed pale-gray canvas edge to edge with a faint blue wash from the upper left. NEVER a floating rounded white card, slide, or mockup frame.",
+    "Full-bleed warm cream canvas, soft claymorphism / matte 3D. NEVER a floating white card, slide, or mockup frame around the whole design.",
     `Headline exactly 「${safeHeadline}」 on the LEFT, very large and complete. No question mark at the end.`,
-    `Tagline exactly 「${safeSubtitle}」 under it, smaller, restrained blue.`,
-    "RIGHT HALF: oversized overlapping FLAT translucent blue discs (2D vector, not 3D glass spheres) plus one simplified object. Not a tiny icon above the title.",
-    "No other lettering of any kind — no microscopic glyphs, no fake UI text, no English slogans, no corner watermarks.",
-    "No people or profile icons. No graph-paper, sticky notes, binder tabs, paper scraps, or clipped colored blocks.",
+    `Tagline exactly 「${safeSubtitle}」 under it, smaller, peach-orange or soft sky-blue.`,
+    "RIGHT HALF: one oversized soft matte 3D clay hero (cute rounded robot or soft clay tech device). Soft shadows. Not flat circles. Not neon.",
+    "No other lettering — no microscopic glyphs, no fake UI text, no English slogans, no brand logos, no 标题设计 placeholders.",
+    "No realistic people. No graph-paper, sticky notes, torn paper, or dense screenshot collages.",
   ];
 
   if (LIFESTYLE_COVER_KEYWORD_RE.test(cleaned)) {

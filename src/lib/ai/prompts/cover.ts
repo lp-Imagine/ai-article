@@ -1,25 +1,27 @@
 /**
  * 章节配图 prompt 片段：buildInfographicPrompt
  *
- * 版本：v3 — 去掉图内总标题；修截断/裁边/叠影；默认三格横排。
+ * 版本：v4 — 软 3D 黏土科技风；禁止图内总标题/占位字；默认三格横排。
  */
 
 export const SECTION_INFOGRAPHIC_STYLE =
-  "Wide landscape infographic on a pale cream-gray paper canvas with a soft translucent blue wash in one corner only. " +
-  "A clean horizontal row of rounded white cards, each with exactly one simple geometric icon. " +
-  "Behind the row, at most two large translucent blue circles at very low opacity for atmosphere — they must stay behind cards and never poke out as sharp shards.";
+  "Wide landscape soft claymorphism infographic on a warm cream or soft ivory canvas. " +
+  "Gentle studio lighting and soft contact shadows. " +
+  "A clean horizontal row of three equal soft matte 3D rounded clay cards/blocks, each with exactly one simple embossed icon. " +
+  "Optional very faint peach or sky-blue wash in one far corner — never a torn-paper title plaque.";
 
 export const SECTION_COLOR_ROLES =
-  "White cards, charcoal Chinese text, one restrained blue accent on the last card and on a thin connector line under the row.";
+  "Cream canvas, white/soft-clay cards, charcoal Chinese text, peach-orange and calm sky-blue accents on icons and the bottom connector.";
 
 export const SECTION_RENDER_GUARDS = [
   "Keep a generous empty margin on all four sides (at least 8% of canvas). Never crop cards, icons, or Chinese characters at the edge.",
-  "Do NOT paint any separate title, headline, or topic label above the cards (no top-left title block).",
-  "Each card is a SINGLE clean rounded white rectangle with ONE icon — no stacked duplicates, no ghosted layers, no torn or smeared shadows.",
-  "Do not draw start/end circles, badges, or English words outside the card row (no Trigger, Result, Start, End).",
-  "Every Chinese string in quotes must be painted COMPLETE and fully legible — never cut a character mid-glyph, never leave a truncated word.",
-  "The only lettering is the Chinese strings in quotes on the cards and the bottom summary. No English, watermarks, page numbers, or placeholder X marks.",
-  "No graph-paper grid, no colored rectangles clipped at the edges, no cute doodles, no 3D glass.",
+  "Do NOT paint any separate title, headline, topic label, or corner plaque above the cards.",
+  "Forbidden placeholder text anywhere: 「标题设计」, 「标题」, 「主题」, Title, Untitled, or any invented heading.",
+  "Each card is a SINGLE soft matte 3D clay block with ONE icon — no stacked duplicates, no ghosted layers, no torn paper.",
+  "Do not draw start/end circles, badges, brand logos, dense UI panels, or English words outside the card row.",
+  "Every Chinese string in quotes must be painted COMPLETE and fully legible — never cut a character mid-glyph.",
+  "The only lettering is the Chinese strings in quotes on the three cards and the bottom summary.",
+  "No neon cyberpunk, no dark space background, no graph-paper, no cute doodle stickers.",
 ].join(" ");
 
 export type SectionStoryPanel = {
@@ -68,17 +70,19 @@ export function buildInfographicPrompt(
   const boxLines = panels
     .map((p, i) => {
       const extra = p.caption ? ` and smaller complete 「${p.caption}」` : "";
-      return `Card ${i + 1}: Chinese 「${p.label}」${extra}; draw one simple ${p.visual}.`;
+      return `Clay card ${i + 1}: Chinese 「${p.label}」${extra}; emboss one simple soft-3D ${p.visual}.`;
     })
     .join(" ");
 
   return [
     SECTION_INFOGRAPHIC_STYLE,
     SECTION_COLOR_ROLES,
-    `Arrangement: ${layout}. Prefer exactly ${panels.length} cards in one row, evenly spaced, fully inside the frame.`,
-    `This is illustration ${sectionIndex + 1} of ${totalSections}. Topic context (do not paint as a title): ${story.title}.`,
+    `Arrangement: ${layout}. Prefer exactly ${panels.length} soft clay cards in one row, evenly spaced, fully inside the frame.`,
+    `This is illustration ${sectionIndex + 1} of ${totalSections}.`,
+    // 主题只作英文语境，避免中文 title 被模型画成左上角「标题设计」
+    "Internal theme for icon mood only (never paint as text): tech workflow diagram.",
     boxLines,
-    `Under the cards, a thin blue bracket line with Chinese 「${story.summary}」 centered below it.`,
+    `Under the cards, a thin soft bracket line with Chinese 「${story.summary}」 centered below it.`,
     SECTION_RENDER_GUARDS,
   ].join(" ");
 }
