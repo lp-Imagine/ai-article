@@ -1,8 +1,7 @@
 /**
  * 章节配图 prompt 片段
  *
- * 版本：v6 — 与封面同画幅观感；场景填满中景避免空洞；
- * 可选短标签三卡，但仍禁止半截字/占位标题/外框阴影。
+ * 版本：v7 — 禁止画「16:9」等比例字；禁止浮层批注气泡与物体内密文/列表。
  */
 
 /** 场景版式：单隐喻 | 前后对比 | 短标签三卡 | 三图标无字 */
@@ -35,17 +34,20 @@ export type SectionStoryPanel = {
 };
 
 export const SECTION_CLAY_STYLE =
-  "Wide 16:9 landscape soft claymorphism illustration, same banner proportions as an article cover. " +
+  "Wide landscape soft claymorphism banner illustration, same proportions as an article cover photo. " +
   "Warm cream or soft ivory canvas. Soft studio light, gentle contact shadows under objects only. " +
   "Matte toy-like clay forms with peach-orange and calm sky-blue accents. " +
   "Fill the middle of the frame — the main clay subject should occupy most of the width and feel substantial, not a tiny island in empty space.";
 
 export const SECTION_RENDER_GUARDS = [
   "Keep a modest margin (~5%) so nothing is cropped, but do NOT leave large empty left/right voids.",
+  "Do NOT paint aspect-ratio marks, resolution numbers, or corner dimension badges of any kind.",
   "Do NOT paint any separate title plaque, corner headline, or 「标题设计」/Title/Untitled.",
-  "Forbidden: graph-paper, torn paper, sticky notes, smile stickers, brand logos, glossy speech-bubble UI, English tooltips like Query/Prompt Template.",
-  "No dark charcoal outer frame, no floating card mockup, no drop-shadow silhouette around the whole artwork — paint full-bleed on the cream canvas.",
-  "Chinese on the image must be COMPLETE short phrases only — never truncated mid-word, never stacked nonsense like 词词.",
+  "Do NOT paint floating review/comment bubbles, chat chips, toast banners, or checklist callouts with invented Chinese/English sentences.",
+  "Clay tablets, papers, screens, and sticky-like surfaces must stay BLANK or show only abstract texture — no bullet lists, no paragraphs, no repeated lines, no readable micro-copy on the object itself.",
+  "Forbidden props/styles: graph-paper, torn paper, smile stickers, brand logos, glossy speech-bubble UI, English tooltips like Query/Prompt Template.",
+  "No dark charcoal outer frame, no floating card mockup around the whole artwork — paint full-bleed on the cream canvas.",
+  "Allowed Chinese is ONLY the short quoted labels (if any) placed under props, plus the one bottom summary — COMPLETE words only, never truncated mid-word, never stacked nonsense like 词词/案案/类类.",
   "No neon cyberpunk, no dark space background, no microscopic glyphs.",
 ].join(" ");
 
@@ -101,12 +103,13 @@ function layoutHint(mode: SectionSceneMode): string {
     case "duo":
       return (
         "Composition: TWO large soft clay objects side by side filling most of the frame (before → after). " +
-        "A thin soft arrow between them. Optional 2-4 character Chinese label under each object if provided. No long captions."
+        "A thin soft arrow between them. Optional 2-4 character Chinese label UNDER each object if provided. " +
+        "Object surfaces stay blank/abstract — no writing carved onto tablets or notes."
       );
     case "trio-short":
       return (
         "Composition: THREE equal soft clay rounded cards in a tight row filling most of the width. " +
-        "Each card has one icon and one SHORT Chinese label (2-4 chars) if provided — no second caption line. Soft connector under the row."
+        "Each card has one simple icon and one SHORT Chinese label (2-4 chars) under or on the card header area if provided — single word only, no bullet list. Soft connector under the row."
       );
     case "trio-icons":
       return (
@@ -117,7 +120,8 @@ function layoutHint(mode: SectionSceneMode): string {
     default:
       return (
         "Composition: ONE large central soft clay diorama / metaphor that fills most of the frame width and height. " +
-        "Add 2-4 supporting clay props around it so the scene does not feel empty. No card grid. No Chinese on the props."
+        "Add 2-4 supporting clay props (blank badges/tools, no text panels) so the scene does not feel empty. " +
+        "No floating comment bubbles. No Chinese on the props."
       );
   }
 }

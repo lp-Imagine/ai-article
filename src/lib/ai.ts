@@ -61,6 +61,13 @@ import {
   type SectionStoryboard,
 } from "@/lib/ai/prompts/cover";
 import {
+  coverPromptLlmSchema,
+  parseLlmJson,
+  sectionStoryboardLlmSchema,
+  summaryLlmSchema,
+  titlesLlmSchema,
+} from "@/lib/ai/schemas";
+import {
   BLUEPRINT_JSON_INSTRUCTION,
   CONTENT_SKILL,
   fallbackBlueprint,
@@ -1729,9 +1736,9 @@ export async function generateTitles(input: {
   ];
 
   const raw = await callChat(prompt, { jsonMode: true, maxTokens: 1024, role: "titles" });
-  const parsed = safeParse<{ titles?: Array<{ text: string; style: string }> }>(raw, {});
+  const parsed = parseLlmJson(titlesLlmSchema, raw);
 
-  if (parsed.titles && parsed.titles.length > 0) {
+  if (parsed?.titles?.length) {
     return parsed.titles.map((t) => ({
       text: t.text,
       style: t.style || "备选",
@@ -1893,8 +1900,8 @@ export async function generateSummary(input: {
       },
     ];
     const raw = await callChat(prompt, { jsonMode: true, maxTokens: 512, role: "summary" });
-    const parsed = safeParse<{ summary?: string }>(raw, {});
-    if (parsed.summary && parsed.summary.trim().length >= 20) {
+    const parsed = parseLlmJson(summaryLlmSchema, raw);
+    if (parsed?.summary && parsed.summary.trim().length >= 20) {
       return {
         summary: parsed.summary.trim(),
         coverText: input.title?.trim() || input.topic,
@@ -2054,8 +2061,8 @@ function fallbackStoryboard(sectionHeading: string, plainSection: string): Secti
         "Wide filled soft-clay before/after diorama: two large rounded props with a thin arrow, supporting beads around them",
       summary: fitSectionSummary(summary, 10),
       beats: [
-        { visual: "large soft clay messy/broken state prop", label: "之前" },
-        { visual: "large soft clay fixed/improved state prop", label: "之后" },
+        { visual: "large soft clay messy state block with blank crumpled clay scraps (no readable writing)", label: "之前" },
+        { visual: "large soft clay clean block with a blank clay tablet surface (no bullet list, no micro-text)", label: "之后" },
       ],
     };
   }
@@ -2067,9 +2074,9 @@ function fallbackStoryboard(sectionHeading: string, plainSection: string): Secti
       scene: "Three equal soft clay cards in a tight row on a warm cream canvas, filling the width",
       summary: fitSectionSummary(summary, 10),
       beats: [
-        { visual: "soft clay cause icon card", label: "问题" },
-        { visual: "soft clay method icon card", label: "做法" },
-        { visual: "soft clay result icon card", label: "效果" },
+        { visual: "soft clay cause icon card with blank face", label: "问题" },
+        { visual: "soft clay method icon card with blank face", label: "做法" },
+        { visual: "soft clay result icon card with blank face", label: "效果" },
       ],
     };
   }
@@ -2077,12 +2084,12 @@ function fallbackStoryboard(sectionHeading: string, plainSection: string): Secti
   return {
     title,
     mode: "hero",
-    scene: `Large soft clay diorama about ${title}, with 3-4 supporting clay props so the frame feels full`,
+    scene: `Large soft clay diorama about ${title}, with 3-4 supporting blank clay props so the frame feels full; no floating text bubbles`,
     summary: fitSectionSummary(summary, 10),
     beats: [
       { visual: "central oversized soft clay tech metaphor" },
-      { visual: "small supporting clay badge" },
-      { visual: "small supporting clay tool prop" },
+      { visual: "small blank supporting clay badge" },
+      { visual: "small blank supporting clay tool prop" },
     ],
   };
 }
@@ -2120,6 +2127,7 @@ export async function generateSectionImagePrompt(
 - beats：duo=2，trio-*=3；visual 用英文；label 仅 duo/trio-short 可选，必须是 2-4 个完整汉字
 - summary：底部总结 4-10 完整字符，优先「40%→8%」；禁止半截词、叠字（词词/案案）
 - 禁止英文 UI 气泡文案（Query、Prompt Template 等）
+- visual 描述里不要写「写满文字的纸/平板/便签」；若需要平板，写成 blank clay tablet / blank badge
 - 忠于正文，禁止编造数字
 
 ${modeHint}
@@ -2138,13 +2146,11 @@ Output JSON only:
       ],
       { jsonMode: true, maxTokens: 480, role: "section-image" },
     );
-    story = normalizeStoryboard(
-      safeParse<Partial<SectionStoryboard> & { panels?: Array<{ visual?: string; label?: string }> }>(
-        extract,
-        {},
-      ),
-      sectionHeading,
-    );
+    const parsed = parseLlmJson(sectionStoryboardLlmSchema, extract);
+    story = parsed ? normalizeStoryboard(parsed, sectionHeading) : null;
+    if (!parsed && extract) {
+      console.warn("[generateSectionImagePrompt] Zod rejected storyboard JSON, using fallback");
+    }
   } catch {
     story = null;
   }
@@ -2463,12 +2469,15 @@ Output JSON: { "prompt": string, "subtitle": string, "keywords": string[] }
     );
   }
 
-  const parsed = safeParse<{ prompt?: string; subtitle?: string; keywords?: string[] }>(prompt, {});
-  const llmSubtitle = typeof parsed.subtitle === "string" ? parsed.subtitle.trim() : "";
+  const parsed = parseLlmJson(coverPromptLlmSchema, prompt);
+  if (!parsed && prompt) {
+    console.warn("[generateCoverPrompt] Zod rejected cover JSON, using local prompt fallback");
+  }
+  const llmSubtitle = typeof parsed?.subtitle === "string" ? parsed.subtitle.trim() : "";
   if (llmSubtitle && !isWeakCoverSubtitle(llmSubtitle) && llmSubtitle.length <= 14) {
     subtitle = llmSubtitle;
   }
-  const llmKeywords = (parsed.keywords ?? [])
+  const llmKeywords = (parsed?.keywords ?? [])
     .map((k) => String(k).replace(/\s+/g, "").trim())
     .filter((k) => k.length >= 2 && k.length <= 8 && !isWeakCoverSubtitle(k))
     .slice(0, 5);
@@ -2481,7 +2490,7 @@ Output JSON: { "prompt": string, "subtitle": string, "keywords": string[] }
     ...WEAK_COVER_SUBTITLE_BLOCKLIST,
   ];
 
-  if (parsed.prompt) {
+  if (parsed?.prompt) {
     return reinforceCoverPrompt(parsed.prompt, headline, subtitle, variant, forbidden);
   }
 

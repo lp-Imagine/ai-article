@@ -58,11 +58,13 @@ describe("buildInfographicPrompt", () => {
       3,
     );
 
-    expect(prompt).toContain("16:9");
+    expect(prompt).not.toMatch(/\b16\s*:\s*9\b/);
     expect(prompt).toContain("Fill the middle of the frame");
     expect(prompt).toContain("「缺索引→漏检索」");
     expect(prompt).not.toContain("RAG私有检索故障");
-    expect(prompt).toContain("charcoal outer frame");
+    expect(prompt).toContain("aspect-ratio marks");
+    expect(prompt).toContain("BLANK or show only abstract texture");
+    expect(prompt).toContain("floating review/comment bubbles");
     expect(prompt).toContain("标题设计");
   });
 
