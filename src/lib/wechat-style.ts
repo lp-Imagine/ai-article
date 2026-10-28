@@ -267,17 +267,17 @@ function simplifyFiguresForWechat(html: string): string {
   result = result.replace(/<figure[^>]*>([\s\S]*?)<\/figure>/gi, (_full, inner: string) => {
     const imgMatch = inner.match(/<img[^>]*>/i);
     if (!imgMatch) return "";
-    // 章节配图略收窄，避免公众号里撑满显得过大
+    // 与封面同宽：章节配图也按正文满宽展示
     let img = imgMatch[0];
     if (/style\s*=/i.test(img)) {
       img = img.replace(
         /(style\s*=\s*["'])/i,
-        `$1max-width:78%;height:auto;border-radius:8px;display:inline-block;`,
+        `$1max-width:100%;height:auto;border-radius:8px;display:block;`,
       );
     } else {
       img = img.replace(
         /<img/i,
-        `<img style="max-width:78%;height:auto;border-radius:8px;display:inline-block;"`,
+        `<img style="max-width:100%;height:auto;border-radius:8px;display:block;"`,
       );
     }
     return `<section style="margin:16px 0;text-align:center;">${img}</section>`;

@@ -54,6 +54,7 @@ import { buildPolishSystemPrompt } from "@/lib/ai/prompts/polish";
 import { buildExpandSystemPrompt } from "@/lib/ai/prompts/expand";
 import {
   buildInfographicPrompt,
+  fitBeatLabel,
   fitSectionSummary,
   softClipLabel,
   type SectionSceneMode,
@@ -1926,19 +1927,20 @@ const DOODLE_LOOKBOOK = [
   "Full-bleed wide banner, soft claymorphism / matte 3D illustration style.",
   "Warm cream or soft ivory background with gentle studio lighting and soft contact shadows. No neon, no cyberpunk glow, no dark space scene.",
   "Palette: cream, soft white, charcoal text, peach-orange accents, and one calm sky-blue accent.",
-  "CRITICAL: paint edge to edge on the canvas. Never put the design inside a floating white card, phone mockup, slide frame, or inset panel.",
+  "CRITICAL: paint edge to edge on the cream canvas. Never put the design inside a floating white card, phone mockup, slide frame, charcoal border, or inset panel.",
+  "No outer drop-shadow silhouette around the whole artwork, no dark matte frame like a photo mount.",
   "No paper grain, no torn paper, no sticky notes, no graph-paper, no brand logos, no dense UI screenshots.",
   "No realistic humans. A simple cute matte 3D robot mascot is allowed only as the right-side hero if it fits the topic.",
   "No microscopic illegible text, fake UI chrome, lorem-ipsum glyphs, or placeholder labels like 标题设计.",
 ].join(" ");
 
-/** 章节配图：场景隐喻为主，按内容选 hero / duo / trio-icons */
+/** 章节配图：填满中景的黏土场景；按内容选版式，避免空洞 */
 
 const SECTION_MODE_HINTS = [
-  "Prefer mode=hero unless the section is clearly a before/after or multi-step list.",
-  "If the section contrasts two states (before/after, bad/good), prefer mode=duo.",
-  "If the section is a short 3-step process, prefer mode=trio-icons (icons only, no text on props).",
-  "Default to mode=hero: one strong clay metaphor is clearer than many labeled cards.",
+  "Prefer a filled scene: hero diorama with several supporting props, or trio-short with 2-4 char labels.",
+  "If the section contrasts two states (before/after, bad/good), prefer mode=duo with large props filling the width.",
+  "If the section is a clear 3-step process, prefer mode=trio-short (short complete labels only) over empty icon beads.",
+  "Avoid sparse lonely objects in a huge empty cream field — the clay subject should feel substantial.",
 ] as const;
 
 const COVER_STYLE_DOODLE =
@@ -1956,7 +1958,9 @@ function pickSectionModeHint(sectionIndex: number): string {
 
 function parseSectionMode(raw: unknown): SectionSceneMode {
   const m = String(raw ?? "").trim().toLowerCase();
-  if (m === "duo" || m === "trio-icons" || m === "hero") return m;
+  if (m === "duo" || m === "trio-icons" || m === "trio-short" || m === "hero") return m;
+  // 旧模型偶发返回 trio，按短标签三卡处理
+  if (m === "trio") return "trio-short";
   return "hero";
 }
 
@@ -1975,7 +1979,7 @@ function normalizeStoryboard(
     "本章要点";
 
   const summary = fitSectionSummary(String(raw.summary ?? "").trim(), 10);
-  const scene = String(raw.scene ?? "").replace(/\s+/g, " ").trim().slice(0, 280);
+  const scene = String(raw.scene ?? "").replace(/\s+/g, " ").trim().slice(0, 320);
   const mode = parseSectionMode(raw.mode);
 
   const beatsIn = Array.isArray(raw.beats)
@@ -1988,27 +1992,30 @@ function normalizeStoryboard(
       if (!b || typeof b !== "object") return null;
       const visual = String((b as { visual?: string }).visual ?? "").trim().slice(0, 100);
       if (!visual) return null;
-      return { visual };
+      const label = fitBeatLabel(String((b as { label?: string }).label ?? ""));
+      return label ? { visual, label } : { visual };
     })
-    .filter((b): b is { visual: string } => Boolean(b));
+    .filter((b): b is { visual: string; label?: string } => Boolean(b));
 
-  const need =
-    mode === "duo" ? 2 : mode === "trio-icons" ? 3 : 0;
+  const need = mode === "duo" ? 2 : mode === "trio-icons" || mode === "trio-short" ? 3 : 0;
   if (need > 0 && beats.length < Math.min(2, need) && !scene) return null;
   if (!scene && beats.length === 0) return null;
 
+  const maxBeats = mode === "duo" ? 2 : mode === "trio-short" || mode === "trio-icons" ? 3 : 3;
   return {
     title,
     mode,
     scene:
       scene ||
       (mode === "duo"
-        ? "Two soft clay props showing before and after states with a thin arrow"
-        : mode === "trio-icons"
-          ? "Three small soft clay icon props in a loose process row"
-          : "One large soft clay metaphor for the section idea"),
+        ? "Two large soft clay props filling the frame, before and after, with a thin arrow"
+        : mode === "trio-short"
+          ? "Three equal soft clay cards in a tight row with short labels"
+          : mode === "trio-icons"
+            ? "Three medium soft clay icon props on a shared clay platform"
+            : "One large soft clay diorama with several supporting props filling the frame"),
     summary,
-    beats: beats.slice(0, mode === "duo" ? 2 : mode === "trio-icons" ? 3 : 2),
+    beats: beats.slice(0, maxBeats),
   };
 }
 
@@ -2031,6 +2038,9 @@ function fallbackStoryboard(sectionHeading: string, plainSection: string): Secti
   } else if (pct) {
     summary = `${pct[1].replace(/\s+/g, "")}→${pct[2].replace(/\s+/g, "")}`;
     mode = "duo";
+  } else if (/第[一二三123]|步骤|流程|三步/.test(heading + plainSection.slice(0, 200))) {
+    summary = fitSectionSummary(title, 8);
+    mode = "trio-short";
   } else {
     summary = fitSectionSummary(title, 8);
     mode = "hero";
@@ -2040,11 +2050,26 @@ function fallbackStoryboard(sectionHeading: string, plainSection: string): Secti
     return {
       title,
       mode,
-      scene: "Soft clay before/after diorama with a thin arrow between two rounded props",
+      scene:
+        "Wide filled soft-clay before/after diorama: two large rounded props with a thin arrow, supporting beads around them",
       summary: fitSectionSummary(summary, 10),
       beats: [
-        { visual: "soft clay broken or messy state prop" },
-        { visual: "soft clay fixed or improved state prop" },
+        { visual: "large soft clay messy/broken state prop", label: "之前" },
+        { visual: "large soft clay fixed/improved state prop", label: "之后" },
+      ],
+    };
+  }
+
+  if (mode === "trio-short") {
+    return {
+      title,
+      mode,
+      scene: "Three equal soft clay cards in a tight row on a warm cream canvas, filling the width",
+      summary: fitSectionSummary(summary, 10),
+      beats: [
+        { visual: "soft clay cause icon card", label: "问题" },
+        { visual: "soft clay method icon card", label: "做法" },
+        { visual: "soft clay result icon card", label: "效果" },
       ],
     };
   }
@@ -2052,14 +2077,18 @@ function fallbackStoryboard(sectionHeading: string, plainSection: string): Secti
   return {
     title,
     mode: "hero",
-    scene: `One large soft clay metaphor about ${title}, clean and centered`,
+    scene: `Large soft clay diorama about ${title}, with 3-4 supporting clay props so the frame feels full`,
     summary: fitSectionSummary(summary, 10),
-    beats: [{ visual: "central soft clay tech metaphor object" }],
+    beats: [
+      { visual: "central oversized soft clay tech metaphor" },
+      { visual: "small supporting clay badge" },
+      { visual: "small supporting clay tool prop" },
+    ],
   };
 }
 
 
-/** 为文章章节生成配图提示词：软 3D 场景 + 底部一句完整中文 */
+/** 为文章章节生成配图提示词：填满中景的软 3D 场景 + 短而完整的中文 */
 export async function generateSectionImagePrompt(
   topic: string,
   _style: string | null,
@@ -2078,23 +2107,25 @@ export async function generateSectionImagePrompt(
       [
         {
           role: "system",
-          content: `你是软 3D 黏土风章节插画分镜师。图上只允许「底部一句中文总结」，物体上不要写中文。
+          content: `你是软 3D 黏土风章节插画分镜师。画面要填满中景，避免左右大片空白。
 
 规则：
-- mode：hero | duo | trio-icons
-  - hero：一个大黏土隐喻场景（默认，最稳）
-  - duo：左右两个黏土物（前后对比/好坏对比）
-  - trio-icons：三个无字小图标（短流程）
+- mode：hero | duo | trio-short | trio-icons
+  - hero：一个大黏土场景 + 多个陪衬物（默认）
+  - duo：左右两大黏土物对比
+  - trio-short：三张等宽黏土卡，每张仅 2-4 字完整短标签（不要副标题）
+  - trio-icons：三图标无字（少用）
 - title：2-8 字内部主题（不画进图），禁止「标题设计」
-- scene：英文描述场景构图与黏土物体（会画进图，但不要当文字画）
-- beats：0-3 个，每个只有 visual（英文图标描述）；duo 要 2 个，trio-icons 要 3 个；物体上禁止中文
-- summary：图上唯一中文，4-10 个完整字符，优先「40%→8%」「超时→稳了」这种公式；禁止半截词、叠字（如词词）
+- scene：英文描述，强调「填满画面中部、物体够大」
+- beats：duo=2，trio-*=3；visual 用英文；label 仅 duo/trio-short 可选，必须是 2-4 个完整汉字
+- summary：底部总结 4-10 完整字符，优先「40%→8%」；禁止半截词、叠字（词词/案案）
+- 禁止英文 UI 气泡文案（Query、Prompt Template 等）
 - 忠于正文，禁止编造数字
 
 ${modeHint}
 
 Output JSON only:
-{ "mode": "hero"|"duo"|"trio-icons", "title": string, "scene": string, "beats": [{ "visual": string }], "summary": string }`,
+{ "mode": "hero"|"duo"|"trio-short"|"trio-icons", "title": string, "scene": string, "beats": [{ "visual": string, "label"?: string }], "summary": string }`,
         },
         {
           role: "user",
@@ -2105,10 +2136,13 @@ Output JSON only:
           }),
         },
       ],
-      { jsonMode: true, maxTokens: 420, role: "section-image" },
+      { jsonMode: true, maxTokens: 480, role: "section-image" },
     );
     story = normalizeStoryboard(
-      safeParse<Partial<SectionStoryboard> & { panels?: Array<{ visual?: string }> }>(extract, {}),
+      safeParse<Partial<SectionStoryboard> & { panels?: Array<{ visual?: string; label?: string }> }>(
+        extract,
+        {},
+      ),
       sectionHeading,
     );
   } catch {
@@ -2236,11 +2270,11 @@ function isSectionHeadingLike(text: string): boolean {
     || text.includes(":");
 }
 
-/** 封面主标题不带问号/句号，避免画面上出现「提示词?」这种残标点 */
+/** 封面主标题不带问号/句号/冒号，避免画面上出现「提示词：」这种残标点 */
 function normalizeCoverHeadline(text: string): string {
   return text
     .replace(/[《》【】\[\]（）()「」""'']/g, "")
-    .replace(/[？?！!。.]+$/g, "")
+    .replace(/[？?！!。.:：]+$/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -2504,10 +2538,11 @@ function reinforceCoverPrompt(
   // 丢掉摘要原文，避免模型再抄「大纲正常」——只保留最终要画的字
   const safeHeadline = normalizeCoverHeadline(headline) || headline;
   const hints = [
-    "Full-bleed warm cream canvas, soft claymorphism / matte 3D. NEVER a floating white card, slide, or mockup frame around the whole design.",
-    `Headline exactly 「${safeHeadline}」 on the LEFT, very large and complete. No question mark at the end.`,
-    `Tagline exactly 「${safeSubtitle}」 under it, smaller, peach-orange or soft sky-blue.`,
-    "RIGHT HALF: one oversized soft matte 3D clay hero (cute rounded robot or soft clay tech device). Soft shadows. Not flat circles. Not neon.",
+    "Full-bleed warm cream canvas edge to edge, soft claymorphism / matte 3D. NEVER a floating card, charcoal border, photo mount, or mockup frame around the whole design.",
+    "No outer drop-shadow around the artwork itself — only soft contact shadows under clay objects.",
+    `Headline exactly 「${safeHeadline}」 on the LEFT, very large and complete. No trailing question mark or colon.`,
+    `Tagline exactly 「${safeSubtitle}」 under it as plain smaller text (not inside a thick pill if avoidable), peach-orange or soft sky-blue.`,
+    "RIGHT HALF: one oversized soft matte 3D clay hero (cute rounded robot or soft clay tech device) filling most of that half. Soft contact shadows only.",
     "No other lettering — no microscopic glyphs, no fake UI text, no English slogans, no brand logos, no 标题设计 placeholders.",
     "No realistic people. No graph-paper, sticky notes, torn paper, or dense screenshot collages.",
   ];

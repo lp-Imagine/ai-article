@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildInfographicPrompt,
+  fitBeatLabel,
   fitSectionSummary,
   softClipLabel,
 } from "./cover";
@@ -30,8 +31,20 @@ describe("fitSectionSummary", () => {
   });
 });
 
+describe("fitBeatLabel", () => {
+  it("keeps short complete labels", () => {
+    expect(fitBeatLabel("之前")).toBe("之前");
+    expect(fitBeatLabel("误调用")).toBe("误调用");
+  });
+
+  it("drops bad or too-long labels", () => {
+    expect(fitBeatLabel("测试案案")).toBeUndefined();
+    expect(fitBeatLabel("这是一个很长的标签")).toBe("这是一个");
+  });
+});
+
 describe("buildInfographicPrompt", () => {
-  it("paints only one Chinese summary and uses hero scene, not labeled cards", () => {
+  it("asks for a filled hero scene and forbids outer frame shadow", () => {
     const prompt = buildInfographicPrompt(
       {
         title: "RAG私有检索故障",
@@ -45,26 +58,25 @@ describe("buildInfographicPrompt", () => {
       3,
     );
 
-    expect(prompt).toContain("soft claymorphism");
+    expect(prompt).toContain("16:9");
+    expect(prompt).toContain("Fill the middle of the frame");
     expect(prompt).toContain("「缺索引→漏检索」");
-    expect(prompt).toContain("ONE large central soft clay metaphor");
     expect(prompt).not.toContain("RAG私有检索故障");
-    expect(prompt).not.toContain("Clay card");
+    expect(prompt).toContain("charcoal outer frame");
     expect(prompt).toContain("标题设计");
-    expect(prompt).toContain("graph-paper");
-    expect(prompt).toContain("ONLY Chinese lettering");
   });
 
-  it("supports duo mode without Chinese on objects", () => {
+  it("supports trio-short with short labels only", () => {
     const prompt = buildInfographicPrompt(
       {
-        title: "对比",
-        mode: "duo",
-        scene: "before after clay props",
-        summary: "40%→8%",
+        title: "流程",
+        mode: "trio-short",
+        scene: "three clay cards",
+        summary: "三步收敛",
         beats: [
-          { visual: "messy clay prompt blob" },
-          { visual: "clean clay rule card" },
+          { visual: "cause icon", label: "问题" },
+          { visual: "method icon", label: "做法" },
+          { visual: "result icon", label: "效果" },
         ],
       },
       "",
@@ -72,8 +84,9 @@ describe("buildInfographicPrompt", () => {
       2,
     );
 
-    expect(prompt).toContain("TWO soft clay objects");
-    expect(prompt).toContain("no Chinese on the objects");
-    expect(prompt).toContain("「40%→8%」");
+    expect(prompt).toContain("THREE equal soft clay rounded cards");
+    expect(prompt).toContain("「问题」");
+    expect(prompt).toContain("「效果」");
+    expect(prompt).toContain("「三步收敛」");
   });
 });

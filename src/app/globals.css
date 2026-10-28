@@ -5030,7 +5030,8 @@ textarea::placeholder {
   border-radius: 6px;
   margin-bottom: 22px;
   object-fit: cover;
-  box-shadow: 0 4px 18px rgba(18, 18, 18, 0.1);
+  /* 封面本身常自带体积感；预览不再额外投影，避免「卡片浮起」假阴影 */
+  box-shadow: none;
 }
 
 /* ====== 标题层级 ====== */
@@ -5311,13 +5312,15 @@ textarea::placeholder {
   max-width: 100%;
   border-radius: 8px;
   margin: 20px 0;
-  box-shadow: 0 4px 20px rgba(18, 18, 18, 0.1);
+  box-shadow: none;
 }
 
 .mp-preview figure {
-  margin: 20px auto;
+  margin: 20px 0;
   text-align: center;
-  max-width: min(100%, 420px);
+  /* 与封面同宽展示，不再缩成 420px 小条 */
+  max-width: 100%;
+  width: 100%;
 }
 
 .mp-preview figure img {
@@ -5325,7 +5328,7 @@ textarea::placeholder {
   width: 100%;
   max-width: 100%;
   margin: 0 auto;
-  box-shadow: 0 2px 12px rgba(18, 18, 18, 0.08);
+  box-shadow: none;
 }
 
 .mp-preview figcaption {
