@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { FieldLabel, PageHeader, SectionCard } from "@/components/app-shell";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { SafeCoverImage } from "@/components/safe-cover-image";
 import { useToast } from "@/components/toast";
 import {
   clearArticleBackgroundTask,
@@ -1246,12 +1247,10 @@ export default function HomePage() {
                   <li key={item.id}>
                     <Link href={`/articles/${item.id}`} className="recent-item">
                       <div className="recent-item-thumb">
-                        {item.coverImageUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={item.coverImageUrl} alt="" />
-                        ) : (
-                          <FileText size={18} />
-                        )}
+                        <SafeCoverImage
+                          src={item.coverImageUrl}
+                          fallback={<FileText size={18} />}
+                        />
                       </div>
                       <div className="recent-item-main">
                         <p className="recent-item-title">{title}</p>

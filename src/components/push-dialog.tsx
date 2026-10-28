@@ -11,6 +11,7 @@ import {
   inferBlogPlacement,
   type BlogSection,
 } from "@/lib/blog-sync-constants";
+import { SafeCoverImage } from "@/components/safe-cover-image";
 
 export type PushChannel = "wechat" | "blog";
 
@@ -173,10 +174,15 @@ export default function PushDialog({
           {coverImageUrl ? (
             <div>
               <Label>封面图</Label>
-              <img
+              <SafeCoverImage
                 src={coverImageUrl}
                 alt="封面"
                 className="mt-2 h-40 w-full rounded-lg border border-[var(--line)] object-cover"
+                fallback={
+                  <p className="mt-2 rounded-lg border border-dashed border-[var(--line)] bg-[var(--surface-muted)] p-4 text-sm text-[var(--muted)]">
+                    封面链接已失效；推送微信时会尝试重新生成。
+                  </p>
+                }
               />
             </div>
           ) : pushWechat ? (

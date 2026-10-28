@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import ArticleHtmlContent from "@/components/article-html-content";
+import { SafeCoverImage } from "@/components/safe-cover-image";
 import { normalizeCalloutBlocks, wrapSummarySection } from "@/lib/wechat-style";
 
 type Props = {
@@ -52,7 +53,7 @@ function PreviewArticleBody({
 }) {
   return (
     <>
-      {coverImageUrl ? <img src={coverImageUrl} alt="cover" className="mp-cover" /> : null}
+      <SafeCoverImage src={coverImageUrl} alt="cover" className="mp-cover" />
       <h1>{title}</h1>
       <div className="mp-meta">{summary ? summary : "（未填写摘要）"}</div>
       <ArticleHtmlContent html={`<article>${displayContent}</article>`} />

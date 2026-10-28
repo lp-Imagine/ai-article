@@ -54,6 +54,7 @@ import { buildPolishSystemPrompt } from "@/lib/ai/prompts/polish";
 import { buildExpandSystemPrompt } from "@/lib/ai/prompts/expand";
 import {
   buildInfographicPrompt,
+  softClipLabel,
   type SectionStoryPanel,
   type SectionStoryboard,
 } from "@/lib/ai/prompts/cover";
@@ -1930,10 +1931,10 @@ const DOODLE_LOOKBOOK = [
 /** 章节配图：左因 → 中机制 → 右果 */
 
 const SECTION_FLOW_LAYOUTS = [
-  "left-to-right: cause box, then one or two mechanism boxes, then a result box; a thin blue connector under them",
-  "short title top-left; three equal rounded boxes left-to-right for before, change, after; a thin conclusion line under them",
-  "trigger on the left; two stacked step boxes in the middle; result on the right; thin blue connectors",
-  "two option boxes on the left; a thin arrow to the chosen path; outcome on the right",
+  "left-to-right three equal rounded cards: cause, mechanism, result; thin blue connector under them; generous side margins",
+  "short title top-left; three equal rounded cards left-to-right for before, change, after; thin conclusion line under them; nothing outside the card row",
+  "three equal rounded cards for problem, approach, outcome; thin blue connectors between cards only; keep all content inset from edges",
+  "three equal rounded cards for option A, option B, chosen outcome; thin arrow between them; no side ornaments",
 ] as const;
 
 const COVER_STYLE_DOODLE =
@@ -1950,53 +1951,45 @@ function pickSectionFlowLayout(sectionIndex: number): string {
   return SECTION_FLOW_LAYOUTS[sectionIndex % SECTION_FLOW_LAYOUTS.length];
 }
 
-function softClipLabel(text: string, maxChars: number): string {
-  const t = text.replace(/\s+/g, " ").trim();
-  if (!t) return t;
-  const chars = [...t];
-  const isLatinOnly = /[A-Za-z]/.test(t) && !/[\u4e00-\u9fa5]/.test(t);
-  const limit = isLatinOnly ? Math.max(maxChars, 22) : maxChars;
-  if (chars.length <= limit) return t;
-  if (isLatinOnly) {
-    const slice = t.slice(0, limit);
-    const sp = slice.lastIndexOf(" ");
-    return (sp >= 4 ? slice.slice(0, sp) : slice).trim();
-  }
-  return chars.slice(0, limit).join("").replace(/[，,。.!！？、：:]+$/u, "").trim();
-}
-
 function normalizeStoryboard(
   raw: Partial<SectionStoryboard> | null | undefined,
   sectionHeading: string,
 ): SectionStoryboard | null {
   if (!raw) return null;
-  const title = softClipLabel(String(raw.title ?? "").trim(), 8);
-  const summary = softClipLabel(String(raw.summary ?? "").trim(), 20);
+  // 标题略放宽：拉丁词算 1 格，避免「RAG…故障」被裁成「…故」
+  const title = softClipLabel(String(raw.title ?? "").trim(), 10);
+  const summary = softClipLabel(String(raw.summary ?? "").trim(), 18);
   const panelsIn = Array.isArray(raw.panels) ? raw.panels : [];
   const panels: SectionStoryPanel[] = [];
   for (const p of panelsIn) {
     if (!p || typeof p !== "object") continue;
-    const label = softClipLabel(String((p as SectionStoryPanel).label ?? "").trim(), 12);
-    const caption = softClipLabel(String((p as SectionStoryPanel).caption ?? "").trim(), 16);
-    const visual = String((p as SectionStoryPanel).visual ?? "").trim().slice(0, 100);
+    const label = softClipLabel(String((p as SectionStoryPanel).label ?? "").trim(), 10);
+    const caption = softClipLabel(String((p as SectionStoryPanel).caption ?? "").trim(), 12);
+    const visual = String((p as SectionStoryPanel).visual ?? "").trim().slice(0, 80);
     let role = String((p as SectionStoryPanel).role ?? "step") as SectionStoryPanel["role"];
     if (!["cause", "step", "flaw", "result"].includes(role)) role = "step";
     if (!label) continue;
-    panels.push({ role, label, caption, visual: visual || "simple tech icon matching the label" });
-    if (panels.length >= 4) break;
+    panels.push({
+      role,
+      label,
+      caption,
+      visual: visual || "simple geometric tech icon matching the label",
+    });
+    // 三格横排更稳，四格易挤爆/裁边
+    if (panels.length >= 3) break;
   }
   if (!title || panels.length < 2 || !summary) return null;
   const headingPlain = sectionHeading.replace(/<[^>]+>/g, "").trim();
   const safeTitle =
     title.length >= 2 && title !== headingPlain
       ? title
-      : softClipLabel(headingPlain.split(/[：:]/)[0] || headingPlain, 8);
+      : softClipLabel(headingPlain.split(/[：:]/)[0] || headingPlain, 10);
   return { title: safeTitle || title, panels, summary };
 }
 
 function fallbackStoryboard(sectionHeading: string, plainSection: string): SectionStoryboard {
   const heading = sectionHeading.replace(/<[^>]+>/g, "").trim();
-  const title = softClipLabel(heading.split(/[：:]/)[0] || heading, 8) || "本章要点";
+  const title = softClipLabel(heading.split(/[：:]/)[0] || heading, 10) || "本章要点";
   const after = heading.split(/[：:]/)[1]?.trim() || "";
 
   // 保留英文报错短语完整
@@ -2006,7 +1999,7 @@ function fallbackStoryboard(sectionHeading: string, plainSection: string): Secti
   const zhBits = after
     .replace(/\b(?:other side closed|terminated|ECONNRESET|ETIMEDOUT)\b/gi, "")
     .split(/\s*[、,，/|＋+&]\s*|\s*(?:与|和|及|vs\.?|VS)\s*/i)
-    .map((s) => softClipLabel(s.replace(/[？?].*$/, "").replace(/的实测.*$/u, "").trim(), 10))
+    .map((s) => softClipLabel(s.replace(/[？?].*$/, "").replace(/的实测.*$/u, "").trim(), 8))
     .filter((s) => s.length >= 2 && !/^从\d/.test(s));
 
   const bits = [...engPhrases, ...zhBits].slice(0, 3);
@@ -2017,7 +2010,7 @@ function fallbackStoryboard(sectionHeading: string, plainSection: string): Secti
     ? `${fromTo[1].replace(/\s+/g, "")}→${fromTo[2].replace(/\s+/g, "")}`
     : metric
       ? `${metric[1].replace(/\s+/g, "")}→${metric[2].replace(/\s+/g, "")}`
-      : softClipLabel(bits.length >= 2 ? `${bits[0]}+${bits[1]}` : title, 20);
+      : softClipLabel(bits.length >= 2 ? `${bits[0]}→${bits[1]}` : title, 18);
 
   const panels: SectionStoryPanel[] = [];
   if (bits.length >= 2) {
@@ -2025,41 +2018,41 @@ function fallbackStoryboard(sectionHeading: string, plainSection: string): Secti
       role: "cause",
       label: bits[0],
       caption: "起点",
-      visual: "cute rounded icon for the starting concept",
+      visual: "simple rounded geometric icon for the starting concept",
     });
     panels.push({
       role: "step",
       label: bits[1],
       caption: "关键一步",
-      visual: "middle light-gray process box with simple geometric icon",
+      visual: "simple geometric process icon",
     });
     panels.push({
       role: "result",
-      label: bits[2] || softClipLabel(summary, 10),
+      label: bits[2] || softClipLabel(summary, 8),
       caption: "结果",
-      visual: "outcome badge or celebratory sticker",
+      visual: "simple checkmark geometric icon",
     });
   } else {
     panels.push({
       role: "cause",
       label: "问题",
-      caption: softClipLabel(heading, 14),
-      visual: "broken pipe or error geometric icon in an outlined box",
+      caption: softClipLabel(heading, 10),
+      visual: "broken pipe or error geometric icon",
     });
     panels.push({
       role: "step",
       label: "做法",
       caption: "拆解处理",
-      visual: "toolbox and checklist geometric icons",
+      visual: "checklist geometric icon",
     });
     panels.push({
       role: "result",
       label: "效果",
-      caption: summary,
-      visual: "green check and speed badge",
+      caption: softClipLabel(summary, 10),
+      visual: "checkmark geometric icon",
     });
   }
-  return { title, panels, summary };
+  return { title, panels: panels.slice(0, 3), summary };
 }
 
 
@@ -2085,15 +2078,15 @@ export async function generateSectionImagePrompt(
           content: `你是信息图分镜师。根据「本章标题+正文」，提炼一张分镜：左因→中机制→右果，底部一句总结。
 
 规则：
-- title：2-8 字总题（如「漏洞原理」「超时定位」「分段提效」），不要整段章节标题
-- panels：2-4 个，每个含 role/label/caption/visual
+- title：2-8 个完整词组（如「漏洞原理」「超时定位」「RAG漏检」），不要整段章节标题；禁止半截词（如「检索故」）
+- panels：正好 3 个（不够就合并），每个含 role/label/caption/visual
   - role: cause | step | flaw | result
-  - label: 2-10 字短标签（完整可读）
-  - caption: 4-14 字补充说明（完整可读）
-  - visual: 英文简述该格要画什么（geometric icon / stacked layers / clock / nodes / arrow）
-- summary: 底部总结，最多 18 字，优先「A + B = 结论」或「425秒→105秒」这种公式感
+  - label: 2-8 字短标签，必须是完整可读词组
+  - caption: 4-10 字补充说明，完整可读
+  - visual: 英文简述单一几何图标（geometric icon / stacked layers / clock / nodes / arrow）
+- summary: 底部总结，最多 16 字，优先「A→B」或「缺索引→漏检索」这种公式感
 - 内容必须忠于本章正文，禁止编造本章没有的漏洞/报错/数字
-- 不要输出长句子；所有中文都要短而完整，避免生图截断
+- 所有中文必须短而完整，宁可少字也不要截断
 
 Output JSON only:
 { "title": string, "panels": [{ "role": string, "label": string, "caption": string, "visual": string }], "summary": string }`,
@@ -2346,10 +2339,14 @@ export async function generateCoverPrompt(
     contentExcerpt,
   );
 
-  const prompt = await callChat([
-    {
-      role: "system",
-      content: IMAGE_PROMPT_SYSTEM + `\n\nWrite a prompt for a wide article COVER.
+  // 与章节配图一致：辅助 LLM 不可用时降级本地拼 prompt，不阻断出图
+  let prompt: string | null = null;
+  try {
+    prompt = await callChat(
+      [
+        {
+          role: "system",
+          content: IMAGE_PROMPT_SYSTEM + `\n\nWrite a prompt for a wide article COVER.
 
 STYLE:
 ${variant.styleAnchor}
@@ -2375,31 +2372,39 @@ SUBTITLE:
 
 Output JSON: { "prompt": string, "subtitle": string, "keywords": string[] }
 - "prompt" describes the scene in English; Chinese strings must match headline + subtitle exactly.`,
-    },
-    {
-      role: "user",
-      content: JSON.stringify({
-        domainHint,
-        theme: variant.theme,
-        layoutVariant: variant.layout,
-        headline,
-        preferredSubtitle: subtitle,
-        seedKeywords,
-        contextForMeaningOnly: {
-          articleTopic: topic,
-          articleTitle: title,
-          summary: safeSummary,
-          outlineHeadingsDoNotPaint: keyPoints,
-          contentExcerpt: safeExcerpt || undefined,
         },
-        doNotPaintTheseStrings: [
-          topic,
-          ...keyPoints,
-          ...WEAK_COVER_SUBTITLE_BLOCKLIST,
-        ].filter((s) => s && s !== headline && s !== subtitle),
-      }),
-    },
-  ], { jsonMode: true, maxTokens: 520, role: "cover-prompt" });
+        {
+          role: "user",
+          content: JSON.stringify({
+            domainHint,
+            theme: variant.theme,
+            layoutVariant: variant.layout,
+            headline,
+            preferredSubtitle: subtitle,
+            seedKeywords,
+            contextForMeaningOnly: {
+              articleTopic: topic,
+              articleTitle: title,
+              summary: safeSummary,
+              outlineHeadingsDoNotPaint: keyPoints,
+              contentExcerpt: safeExcerpt || undefined,
+            },
+            doNotPaintTheseStrings: [
+              topic,
+              ...keyPoints,
+              ...WEAK_COVER_SUBTITLE_BLOCKLIST,
+            ].filter((s) => s && s !== headline && s !== subtitle),
+          }),
+        },
+      ],
+      { jsonMode: true, maxTokens: 520, role: "cover-prompt" },
+    );
+  } catch (error) {
+    console.warn(
+      "[generateCoverPrompt] LLM failed, using local fallback:",
+      error instanceof Error ? error.message.slice(0, 180) : error,
+    );
+  }
 
   const parsed = safeParse<{ prompt?: string; subtitle?: string; keywords?: string[] }>(prompt, {});
   const llmSubtitle = typeof parsed.subtitle === "string" ? parsed.subtitle.trim() : "";

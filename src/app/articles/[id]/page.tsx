@@ -23,6 +23,7 @@ import PreviewDialog from "@/components/preview-dialog";
 import PushDialog, { type PushConfirmPayload } from "@/components/push-dialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { FieldLabel } from "@/components/app-shell";
+import { SafeCoverImage } from "@/components/safe-cover-image";
 import { useToast } from "@/components/toast";
 import { ProgressDialog, type ProgressStep } from "@/components/progress-dialog";
 import {
@@ -2040,7 +2041,15 @@ export default function ArticlePage({
                     <div className="md:col-span-2 min-w-0">
                       <FieldLabel>封面图</FieldLabel>
                       <div className="cover-preview mt-2">
-                        <img src={article.coverImageUrl} alt="cover" />
+                        <SafeCoverImage
+                          src={article.coverImageUrl}
+                          alt="cover"
+                          fallback={
+                            <div className="cover-preview-fallback">
+                              封面链接已失效，可重新生成
+                            </div>
+                          }
+                        />
                         <span className="cover-preview-label">封面预览</span>
                       </div>
                     </div>
