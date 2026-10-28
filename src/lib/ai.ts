@@ -1922,10 +1922,12 @@ Rules:
  * 禁止写入 Apple / blog / guidelines 等英文词，生图模型会把它们画成水印。
  */
 const DOODLE_LOOKBOOK = [
-  "Full-bleed wide banner. Cool pale-gray field with a soft translucent blue wash from the upper left, fading across the canvas.",
-  "Palette: pale gray, white, charcoal, and one restrained blue. Flat vector. No paper grain, no graph-paper grid.",
-  "Do not put the whole design inside a small centered white card. Use the full canvas.",
-  "No cute stickers, no neon, no 3D glass, no dark header strips, no colored rectangles clipped at the edges.",
+  "Full-bleed wide banner filling the entire canvas edge to edge. Cool pale-gray field with a soft translucent blue wash from the upper left.",
+  "Palette: pale gray, white, charcoal, and one restrained blue. Flat 2D vector only.",
+  "CRITICAL: paint directly on the canvas. Never put the design inside a floating rounded white card, phone mockup, slide frame, or inset panel.",
+  "No paper grain, no graph-paper grid, no sticky notes, no binder tabs, no torn paper scraps.",
+  "No cute stickers, no neon, no 3D glass spheres, no shiny orbs, no dark header strips, no colored rectangles clipped at the edges.",
+  "No people, faces, avatars, profile silhouettes, or user icons. No microscopic illegible text, fake UI chrome, or lorem-ipsum glyphs.",
 ].join(" ");
 
 /** 章节配图：左因 → 中机制 → 右果 */
@@ -1938,12 +1940,12 @@ const SECTION_FLOW_LAYOUTS = [
 ] as const;
 
 const COVER_STYLE_DOODLE =
-  `${DOODLE_LOOKBOOK} Left side: a very large charcoal Chinese headline with a smaller blue tagline under it. Right side: a BIG geometric composition filling most of the right half — several overlapping translucent blue circles of different sizes, thin connecting arcs, and one simplified topic object (stacked translucent slabs, a clock face, or a node cluster). The right composition should feel substantial, not a tiny icon floating above the title.`;
+  `${DOODLE_LOOKBOOK} Left side: a very large charcoal Chinese headline with a smaller blue tagline under it. Right side: a BIG flat geometric composition filling most of the right half — several overlapping translucent FLAT blue discs of different sizes (2D, not 3D glass balls), thin connecting arcs, and one simplified topic object (stacked translucent slabs, a clock face, or a node cluster). The right composition should feel substantial, not a tiny icon floating above the title.`;
 
 const COVER_LAYOUT_VARIANTS = [
-  "Asymmetric split: type on the left, oversized geometric composition on the right filling most of that half.",
-  "Type left-aligned. Right side is a cluster of overlapping translucent circles plus one large simplified object, sitting in a soft blue wash.",
-  "Type on the left. Right side has stacked translucent slabs or concentric rings occupying most of the height.",
+  "Asymmetric split painted full-bleed: type on the left, oversized flat geometric composition on the right filling most of that half.",
+  "Type left-aligned on the open canvas. Right side is a cluster of overlapping flat translucent discs plus one large simplified object, sitting in a soft blue wash.",
+  "Type on the left. Right side has stacked translucent slabs or concentric flat rings occupying most of the height. No inset card frame.",
 ] as const;
 
 
@@ -2229,9 +2231,18 @@ function isSectionHeadingLike(text: string): boolean {
     || text.includes(":");
 }
 
+/** 封面主标题不带问号/句号，避免画面上出现「提示词?」这种残标点 */
+function normalizeCoverHeadline(text: string): string {
+  return text
+    .replace(/[《》【】\[\]（）()「」""'']/g, "")
+    .replace(/[？?！!。.]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /**
  * 封面主副标题：
- * - 主标题用文章标题（可按？/：拆分）
+ * - 主标题用文章标题（可按？/：拆分，主标题去掉问号）
  * - 副标题用正文关键词总结，禁止摘抄「大纲正常」这类无信息短句
  */
 function deriveCoverTitleLines(
@@ -2239,15 +2250,20 @@ function deriveCoverTitleLines(
   summary?: string | null,
   topic?: string | null,
 ): { headline: string; subtitle: string; keywords: string[] } {
-  const cleanedTitle = title.replace(/[《》【】\[\]（）()「」""'']/g, "").trim();
-  const corpus = `${topic ?? ""} ${cleanedTitle} ${summary ?? ""}`;
+  const cleanedTitle = normalizeCoverHeadline(
+    title.replace(/[《》【】\[\]（）()「」""'']/g, "").trim(),
+  );
+  const corpus = `${topic ?? ""} ${title} ${summary ?? ""}`;
   const keywords = extractLocalKeywords(corpus, 4);
 
-  // 标题含冒号 / 问号：前半主标题，后半若合格可作副标题
-  const splitMatch = cleanedTitle.match(/^(.+?[？?：:])(.+)$/);
+  // 标题含冒号 / 问号：前半主标题（去标点），后半若合格可作副标题
+  const splitMatch = title
+    .replace(/[《》【】\[\]（）()「」""'']/g, "")
+    .trim()
+    .match(/^(.+?[？?：:])(.+)$/);
   if (splitMatch) {
-    const left = fitCoverPhrase(splitMatch[1].replace(/[：:]$/, "？").trim(), 22);
-    const right = fitCoverPhrase(splitMatch[2].trim(), 14);
+    const left = fitCoverPhrase(normalizeCoverHeadline(splitMatch[1]), 22);
+    const right = fitCoverPhrase(normalizeCoverHeadline(splitMatch[2]), 14);
     if (left && right && !isWeakCoverSubtitle(right)) {
       return { headline: left, subtitle: right, keywords };
     }
@@ -2259,7 +2275,8 @@ function deriveCoverTitleLines(
     }
   }
 
-  const headline = fitCoverPhrase(cleanedTitle, 22) || cleanedTitle.slice(0, 22) || "技术专题";
+  const headline =
+    fitCoverPhrase(cleanedTitle, 22) || cleanedTitle.slice(0, 22) || "技术专题";
   const tag =
     keywords.length >= 2
       ? keywords.slice(0, 2).join(" · ")
@@ -2360,10 +2377,11 @@ HERO:
 - The composition should be big enough to balance the headline. Not a tiny icon. Not a window thumbnail. Not centered above the title. Not a small white card.
 
 TEXT (the only lettering on the image):
-- Headline exactly 「${headline}」 — very large, bold, charcoal, LEFT aligned
+- Headline exactly 「${headline}」 — very large, bold, charcoal, LEFT aligned. No trailing question mark.
 - Tagline exactly your subtitle — smaller, restrained blue, under the headline
-- No other Chinese. No English slogans, watermarks, corner labels, or extra captions.
+- No other Chinese. No English slogans, watermarks, corner labels, tiny illegible glyphs, or extra captions.
 - If the headline contains Latin like Node.js or Prompt, paint those words fully — never cut them off.
+- Never draw a floating white card/frame around the layout. Full-bleed only.
 
 SUBTITLE:
 - 6-14 Chinese characters compressing the article keywords
@@ -2479,12 +2497,14 @@ function reinforceCoverPrompt(
   }
 
   // 丢掉摘要原文，避免模型再抄「大纲正常」——只保留最终要画的字
+  const safeHeadline = normalizeCoverHeadline(headline) || headline;
   const hints = [
-    "Full-bleed pale-gray canvas with a faint blue wash from the upper left. Not a small centered white card.",
-    `Headline exactly 「${headline}」 on the LEFT, very large and complete.`,
+    "Full-bleed pale-gray canvas edge to edge with a faint blue wash from the upper left. NEVER a floating rounded white card, slide, or mockup frame.",
+    `Headline exactly 「${safeHeadline}」 on the LEFT, very large and complete. No question mark at the end.`,
     `Tagline exactly 「${safeSubtitle}」 under it, smaller, restrained blue.`,
-    "RIGHT HALF: oversized overlapping translucent blue circles plus one simplified object. Not a tiny icon above the title.",
-    "No other lettering. No English slogans. No corner watermarks. No graph-paper grid. No colored blocks clipped at the edges.",
+    "RIGHT HALF: oversized overlapping FLAT translucent blue discs (2D vector, not 3D glass spheres) plus one simplified object. Not a tiny icon above the title.",
+    "No other lettering of any kind — no microscopic glyphs, no fake UI text, no English slogans, no corner watermarks.",
+    "No people or profile icons. No graph-paper, sticky notes, binder tabs, paper scraps, or clipped colored blocks.",
   ];
 
   if (LIFESTYLE_COVER_KEYWORD_RE.test(cleaned)) {
