@@ -29,7 +29,11 @@ export const sectionStoryboardLlmSchema = z
     mode: z
       .enum(["hero", "duo", "trio-short", "trio-icons", "trio"])
       .optional()
-      .catch(undefined),
+      .catch(undefined)
+      // 旧输出偶发 "trio"，归一成 trio-short，与 SectionSceneMode 对齐
+      .transform((m): "hero" | "duo" | "trio-short" | "trio-icons" | undefined =>
+        m === "trio" ? "trio-short" : m,
+      ),
     title: z.string().trim().max(40).optional().catch(undefined),
     scene: z.string().trim().max(400).optional().catch(""),
     summary: z
