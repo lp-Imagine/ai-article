@@ -54,8 +54,9 @@ import { buildPolishSystemPrompt } from "@/lib/ai/prompts/polish";
 import { buildExpandSystemPrompt } from "@/lib/ai/prompts/expand";
 import {
   buildInfographicPrompt,
+  fitSectionSummary,
   softClipLabel,
-  type SectionStoryPanel,
+  type SectionSceneMode,
   type SectionStoryboard,
 } from "@/lib/ai/prompts/cover";
 import {
@@ -1931,13 +1932,13 @@ const DOODLE_LOOKBOOK = [
   "No microscopic illegible text, fake UI chrome, lorem-ipsum glyphs, or placeholder labels like 标题设计.",
 ].join(" ");
 
-/** 章节配图：左因 → 中机制 → 右果（软 3D 三块，无总标题） */
+/** 章节配图：场景隐喻为主，按内容选 hero / duo / trio-icons */
 
-const SECTION_FLOW_LAYOUTS = [
-  "left-to-right three equal soft 3D rounded clay blocks: cause, mechanism, result; thin soft connector under them; generous side margins; absolutely no title above",
-  "three equal matte clay cards left-to-right for before, change, after; soft shadow under each; thin conclusion line below; no title block",
-  "three soft 3D pillowy panels for problem, approach, outcome; gentle orange/blue accents; keep all content inset; no corner title",
-  "three equal clay blocks for option A, option B, chosen outcome; one soft arrow between them; no side ornaments; no title above",
+const SECTION_MODE_HINTS = [
+  "Prefer mode=hero unless the section is clearly a before/after or multi-step list.",
+  "If the section contrasts two states (before/after, bad/good), prefer mode=duo.",
+  "If the section is a short 3-step process, prefer mode=trio-icons (icons only, no text on props).",
+  "Default to mode=hero: one strong clay metaphor is clearer than many labeled cards.",
 ] as const;
 
 const COVER_STYLE_DOODLE =
@@ -1949,117 +1950,116 @@ const COVER_LAYOUT_VARIANTS = [
   "Type on the left. Right side: stacked soft 3D platforms or a round clay mascot holding a simple tablet. Cozy desk vibe without clutter.",
 ] as const;
 
+function pickSectionModeHint(sectionIndex: number): string {
+  return SECTION_MODE_HINTS[sectionIndex % SECTION_MODE_HINTS.length];
+}
 
-function pickSectionFlowLayout(sectionIndex: number): string {
-  return SECTION_FLOW_LAYOUTS[sectionIndex % SECTION_FLOW_LAYOUTS.length];
+function parseSectionMode(raw: unknown): SectionSceneMode {
+  const m = String(raw ?? "").trim().toLowerCase();
+  if (m === "duo" || m === "trio-icons" || m === "hero") return m;
+  return "hero";
 }
 
 function normalizeStoryboard(
-  raw: Partial<SectionStoryboard> | null | undefined,
+  raw: Partial<SectionStoryboard> & {
+    panels?: Array<{ visual?: string; label?: string }>;
+  } | null | undefined,
   sectionHeading: string,
 ): SectionStoryboard | null {
   if (!raw) return null;
-  // 标题略放宽：拉丁词算 1 格，避免「RAG…故障」被裁成「…故」
-  const title = softClipLabel(String(raw.title ?? "").trim(), 10);
-  const summary = softClipLabel(String(raw.summary ?? "").trim(), 18);
-  const panelsIn = Array.isArray(raw.panels) ? raw.panels : [];
-  const panels: SectionStoryPanel[] = [];
-  for (const p of panelsIn) {
-    if (!p || typeof p !== "object") continue;
-    const label = softClipLabel(String((p as SectionStoryPanel).label ?? "").trim(), 10);
-    const caption = softClipLabel(String((p as SectionStoryPanel).caption ?? "").trim(), 12);
-    const visual = String((p as SectionStoryPanel).visual ?? "").trim().slice(0, 80);
-    let role = String((p as SectionStoryPanel).role ?? "step") as SectionStoryPanel["role"];
-    if (!["cause", "step", "flaw", "result"].includes(role)) role = "step";
-    if (!label) continue;
-    panels.push({
-      role,
-      label,
-      caption,
-      visual: visual || "simple geometric tech icon matching the label",
-    });
-    // 三格横排更稳，四格易挤爆/裁边
-    if (panels.length >= 3) break;
-  }
-  if (!title || panels.length < 2 || !summary) return null;
+
   const headingPlain = sectionHeading.replace(/<[^>]+>/g, "").trim();
-  const safeTitle =
-    title.length >= 2 && title !== headingPlain
-      ? title
-      : softClipLabel(headingPlain.split(/[：:]/)[0] || headingPlain, 10);
-  return { title: safeTitle || title, panels, summary };
+  const title =
+    softClipLabel(String(raw.title ?? "").trim(), 10) ||
+    softClipLabel(headingPlain.split(/[：:]/)[0] || headingPlain, 10) ||
+    "本章要点";
+
+  const summary = fitSectionSummary(String(raw.summary ?? "").trim(), 10);
+  const scene = String(raw.scene ?? "").replace(/\s+/g, " ").trim().slice(0, 280);
+  const mode = parseSectionMode(raw.mode);
+
+  const beatsIn = Array.isArray(raw.beats)
+    ? raw.beats
+    : Array.isArray(raw.panels)
+      ? raw.panels
+      : [];
+  const beats = beatsIn
+    .map((b) => {
+      if (!b || typeof b !== "object") return null;
+      const visual = String((b as { visual?: string }).visual ?? "").trim().slice(0, 100);
+      if (!visual) return null;
+      return { visual };
+    })
+    .filter((b): b is { visual: string } => Boolean(b));
+
+  const need =
+    mode === "duo" ? 2 : mode === "trio-icons" ? 3 : 0;
+  if (need > 0 && beats.length < Math.min(2, need) && !scene) return null;
+  if (!scene && beats.length === 0) return null;
+
+  return {
+    title,
+    mode,
+    scene:
+      scene ||
+      (mode === "duo"
+        ? "Two soft clay props showing before and after states with a thin arrow"
+        : mode === "trio-icons"
+          ? "Three small soft clay icon props in a loose process row"
+          : "One large soft clay metaphor for the section idea"),
+    summary,
+    beats: beats.slice(0, mode === "duo" ? 2 : mode === "trio-icons" ? 3 : 2),
+  };
 }
 
 function fallbackStoryboard(sectionHeading: string, plainSection: string): SectionStoryboard {
   const heading = sectionHeading.replace(/<[^>]+>/g, "").trim();
   const title = softClipLabel(heading.split(/[：:]/)[0] || heading, 10) || "本章要点";
-  const after = heading.split(/[：:]/)[1]?.trim() || "";
-
-  // 保留英文报错短语完整
-  const engPhrases = [...after.matchAll(/\b(?:other side closed|terminated|ECONNRESET|ETIMEDOUT)\b/gi)].map(
-    (m) => m[0],
-  );
-  const zhBits = after
-    .replace(/\b(?:other side closed|terminated|ECONNRESET|ETIMEDOUT)\b/gi, "")
-    .split(/\s*[、,，/|＋+&]\s*|\s*(?:与|和|及|vs\.?|VS)\s*/i)
-    .map((s) => softClipLabel(s.replace(/[？?].*$/, "").replace(/的实测.*$/u, "").trim(), 8))
-    .filter((s) => s.length >= 2 && !/^从\d/.test(s));
-
-  const bits = [...engPhrases, ...zhBits].slice(0, 3);
 
   const fromTo = heading.match(/从\s*(\d+\s*秒)\s*到\s*(\d+\s*秒)/);
   const metric = plainSection.match(/(\d+\s*秒).{0,8}(?:压到|降到|降至|到|→).{0,4}(\d+\s*秒)/);
-  const summary = fromTo
-    ? `${fromTo[1].replace(/\s+/g, "")}→${fromTo[2].replace(/\s+/g, "")}`
-    : metric
-      ? `${metric[1].replace(/\s+/g, "")}→${metric[2].replace(/\s+/g, "")}`
-      : softClipLabel(bits.length >= 2 ? `${bits[0]}→${bits[1]}` : title, 18);
+  const pct = plainSection.match(/(\d+\s*%).{0,12}(?:到|→|降至|降到).{0,4}(\d+\s*%)/);
 
-  const panels: SectionStoryPanel[] = [];
-  if (bits.length >= 2) {
-    panels.push({
-      role: "cause",
-      label: bits[0],
-      caption: "起点",
-      visual: "soft clay icon for the starting concept",
-    });
-    panels.push({
-      role: "step",
-      label: bits[1],
-      caption: "关键一步",
-      visual: "soft clay process arrow icon",
-    });
-    panels.push({
-      role: "result",
-      label: bits[2] || softClipLabel(summary, 8),
-      caption: "结果",
-      visual: "soft clay checkmark icon",
-    });
+  let summary: string;
+  let mode: SectionSceneMode = "hero";
+  if (fromTo) {
+    summary = `${fromTo[1].replace(/\s+/g, "")}→${fromTo[2].replace(/\s+/g, "")}`;
+    mode = "duo";
+  } else if (metric) {
+    summary = `${metric[1].replace(/\s+/g, "")}→${metric[2].replace(/\s+/g, "")}`;
+    mode = "duo";
+  } else if (pct) {
+    summary = `${pct[1].replace(/\s+/g, "")}→${pct[2].replace(/\s+/g, "")}`;
+    mode = "duo";
   } else {
-    panels.push({
-      role: "cause",
-      label: "问题",
-      caption: softClipLabel(heading, 10),
-      visual: "soft clay warning or broken-link icon",
-    });
-    panels.push({
-      role: "step",
-      label: "做法",
-      caption: "拆解处理",
-      visual: "soft clay checklist icon",
-    });
-    panels.push({
-      role: "result",
-      label: "效果",
-      caption: softClipLabel(summary, 10),
-      visual: "soft clay success checkmark icon",
-    });
+    summary = fitSectionSummary(title, 8);
+    mode = "hero";
   }
-  return { title, panels: panels.slice(0, 3), summary };
+
+  if (mode === "duo") {
+    return {
+      title,
+      mode,
+      scene: "Soft clay before/after diorama with a thin arrow between two rounded props",
+      summary: fitSectionSummary(summary, 10),
+      beats: [
+        { visual: "soft clay broken or messy state prop" },
+        { visual: "soft clay fixed or improved state prop" },
+      ],
+    };
+  }
+
+  return {
+    title,
+    mode: "hero",
+    scene: `One large soft clay metaphor about ${title}, clean and centered`,
+    summary: fitSectionSummary(summary, 10),
+    beats: [{ visual: "central soft clay tech metaphor object" }],
+  };
 }
 
 
-/** 为文章章节生成配图提示词 - 手绘科普信息图：讲清本章原理/流程 */
+/** 为文章章节生成配图提示词：软 3D 场景 + 底部一句完整中文 */
 export async function generateSectionImagePrompt(
   topic: string,
   _style: string | null,
@@ -2069,7 +2069,7 @@ export async function generateSectionImagePrompt(
 ): Promise<string> {
   const sectionIndex = options?.sectionIndex ?? 0;
   const totalSections = options?.totalSections ?? 1;
-  const layout = pickSectionFlowLayout(sectionIndex);
+  const modeHint = pickSectionModeHint(sectionIndex);
   const plainSection = sectionContext.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
   let story: SectionStoryboard | null = null;
@@ -2078,21 +2078,23 @@ export async function generateSectionImagePrompt(
       [
         {
           role: "system",
-          content: `你是信息图分镜师。根据「本章标题+正文」，提炼一张软 3D 黏土风分镜：左因→中机制→右果，底部一句总结。图上不会出现总标题。
+          content: `你是软 3D 黏土风章节插画分镜师。图上只允许「底部一句中文总结」，物体上不要写中文。
 
 规则：
-- title：2-8 字内部主题词（仅供分镜，绝不画进图），禁止半截词，禁止输出「标题设计」
-- panels：正好 3 个（不够就合并），每个含 role/label/caption/visual
-  - role: cause | step | flaw | result
-  - label: 2-8 字短标签，必须是完整可读词组
-  - caption: 4-10 字补充说明，完整可读
-  - visual: 英文简述单一软 3D 黏土图标（soft clay icon / stacked slabs / clock / nodes / arrow）
-- summary: 底部总结，最多 16 字，优先「A→B」公式感（会出现在图底部）
-- 内容必须忠于本章正文，禁止编造本章没有的漏洞/报错/数字
-- 所有中文必须短而完整，宁可少字也不要截断
+- mode：hero | duo | trio-icons
+  - hero：一个大黏土隐喻场景（默认，最稳）
+  - duo：左右两个黏土物（前后对比/好坏对比）
+  - trio-icons：三个无字小图标（短流程）
+- title：2-8 字内部主题（不画进图），禁止「标题设计」
+- scene：英文描述场景构图与黏土物体（会画进图，但不要当文字画）
+- beats：0-3 个，每个只有 visual（英文图标描述）；duo 要 2 个，trio-icons 要 3 个；物体上禁止中文
+- summary：图上唯一中文，4-10 个完整字符，优先「40%→8%」「超时→稳了」这种公式；禁止半截词、叠字（如词词）
+- 忠于正文，禁止编造数字
+
+${modeHint}
 
 Output JSON only:
-{ "title": string, "panels": [{ "role": string, "label": string, "caption": string, "visual": string }], "summary": string }`,
+{ "mode": "hero"|"duo"|"trio-icons", "title": string, "scene": string, "beats": [{ "visual": string }], "summary": string }`,
         },
         {
           role: "user",
@@ -2100,19 +2102,21 @@ Output JSON only:
             articleTopic: topic,
             sectionHeading,
             sectionContent: plainSection.slice(0, 1800),
-            preferredLayout: layout,
           }),
         },
       ],
       { jsonMode: true, maxTokens: 420, role: "section-image" },
     );
-    story = normalizeStoryboard(safeParse<Partial<SectionStoryboard>>(extract, {}), sectionHeading);
+    story = normalizeStoryboard(
+      safeParse<Partial<SectionStoryboard> & { panels?: Array<{ visual?: string }> }>(extract, {}),
+      sectionHeading,
+    );
   } catch {
     story = null;
   }
 
   if (!story) story = fallbackStoryboard(sectionHeading, plainSection);
-  return buildInfographicPrompt(story, layout, sectionIndex, totalSections);
+  return buildInfographicPrompt(story, modeHint, sectionIndex, totalSections);
 }
 
 /** 从正文/摘要本地提炼短关键词（无 LLM 时的兜底） */

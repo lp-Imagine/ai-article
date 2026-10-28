@@ -1,29 +1,30 @@
 /**
- * 章节配图 prompt 片段：buildInfographicPrompt
+ * 章节配图 prompt 片段
  *
- * 版本：v4 — 软 3D 黏土科技风；禁止图内总标题/占位字；默认三格横排。
+ * 版本：v5 — 软 3D 黏土场景风；图上只留一句完整中文总结；
+ * 版式按内容在 hero / duo / trio-icons 间切换，不再固定三块带字卡片。
  */
 
-export const SECTION_INFOGRAPHIC_STYLE =
-  "Wide landscape soft claymorphism infographic on a warm cream or soft ivory canvas. " +
-  "Gentle studio lighting and soft contact shadows. " +
-  "A clean horizontal row of three equal soft matte 3D rounded clay cards/blocks, each with exactly one simple embossed icon. " +
-  "Optional very faint peach or sky-blue wash in one far corner — never a torn-paper title plaque.";
+/** 场景版式：单隐喻 | 前后对比 | 三图标（图标无字） */
+export type SectionSceneMode = "hero" | "duo" | "trio-icons";
 
-export const SECTION_COLOR_ROLES =
-  "Cream canvas, white/soft-clay cards, charcoal Chinese text, peach-orange and calm sky-blue accents on icons and the bottom connector.";
+export type SectionStoryBeat = {
+  /** 英文软 3D 物体描述，画在图上但不写中文 */
+  visual: string;
+};
 
-export const SECTION_RENDER_GUARDS = [
-  "Keep a generous empty margin on all four sides (at least 8% of canvas). Never crop cards, icons, or Chinese characters at the edge.",
-  "Do NOT paint any separate title, headline, topic label, or corner plaque above the cards.",
-  "Forbidden placeholder text anywhere: 「标题设计」, 「标题」, 「主题」, Title, Untitled, or any invented heading.",
-  "Each card is a SINGLE soft matte 3D clay block with ONE icon — no stacked duplicates, no ghosted layers, no torn paper.",
-  "Do not draw start/end circles, badges, brand logos, dense UI panels, or English words outside the card row.",
-  "Every Chinese string in quotes must be painted COMPLETE and fully legible — never cut a character mid-glyph.",
-  "The only lettering is the Chinese strings in quotes on the three cards and the bottom summary.",
-  "No neon cyberpunk, no dark space background, no graph-paper, no cute doodle stickers.",
-].join(" ");
+export type SectionStoryboard = {
+  /** 仅供分镜，绝不画进图 */
+  title: string;
+  mode: SectionSceneMode;
+  /** 英文场景描述（黏土物体、构图、情绪） */
+  scene: string;
+  /** 图上唯一中文：底部一句完整总结 */
+  summary: string;
+  beats: SectionStoryBeat[];
+};
 
+/** @deprecated 兼容旧 panel 形态；新分镜请用 SectionStoryBeat */
 export type SectionStoryPanel = {
   role: "cause" | "step" | "flaw" | "result";
   label: string;
@@ -31,22 +32,29 @@ export type SectionStoryPanel = {
   visual: string;
 };
 
-export type SectionStoryboard = {
-  title: string;
-  panels: SectionStoryPanel[];
-  summary: string;
-};
+export const SECTION_CLAY_STYLE =
+  "Wide landscape soft claymorphism illustration on a warm cream or soft ivory canvas. " +
+  "Gentle studio lighting, soft contact shadows, matte toy-like clay forms. " +
+  "Peach-orange and calm sky-blue accents only. Clean and uncluttered.";
+
+export const SECTION_RENDER_GUARDS = [
+  "Keep generous empty margin on all four sides (at least 8%). Never crop objects or Chinese characters.",
+  "Do NOT paint any title, headline, corner plaque, or topic label anywhere.",
+  "Forbidden anywhere: 「标题设计」, 「标题」, 「主题」, Title, Untitled, graph-paper, torn paper, sticky notes, smile stickers, brand logos, dense UI panels.",
+  "The ONLY Chinese lettering on the entire image is the one quoted summary at the bottom — paint it COMPLETE, never truncated mid-word.",
+  "Do not invent extra Chinese captions on objects. Icons and clay props have NO text on them.",
+  "No neon cyberpunk, no dark space background, no English slogans, no microscopic glyphs.",
+].join(" ");
 
 /**
  * 按「显示单元」截断：连续拉丁/数字算 1 格，每个汉字算 1 格。
- * 避免把「RAG私有检索故障」裁成「RAG私有检索故」。
  */
 export function softClipLabel(text: string, maxUnits: number): string {
   const t = text.replace(/\s+/g, " ").trim();
   if (!t || maxUnits <= 0) return "";
 
   const tokens: string[] = [];
-  const re = /[A-Za-z0-9][A-Za-z0-9.+#_-]*|[\u4e00-\u9fff]|./gu;
+  const re = /[A-Za-z0-9][A-Za-z0-9.+#_%→\-]*|[\u4e00-\u9fff]|./gu;
   let match: RegExpExecArray | null;
   while ((match = re.exec(t))) {
     tokens.push(match[0]);
@@ -60,29 +68,67 @@ export function softClipLabel(text: string, maxUnits: number): string {
     .trim();
 }
 
+/** 底部总结：宁可短而完整，避免半截词 */
+export function fitSectionSummary(text: string, maxUnits = 10): string {
+  const cleaned = text
+    .replace(/[【】\[\]「」""'']/g, "")
+    .replace(/\s+/g, "")
+    .trim();
+  if (!cleaned) return "本章要点";
+  const clipped = softClipLabel(cleaned, maxUnits);
+  // 拒绝明显半截叠字（如「词词」「词词词」）
+  if (/(.)\1{2,}/u.test(clipped) || /词词/.test(clipped)) {
+    return "要点对照";
+  }
+  return clipped || "本章要点";
+}
+
+function layoutHint(mode: SectionSceneMode): string {
+  switch (mode) {
+    case "duo":
+      return (
+        "Composition: TWO soft clay objects side by side (before → after or problem → fix). " +
+        "A thin soft arrow between them. Objects carry icons only — no Chinese on the objects."
+      );
+    case "trio-icons":
+      return (
+        "Composition: THREE small soft clay icon props in a loose row (process beads). " +
+        "Icons only — absolutely no Chinese labels on the props. Generous spacing."
+      );
+    case "hero":
+    default:
+      return (
+        "Composition: ONE large central soft clay metaphor / diorama that expresses the section idea. " +
+        "May include 1-2 tiny supporting clay props. No card grid. No Chinese on the props."
+      );
+  }
+}
+
 export function buildInfographicPrompt(
   story: SectionStoryboard,
-  layout: string,
+  _layout: string,
   sectionIndex: number,
   totalSections: number,
 ): string {
-  const panels = story.panels.slice(0, 3);
-  const boxLines = panels
-    .map((p, i) => {
-      const extra = p.caption ? ` and smaller complete 「${p.caption}」` : "";
-      return `Clay card ${i + 1}: Chinese 「${p.label}」${extra}; emboss one simple soft-3D ${p.visual}.`;
-    })
-    .join(" ");
+  const summary = fitSectionSummary(story.summary, 10);
+  const mode = story.mode || "hero";
+  const beats = story.beats.slice(0, mode === "duo" ? 2 : mode === "trio-icons" ? 3 : 2);
+  const beatLine =
+    beats.length > 0
+      ? `Clay props (icons only, no text): ${beats
+          .map((b, i) => `${i + 1}) ${b.visual}`)
+          .join("; ")}.`
+      : "";
 
   return [
-    SECTION_INFOGRAPHIC_STYLE,
-    SECTION_COLOR_ROLES,
-    `Arrangement: ${layout}. Prefer exactly ${panels.length} soft clay cards in one row, evenly spaced, fully inside the frame.`,
+    SECTION_CLAY_STYLE,
+    layoutHint(mode),
     `This is illustration ${sectionIndex + 1} of ${totalSections}.`,
-    // 主题只作英文语境，避免中文 title 被模型画成左上角「标题设计」
-    "Internal theme for icon mood only (never paint as text): tech workflow diagram.",
-    boxLines,
-    `Under the cards, a thin soft bracket line with Chinese 「${story.summary}」 centered below it.`,
+    `Scene (English, do not paint as text): ${story.scene}`,
+    beatLine,
+    `Bottom center only: paint exactly one complete Chinese summary 「${summary}」 under a thin soft bracket line.`,
     SECTION_RENDER_GUARDS,
-  ].join(" ");
+  ]
+    .filter(Boolean)
+    .join(" ");
 }

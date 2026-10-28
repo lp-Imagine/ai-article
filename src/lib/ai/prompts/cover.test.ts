@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildInfographicPrompt, softClipLabel } from "./cover";
+import {
+  buildInfographicPrompt,
+  fitSectionSummary,
+  softClipLabel,
+} from "./cover";
 
 describe("softClipLabel", () => {
   it("keeps mixed Latin+Chinese titles intact within unit budget", () => {
@@ -16,32 +20,60 @@ describe("softClipLabel", () => {
   });
 });
 
+describe("fitSectionSummary", () => {
+  it("keeps short complete formulas", () => {
+    expect(fitSectionSummary("40%→8%", 10)).toBe("40%→8%");
+  });
+
+  it("rejects stacked nonsense like 词词", () => {
+    expect(fitSectionSummary("复杂词词词→无效", 10)).toBe("要点对照");
+  });
+});
+
 describe("buildInfographicPrompt", () => {
-  it("uses soft clay style, three cards, and forbids title plaques", () => {
+  it("paints only one Chinese summary and uses hero scene, not labeled cards", () => {
     const prompt = buildInfographicPrompt(
       {
         title: "RAG私有检索故障",
-        panels: [
-          { role: "cause", label: "缺标量索引", caption: "过滤失效", visual: "filter icon" },
-          { role: "step", label: "RAG检索", caption: "过滤失败", visual: "nodes" },
-          { role: "result", label: "错误结果", caption: "只回公开模板", visual: "document" },
-          { role: "step", label: "多余第四格", caption: "应被丢掉", visual: "x" },
-        ],
+        mode: "hero",
+        scene: "A soft clay funnel leaking private docs beside a locked vault",
         summary: "缺索引→漏检索",
+        beats: [{ visual: "soft clay funnel" }, { visual: "soft clay vault" }],
       },
-      "three equal cards",
+      "hero hint",
       0,
       3,
     );
 
     expect(prompt).toContain("soft claymorphism");
-    expect(prompt).toContain("warm cream");
+    expect(prompt).toContain("「缺索引→漏检索」");
+    expect(prompt).toContain("ONE large central soft clay metaphor");
     expect(prompt).not.toContain("RAG私有检索故障");
-    expect(prompt).not.toMatch(/Top-left Chinese title/);
+    expect(prompt).not.toContain("Clay card");
     expect(prompt).toContain("标题设计");
-    expect(prompt).toContain("Clay card 3:");
-    expect(prompt).not.toContain("多余第四格");
-    expect(prompt).toContain("Never crop");
-    expect(prompt).toContain("no ghosted layers");
+    expect(prompt).toContain("graph-paper");
+    expect(prompt).toContain("ONLY Chinese lettering");
+  });
+
+  it("supports duo mode without Chinese on objects", () => {
+    const prompt = buildInfographicPrompt(
+      {
+        title: "对比",
+        mode: "duo",
+        scene: "before after clay props",
+        summary: "40%→8%",
+        beats: [
+          { visual: "messy clay prompt blob" },
+          { visual: "clean clay rule card" },
+        ],
+      },
+      "",
+      1,
+      2,
+    );
+
+    expect(prompt).toContain("TWO soft clay objects");
+    expect(prompt).toContain("no Chinese on the objects");
+    expect(prompt).toContain("「40%→8%」");
   });
 });
