@@ -1931,10 +1931,10 @@ const DOODLE_LOOKBOOK = [
 /** 章节配图：左因 → 中机制 → 右果 */
 
 const SECTION_FLOW_LAYOUTS = [
-  "left-to-right three equal rounded cards: cause, mechanism, result; thin blue connector under them; generous side margins",
-  "short title top-left; three equal rounded cards left-to-right for before, change, after; thin conclusion line under them; nothing outside the card row",
-  "three equal rounded cards for problem, approach, outcome; thin blue connectors between cards only; keep all content inset from edges",
-  "three equal rounded cards for option A, option B, chosen outcome; thin arrow between them; no side ornaments",
+  "left-to-right three equal rounded cards: cause, mechanism, result; thin blue connector under them; generous side margins; no title above",
+  "three equal rounded cards left-to-right for before, change, after; thin conclusion line under them; nothing outside the card row; no title above",
+  "three equal rounded cards for problem, approach, outcome; thin blue connectors between cards only; keep all content inset from edges; no title above",
+  "three equal rounded cards for option A, option B, chosen outcome; thin arrow between them; no side ornaments; no title above",
 ] as const;
 
 const COVER_STYLE_DOODLE =
@@ -2078,13 +2078,13 @@ export async function generateSectionImagePrompt(
           content: `你是信息图分镜师。根据「本章标题+正文」，提炼一张分镜：左因→中机制→右果，底部一句总结。
 
 规则：
-- title：2-8 个完整词组（如「漏洞原理」「超时定位」「RAG漏检」），不要整段章节标题；禁止半截词（如「检索故」）
+- title：2-8 字内部主题词（如「漏洞原理」「超时定位」「RAG漏检」），仅供分镜，不会画进图里；禁止半截词
 - panels：正好 3 个（不够就合并），每个含 role/label/caption/visual
   - role: cause | step | flaw | result
   - label: 2-8 字短标签，必须是完整可读词组
   - caption: 4-10 字补充说明，完整可读
   - visual: 英文简述单一几何图标（geometric icon / stacked layers / clock / nodes / arrow）
-- summary: 底部总结，最多 16 字，优先「A→B」或「缺索引→漏检索」这种公式感
+- summary: 底部总结，最多 16 字，优先「A→B」或「缺索引→漏检索」这种公式感（会出现在图底部）
 - 内容必须忠于本章正文，禁止编造本章没有的漏洞/报错/数字
 - 所有中文必须短而完整，宁可少字也不要截断
 

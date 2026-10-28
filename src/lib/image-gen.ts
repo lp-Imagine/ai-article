@@ -17,8 +17,8 @@ const QWEN_MAX_PIXELS = QWEN_MAX_SIDE * QWEN_MAX_SIDE;
 
 /** 封面 16:9，在 Qwen 限制内尽量高 */
 const DEFAULT_COVER_SIZE = "2048x1152";
-/** 章节配图 1:1 最高清 */
-const DEFAULT_INLINE_SIZE = "2048x2048";
+/** 章节配图改横版 16:9，贴合三格流程、正文里也不占过高 */
+const DEFAULT_INLINE_SIZE = "2048x1152";
 
 export type ImageKind = "cover" | "inline";
 
@@ -147,7 +147,7 @@ export function getModelImageProfile(model: string): ModelImageProfile {
   if (isQwenImageModel(model)) {
     return {
       cover: { width: 2048, height: 1152 },
-      inline: { width: 2048, height: 2048 },
+      inline: { width: 2048, height: 1152 },
       maxSide: QWEN_MAX_SIDE,
       maxPixels: QWEN_MAX_PIXELS,
       sizeSeparator: "*",
@@ -157,7 +157,7 @@ export function getModelImageProfile(model: string): ModelImageProfile {
   if (isDalle3Model(model)) {
     return {
       cover: { width: 1792, height: 1024 },
-      inline: { width: 1024, height: 1024 },
+      inline: { width: 1792, height: 1024 },
       maxSide: 1792,
       maxPixels: 1792 * 1024,
       sizeSeparator: "x",
@@ -165,15 +165,16 @@ export function getModelImageProfile(model: string): ModelImageProfile {
   }
 
   if (isSeedreamModel(model)) {
-    // 豆包 Seedream：旧版 2560x1440 只是 2K 档位的下限，并非最高清
-    // 官方 2K 16:9 推荐 2848x1600；4.0/4.5 支持 4K 方图
+    // 豆包 Seedream：封面/章节配图统一 16:9，避免方图在正文里过高过大
+    // 4.x 官方 2K 16:9 推荐 2848x1600；5.x 像素上限约 4M，用 2560x1440
     const seedream5 = /seedream-5/i.test(model);
+    const landscape = seedream5
+      ? { width: 2560, height: 1440 }
+      : { width: 2848, height: 1600 };
     return {
-      cover: { width: 2848, height: 1600 },
-      inline: seedream5
-        ? { width: 2048, height: 2048 }
-        : { width: 4096, height: 4096 },
-      maxSide: seedream5 ? 4096 : 4096,
+      cover: landscape,
+      inline: landscape,
+      maxSide: 4096,
       maxPixels: seedream5 ? 4_194_304 : 16_777_216,
       sizeSeparator: "x",
     };

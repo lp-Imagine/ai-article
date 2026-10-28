@@ -5315,14 +5315,23 @@ textarea::placeholder {
 }
 
 .mp-preview figure {
-  margin: 24px 0;
+  margin: 20px auto;
   text-align: center;
+  max-width: min(100%, 420px);
+}
+
+.mp-preview figure img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  margin: 0 auto;
+  box-shadow: 0 2px 12px rgba(18, 18, 18, 0.08);
 }
 
 .mp-preview figcaption {
-  font-size: 13px;
+  font-size: 12px;
   color: #aaaaaa;
-  margin-top: 10px;
+  margin-top: 8px;
   letter-spacing: 0.04em;
   font-style: italic;
 }

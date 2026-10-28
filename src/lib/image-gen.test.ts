@@ -27,21 +27,21 @@ describe("resolveImageSize", () => {
     expect(resolveImageSize("cover", "qwen-image-2.0")).toBe("2048*1152");
   });
 
-  it("uses max square for inline qwen-image models", () => {
-    expect(resolveImageSize("inline", "qwen-image-2.0")).toBe("2048*2048");
+  it("uses landscape inline size for qwen-image models", () => {
+    expect(resolveImageSize("inline", "qwen-image-2.0")).toBe("2048*1152");
   });
 
   it("uses dalle-3 sizes", () => {
     expect(resolveImageSize("cover", "dall-e-3")).toBe("1792x1024");
-    expect(resolveImageSize("inline", "dall-e-3")).toBe("1024x1024");
+    expect(resolveImageSize("inline", "dall-e-3")).toBe("1792x1024");
   });
 
-  it("uses seedream 2K cover and 4K inline for 4.5", () => {
+  it("uses seedream 2K landscape for cover and inline", () => {
     expect(resolveImageSize("cover", "doubao-seedream-4-5-251128")).toBe("2848x1600");
-    expect(resolveImageSize("inline", "doubao-seedream-4-5-251128")).toBe("4096x4096");
+    expect(resolveImageSize("inline", "doubao-seedream-4-5-251128")).toBe("2848x1600");
   });
 
-  it("uses seedream 5.x inline cap at 2048", () => {
-    expect(resolveImageSize("inline", "seedream-5-0-pro")).toBe("2048x2048");
+  it("uses seedream 5.x landscape within 4M pixel cap", () => {
+    expect(resolveImageSize("inline", "seedream-5-0-pro")).toBe("2560x1440");
   });
 });

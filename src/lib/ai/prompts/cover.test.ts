@@ -34,7 +34,9 @@ describe("buildInfographicPrompt", () => {
       3,
     );
 
-    expect(prompt).toContain("「RAG私有检索故障」");
+    expect(prompt).toContain("Topic context (do not paint as a title): RAG私有检索故障");
+    expect(prompt).not.toMatch(/Top-left Chinese title/);
+    expect(prompt).toContain("Do NOT paint any separate title");
     expect(prompt).toContain("Card 3:");
     expect(prompt).not.toContain("多余第四格");
     expect(prompt).toContain("Never crop");
