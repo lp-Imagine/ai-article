@@ -44,7 +44,9 @@ import {
   FULL_ARTICLE_SUMMARY_RULES,
 } from "@/lib/ai/prompts/common";
 import {
+  buildOutlineConflictPrompt,
   buildOutlinePrompt,
+  type OutlineConflict,
   type OutlinePromptInput,
 } from "@/lib/ai/prompts/outline";
 // 抽到子模块的 prompt builder
@@ -77,7 +79,10 @@ import {
 } from "@/lib/ai/skills/content";
 import {
   assessOutlineDiversity,
-  outlineAngleAt,
+  assessSingleOutlineQuality,
+  isValidOutlineConflict,
+  outlineSkeletonSignature,
+  pickOutlineSeedHints,
 } from "@/lib/ai/skills/outline";
 import { buildQualityRepairBrief } from "@/lib/ai/skills/refine";
 import { SECTION_ATTEMPTS } from "@/lib/ai/constants";
@@ -540,6 +545,36 @@ function reportOutlineDiversity(outlines: OutlineOption[]): OutlineOption[] {
   return outlines;
 }
 
+async function discoverOutlineConflicts(input: {
+  topic: string;
+  style: string;
+  audience: string;
+  goal?: string | null;
+  keywords?: string | null;
+  count: number;
+  engineering: boolean;
+}): Promise<OutlineConflict[]> {
+  const raw = await callChat(
+    buildOutlineConflictPrompt(input),
+    {
+      jsonMode: true,
+      maxTokens: Math.min(4096, 600 + input.count * 280),
+      role: "outline",
+      temperature: 0.85,
+    },
+  );
+  const parsed = safeParse<{ conflicts?: unknown[] }>(raw, {});
+  const conflicts = (parsed.conflicts ?? [])
+    .filter(isValidOutlineConflict)
+    .slice(0, input.count);
+  if (conflicts.length < input.count) {
+    console.warn(
+      `[generateOutline] conflict discovery got ${conflicts.length}/${input.count}, seed hints will fill gaps`,
+    );
+  }
+  return conflicts;
+}
+
 export async function generateOutline(input: {
   topic: string;
   style?: string | null;
@@ -557,6 +592,16 @@ export async function generateOutline(input: {
   const sectionCount =
     wordCount <= 1200 ? 3 : wordCount <= 2000 ? 4 : wordCount <= 3000 ? 5 : 6;
 
+  const conflicts = await discoverOutlineConflicts({
+    topic: input.topic,
+    style,
+    audience,
+    goal: input.goal,
+    keywords: input.keywords,
+    count,
+    engineering,
+  });
+
   if ((process.env.OUTLINE_GENERATION_MODE ?? "parallel") !== "monolithic") {
     const parallel = await generateOutlinesInParallel({
       ...input,
@@ -566,12 +611,11 @@ export async function generateOutline(input: {
       count,
       sectionCount,
       engineering,
+      conflicts,
     });
     if (parallel.length === 0) {
       throw new Error("大纲生成失败：AI 未能生成有效大纲，请稍后重试");
     }
-    // 只返回生成成功的方案，不做模板兜底：失败的大纲宁可不要，
-    // 避免把离题/劣质模板混进用户可选方案
     return reportOutlineDiversity(parallel);
   }
 
@@ -585,60 +629,85 @@ export async function generateOutline(input: {
       sectionCount,
       engineering,
       angle: null,
+      conflicts: conflicts.length > 0 ? conflicts : null,
     }),
     {
       jsonMode: true,
       maxTokens: Math.min(8192, 1600 + count * sectionCount * 220),
       role: "outline",
+      temperature: 0.8,
     },
   );
   const parsed = safeParse<{ outlines?: OutlineOption[] }>(raw, {});
   if (parsed.outlines?.length) {
-    return reportOutlineDiversity(parsed.outlines
-      .slice(0, count)
-      .map((option, index) =>
-        normalizeOutlineOption(option, index, input.topic, style, wordCount),
-      ));
+    return reportOutlineDiversity(
+      parsed.outlines
+        .slice(0, count)
+        .map((option, index) =>
+          normalizeOutlineOption(option, index, input.topic, style, wordCount),
+        ),
+    );
   }
 
-  // 不做模板兜底：失败就明确失败，让任务报错、用户重试
   throw new Error("大纲生成失败：AI 未能生成有效大纲，请稍后重试");
 }
 
 
-/** 每套方案一个短请求并发生成：单次响应更小，几乎不会撞上网关超时 */
+/** 每套方案：锁定冲突（或盐粒）后短请求并发生成 */
 async function generateOutlinesInParallel(
-  input: Omit<OutlinePromptInput, "angle">,
+  input: Omit<OutlinePromptInput, "angle" | "conflict" | "seedHint"> & {
+    conflicts?: OutlineConflict[];
+  },
 ): Promise<OutlineOption[]> {
-  const { topic, style, wordCount, count, sectionCount } = input;
-  // 单套大纲 JSON（标题+定位+每章 heading/summary）在 2500 token 下经常被截断
-  // （日志：cap=2500 finish=length truncated → outline empty → 重试仍失败），
-  // 加大预算：随章节数增长，上限 8k
+  const { topic, style, wordCount, count, sectionCount, conflicts = [] } = input;
   const maxTokens = Math.min(8192, 1800 + sectionCount * 450);
+  const seedHints = pickOutlineSeedHints(count, topic);
 
   const results = await mapWithConcurrency(
     Array.from({ length: count }, (_, i) => i),
     getOutlineConcurrency(count),
     async (i) => {
-      // 单套失败/空结果重试几次，避免「默认 3 套大纲只生成出 2 套」
+      const conflict = conflicts[i] ?? null;
+      const seedHint = conflict ? null : seedHints[i] ?? null;
+
       return withRetry(
         async () => {
           const raw = await callChat(
-            buildOutlinePrompt({ ...input, angle: outlineAngleAt(i) }),
-            { jsonMode: true, maxTokens, role: "outline" },
+            buildOutlinePrompt({
+              ...input,
+              angle: null,
+              conflict,
+              seedHint,
+            }),
+            { jsonMode: true, maxTokens, role: "outline", temperature: 0.8 },
           );
           const parsed = safeParse<{ outlines?: OutlineOption[] }>(raw, {});
           const first = parsed.outlines?.[0];
           if (!first || (first.sections?.length ?? 0) === 0) {
             throw new Error(`scheme ${i + 1}/${count}: outline empty`);
           }
-          return first;
+          const normalized = normalizeOutlineOption(
+            first,
+            i,
+            topic,
+            style,
+            wordCount,
+          );
+          const quality = assessSingleOutlineQuality(normalized);
+          if (!quality.ok) {
+            throw new Error(
+              `scheme ${i + 1}/${count}: outline quality: ${quality.issues.join("；")}`,
+            );
+          }
+          return normalized;
         },
         {
           attempts: 3,
           baseDelayMs: 900,
           shouldRetry: (error) =>
-            error instanceof Error && error.message.includes("outline empty")
+            error instanceof Error &&
+            (error.message.includes("outline empty") ||
+              error.message.includes("outline quality"))
               ? true
               : isTransientNetworkError(error),
         },
@@ -652,9 +721,28 @@ async function generateOutlinesInParallel(
     },
   );
 
-  return results
-    .filter((opt): opt is OutlineOption => opt !== null)
-    .map((opt, idx) => normalizeOutlineOption(opt, idx, topic, style, wordCount));
+  const kept = results.filter((opt): opt is OutlineOption => opt !== null);
+
+  // 若仍有同构流水线，丢弃重复骨架中靠后的套，避免用户看到三套同一模板
+  const diversity = assessOutlineDiversity(kept);
+  if (diversity.issues.some((issue) => /流水线|修辞骨架相同/.test(issue))) {
+    const seen = new Set<string>();
+    const deduped: OutlineOption[] = [];
+    for (const opt of kept) {
+      const sig = outlineSkeletonSignature(opt) || `unique:${opt.index}`;
+      if (seen.has(sig)) {
+        console.warn(
+          `[generateOutline] drop scheme ${opt.index + 1}: duplicate skeleton ${sig}`,
+        );
+        continue;
+      }
+      seen.add(sig);
+      deduped.push(opt);
+    }
+    return deduped.map((opt, idx) => ({ ...opt, index: idx }));
+  }
+
+  return kept.map((opt, idx) => ({ ...opt, index: idx }));
 }
 
 export type ContentProgressCallback = (

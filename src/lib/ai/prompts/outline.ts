@@ -1,18 +1,33 @@
 /**
- * 大纲生成 prompt：buildOutlinePrompt + OutlinePromptInput 类型。
+ * 大纲生成 prompt：冲突发现 → 成稿。
  *
- * 版本：v2.0.0（用论证路径和交付物区分方案）。
+ * 版本：v3.0.0
+ * - 先挖主题专属张力，再写大纲（避免固定角表套题）
+ * - 削弱「交付物 PRD 腔」；章节 summary 用人话写清「读者带走什么」
  */
 import type { ChatMessage } from "@/lib/ai/types";
 import {
   buildAccountPersonaBlock,
+  buildAntiAiVoiceBlock,
   buildDomainAdaptationBlock,
+  buildEngineeringOutlineBlock,
   buildOnTopicBlock,
   buildStyleGuide,
   buildWritingUserPayload,
 } from "@/lib/ai/prompts/common";
 
-export const OUTLINE_PROMPT_VERSION = "2.0.0";
+export const OUTLINE_PROMPT_VERSION = "3.0.0";
+
+export type OutlineConflict = {
+  /** 这篇要钉住的具体张力（必须含主题专有词） */
+  tension: string;
+  /** 读者卡在哪一步决策/动作 */
+  readerMoment: string;
+  /** 搞错的可感知代价 */
+  stake: string;
+  /** 本篇故意不走的套路，一句话 */
+  avoidSkeleton: string;
+};
 
 export type OutlinePromptInput = {
   topic: string;
@@ -24,20 +39,120 @@ export type OutlinePromptInput = {
   count: number;
   sectionCount: number;
   engineering: boolean;
-  /** 非空时表示本次只生成一套方案，并锁定该切入角 */
+  /**
+   * @deprecated v3 起优先用 conflict；保留仅为兼容旧调用
+   * 非空时表示本次只生成一套方案
+   */
   angle: string | null;
+  /** 两阶段：单套成稿时锁定的冲突 */
+  conflict?: OutlineConflict | null;
+  /** 单体模式：多套大纲各自锁定的冲突池 */
+  conflicts?: OutlineConflict[] | null;
+  /** 软提示（非强制角名），仅作差异化盐粒 */
+  seedHint?: string | null;
 };
 
+export function buildOutlineConflictPrompt(input: {
+  topic: string;
+  style: string;
+  audience: string;
+  goal?: string | null;
+  keywords?: string | null;
+  count: number;
+  engineering: boolean;
+}): ChatMessage[] {
+  const { topic, count, audience, style } = input;
+  return [
+    {
+      role: "system",
+      content: `你是专栏选题编辑。只做一件事：为同一主题挖出 ${count} 个**互不雷同的真实张力**，供下一步写大纲。本步不写章节目录。
+
+${buildDomainAdaptationBlock()}
+
+${buildAccountPersonaBlock()}
+
+${buildOnTopicBlock(input.topic, input.keywords)}
+
+【规则】
+- 每个张力必须能回答：谁、卡在什么具体抉择、搞错会付出什么代价
+- tension / readerMoment 里必须出现与主题相关的**专有词或具体场景名词**（不要用「隐形需求」「底层逻辑」「方法论」这类万能词）
+- ${count} 个张力的论证方向必须不同：例如一个偏时机、一个偏取舍标准、一个偏执行顺序——禁止都落成「先讲翻车再讲正解」
+- avoidSkeleton 写清本条故意避开的流水线，例如「不走：翻车现场→诱因→判断标准→行动清单」
+- 禁止虚构姓名、公司、精确百分比；用匿名可核对场景即可
+- 目标读者：${audience}；风格：${style}；目标：${input.goal?.trim() || "知识分享"}
+
+【输出】
+JSON：{ "conflicts": [ { "tension", "readerMoment", "stake", "avoidSkeleton" } ] }
+- conflicts 长度必须为 ${count}`,
+    },
+    {
+      role: "user",
+      content: JSON.stringify({
+        topic,
+        keywords: input.keywords,
+        audience,
+        style,
+        goal: input.goal,
+        requiredConflictCount: count,
+        contentMode: input.engineering ? "engineering-hands-on" : "general",
+      }),
+    },
+  ];
+}
+
 export function buildOutlinePrompt(input: OutlinePromptInput): ChatMessage[] {
-  const { topic, style, audience, wordCount, count, sectionCount, engineering, angle } = input;
-  const single = angle !== null;
+  const {
+    topic,
+    style,
+    audience,
+    wordCount,
+    count,
+    sectionCount,
+    engineering,
+    angle,
+    conflict,
+    conflicts,
+    seedHint,
+  } = input;
+  const single = Boolean(conflict) || angle !== null;
+
+  const multiConflictBlock =
+    !single && conflicts && conflicts.length > 0
+      ? `【冲突池——每个大纲锁定其中一个，不得多套共用同一冲突】
+${conflicts
+  .map(
+    (c, i) =>
+      `${i + 1}. 张力：${c.tension}｜卡点：${c.readerMoment}｜代价：${c.stake}｜避开：${c.avoidSkeleton}`,
+  )
+  .join("\n")}
+- 论证顺序与结尾落点不得同构；禁止整组都写成翻车流水线`
+      : null;
+
+  const lockBlock = conflict
+    ? `【锁定冲突——必须围绕它写，不许换成别的万能角】
+- 张力：${conflict.tension}
+- 读者卡点：${conflict.readerMoment}
+- 搞错代价：${conflict.stake}
+- 故意避开：${conflict.avoidSkeleton}
+- 标题、章节顺序、结尾落点都必须服务上述张力；禁止改写成「翻车→诱因→标准→清单」等通用流水线`
+    : multiConflictBlock
+      ? multiConflictBlock
+      : angle
+        ? `【指定切入（兼容）】${angle}
+- 切入必须改变标题、章节顺序与结尾落点，但仍须紧扣主题专有冲突`
+        : `- 各方案分别解决不同的读者冲突，论证顺序与结尾落点不得同构`;
+
+  const softSeed =
+    seedHint && !conflict
+      ? `- 差异化盐粒（参考，非强制模板名）：${seedHint}`
+      : "";
 
   return [
     {
       role: "system",
       content: `你是公众号与博客专栏主编。${
         single
-          ? "生成 1 个可直接进入写作的大纲，并严格采用指定切入角。"
+          ? "生成 1 个可直接进入写作的大纲。"
           : `生成 ${count} 个论证路径真正不同的大纲，不是同一目录换标题。`
       }
 
@@ -47,34 +162,40 @@ ${buildAccountPersonaBlock()}
 
 ${buildOnTopicBlock(input.topic, input.keywords)}
 
+${buildAntiAiVoiceBlock()}
+
+${buildEngineeringOutlineBlock(engineering)}
+
 【1. 选题任务】
-${
-  single
-    ? `- 指定切入角：${angle}\n- 切入角必须改变标题、章节顺序、论证路径和结尾交付物`
-    : "- 各方案分别解决不同的读者冲突，并使用不同的论证顺序与最终交付物"
-}
-- 必须服务同一主题「${topic}」，差异在切入角与论证路径，不在换赛道
+${lockBlock}
+${softSeed}
+- 必须服务同一主题「${topic}」，差异在切入与论证路径，不在换赛道
 - 目标读者：${audience}，写作风格：${style}，文章目标：${input.goal?.trim() || "知识分享"}，目标字数：约 ${wordCount} 字
-- positioning 用 15-30 字写清本篇独特判断、适合谁和最终交付物
+- positioning 用 15-30 字写清：这篇独特判断、适合谁、读完能带走什么（人话，不要「交付物/锚定」）
 
 ${buildStyleGuide(style)}
 
-【2. 章节合同】
-- 每个大纲约 ${sectionCount} 章；每章只承担一个不可被其他章替代的贡献
-- summary 明确该章新增的证据和交付物，例如对比表、决策标准、代码、步骤、失败案例或边界清单
-- ${engineering ? "工程主题至少一半章节交付接口、代码、状态、命令或测试边界。" : "非工程主题至少一半章节交付场景、步骤、反例、对比或判断标准。"}
-- 标题不超过 20 字，并兑现正文内容；各方案标题句式也要不同
+【2. 章节写法】
+- 每个大纲约 ${sectionCount} 章；每章只回答一个别人章回答不了的问题
+- heading ≤ 20 字，尽量带主题专有名词；禁止「什么是 / 为什么重要 / 方法论 / 注意事项 / 总结」
+- summary 用口语写清「读者读完这章能多知道/多会判断什么」；**禁止**以「给出、通过、拆解、输出、锚定、全面介绍」起句
+- ${
+        engineering
+          ? "工程主题：至少一半章节落到接口、代码、状态、命令或测试边界（写在 summary 里用具体名词，别空喊实战）。"
+          : "非工程主题：至少一半章节落到具体场景、反例、对比点或可执行判断（用主题里的词，别用万能职场鸡汤）。"
+      }
+- 允许不规则：某一章可以是「这篇故意不讲什么」或「我反对的常见建议」，只要服务锁定冲突
 
 【3. 短禁用表】
-- 不写「什么是、为什么重要、方法论、注意事项、总结与展望」百科目录
-- **禁止「总结 / 写在最后 / 结语 / 收尾」章节**：文末总结卡片由正文生成自动追加（渲染为卡片），大纲里出现总结类章节会导致文章中间也出现「总结」，重复且突兀；大纲的每个章节都必须承载具体内容交付（步骤、代码、对比表、清单、边界、案例等）
-- 不编造人物、公司、数据、日期和对话，不使用标题党或空喊「实战手册」
+- 不写百科目录，不写「总结 / 写在最后 / 结语 / 收尾」章（文末总结卡由系统追加）
+- 禁止整篇落成：痛点→误解→三步法→注意事项；也禁止：翻车现场→核心诱因→判断标准→行动清单（换词不算）
+- 不编造人物、公司、精确数据与对话；不空喊「实战手册」
 
 【输出格式】
 ${
   single
     ? "- outlines 数组长度必须为 1"
-    : `- **必须恰好返回 ${count} 个大纲**（outlines 数组长度 = ${count}），少一个都不合格；禁止只给 2～3 个就收工`
+    : `- **必须恰好返回 ${count} 个大纲**（outlines 数组长度 = ${count}）`
 }
 - JSON：{ "outlines": [ { "title", "positioning", "sections": [ { "heading", "summary" } ] } ] }`,
     },
@@ -94,7 +215,14 @@ ${
         contentMode: engineering ? "engineering-hands-on" : "general",
         mustIncludeCodeInArticle: engineering,
         requiredOutlineCount: single ? 1 : count,
-        ...(single ? { requiredAngle: angle } : {}),
+        ...(conflict
+          ? { lockedConflict: conflict }
+          : conflicts?.length
+            ? { lockedConflicts: conflicts }
+            : angle
+              ? { requiredAngle: angle }
+              : {}),
+        ...(seedHint && !conflict ? { seedHint } : {}),
       }),
     },
   ];

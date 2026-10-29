@@ -5,7 +5,12 @@ import {
   normalizeBlueprint,
   sectionDirective,
 } from "@/lib/ai/skills/content";
-import { assessOutlineDiversity } from "@/lib/ai/skills/outline";
+import {
+  assessOutlineDiversity,
+  assessSingleOutlineQuality,
+  outlineSkeletonSignature,
+  pickOutlineSeedHints,
+} from "@/lib/ai/skills/outline";
 import { buildQualityRepairBrief } from "@/lib/ai/skills/refine";
 
 const outline: OutlineOption = {
@@ -15,7 +20,7 @@ const outline: OutlineOption = {
   sections: [
     { heading: "先画清仓库边界", summary: "列出共享代码与独立发布单元" },
     { heading: "Turborepo 和 Nx 怎么取舍", summary: "用任务图和治理能力做对比" },
-    { heading: "用一周试点验证", summary: "给出迁移检查表与退出条件" },
+    { heading: "用一周试点验证", summary: "迁移检查表与退出条件写清楚" },
   ],
 };
 
@@ -66,6 +71,54 @@ describe("outline and refine skills", () => {
 
     expect(result.score).toBeLessThan(70);
     expect(result.issues).toContain("多套大纲的标题与章节骨架过于相似");
+  });
+
+  it("flags shared 翻车→诱因→标准流水线 across schemes", () => {
+    const a: OutlineOption = {
+      index: 0,
+      title: "跳槽前避开半年弯路",
+      positioning: "用翻车场景做决策",
+      sections: [
+        { heading: "同事翻车现场", summary: "跳后半年就后悔" },
+        { heading: "核心诱因是需求错配", summary: "不是薪资而是错配" },
+        { heading: "跳槽判断标准", summary: "对照决策依据" },
+      ],
+    };
+    const b: OutlineOption = {
+      index: 1,
+      title: "跳槽别再踩半年坑",
+      positioning: "从踩坑现场写起",
+      sections: [
+        { heading: "真实翻车弯路", summary: "入职即后悔" },
+        { heading: "诱因不是钱", summary: "隐形错配" },
+        { heading: "行动清单", summary: "照做避坑指南" },
+      ],
+    };
+    const result = assessOutlineDiversity([a, b]);
+    expect(result.issues.some((i) => /翻车|修辞骨架/.test(i))).toBe(true);
+    expect(outlineSkeletonSignature(a)).toContain("crash");
+  });
+
+  it("rejects PRD-voice summaries on a single outline", () => {
+    const bad: OutlineOption = {
+      index: 0,
+      title: "某某主题",
+      positioning: "测试",
+      sections: [
+        { heading: "第一章", summary: "给出可落地的决策依据" },
+        { heading: "第二章", summary: "通过场景拆解输出标准" },
+        { heading: "第三章", summary: "锚定主题痛点" },
+      ],
+    };
+    expect(assessSingleOutlineQuality(bad).ok).toBe(false);
+  });
+
+  it("picks seed hints by topic instead of fixed index-0 crash angle", () => {
+    const a = pickOutlineSeedHints(3, "跳槽避坑");
+    const b = pickOutlineSeedHints(3, "前端 monorepo");
+    expect(a).toHaveLength(3);
+    expect(b).toHaveLength(3);
+    expect(a[0]).not.toEqual(b[0]);
   });
 
   it("turns detected quality issues into a targeted repair brief", () => {
