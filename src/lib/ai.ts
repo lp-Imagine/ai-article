@@ -1849,9 +1849,8 @@ export async function generateTitles(input: {
 }
 
 /**
- * LLM 生成当下热点选题（前端 / AI / Agent / 程序员方向）。
- * 用于「给个灵感」增强：替代写死的静态热点库，让选题随时间保持新鲜。
- * 未配置 AI 或调用失败时返回空数组，由调用方降级到静态热点。
+ * LLM 生成选题灵感。
+ * 贴合分类 + 账号人设 + 用户近期文章方向；强去重，避免静态库反复刷同一批。
  */
 export async function generateHotTopics(input: {
   section?: string | null;
@@ -1863,69 +1862,108 @@ export async function generateHotTopics(input: {
   categoryLabel?: string;
   /** 近期已展示过的选题，要求模型避开，避免重复 */
   avoid?: string[];
+  /** 账号人设（设置页），用于贴合「谁在写」 */
+  persona?: string | null;
+  /** 用户近期写过的主题/标题，用于贴合赛道并避开同质延伸 */
+  recentTopics?: string[];
+  /**
+   * fresh：当下可写新题；
+   * history-extend：只沿作者近期文章赛道开新角度（历史模式）
+   */
+  intent?: "fresh" | "history-extend";
 }): Promise<Array<{ topic: string; angle: string; tags: string[] }>> {
   if (!isAiConfigured()) return [];
 
   const count = Math.max(4, Math.min(10, input.count ?? 6));
   const batch = Number.isFinite(input.batch) ? Math.max(0, Number(input.batch)) : 0;
-  const focusAreas =
-    input.sectionTags && input.sectionTags.length > 0
-      ? input.sectionTags.join("、")
-      : "前端工程、全栈实践、AI 应用、AI Agent / 编程助手、TypeScript / Node 工程化";
-  const categoryLabel = input.categoryLabel?.trim();
-  const isGeneralCategory =
-    typeof categoryLabel === "string" &&
-    categoryLabel.length > 0 &&
-    !/前端|全栈|AI|Agent|工程|后端|系统|技术|编程/.test(categoryLabel);
+  const categoryLabel = input.categoryLabel?.trim() || "";
+  const persona = input.persona?.trim() || "";
+  const intent = input.intent ?? "fresh";
+  const recentTopics = (input.recentTopics ?? [])
+    .map((t) => String(t).trim())
+    .filter(Boolean)
+    .slice(0, 10);
   const avoid = (input.avoid ?? [])
     .map((t) => String(t).trim())
     .filter(Boolean)
-    .slice(0, 12);
+    .slice(0, 20);
   const today = new Date().toISOString().slice(0, 10);
+
+  const isGeneralCategory =
+    categoryLabel.length > 0 &&
+    !/前端|全栈|AI|Agent|工程|后端|系统|技术|编程|综合/.test(categoryLabel);
+  const isAllCategory = !categoryLabel || categoryLabel === "综合";
+
+  const focusAreas =
+    input.sectionTags && input.sectionTags.length > 0
+      ? input.sectionTags.join("、")
+      : isGeneralCategory
+        ? categoryLabel
+        : persona
+          ? "以账号人设与近期文章方向为准，不要默认全是前端/AI"
+          : "前端工程、全栈实践、AI 应用、AI Agent、程序员效率（可少量交叉职场）";
+
+  const intentBlock =
+    intent === "history-extend"
+      ? `【任务模式：历史延伸】
+- 必须站在作者已写过的赛道上，开**新冲突/新角度**，不是旧标题加后缀
+- 禁止「XXX：我会先做的 3 个关键动作 / 旧方案 vs 新方案 / 给入门者的避坑清单」机械延伸
+- 每题回答：同一赛道里，还有哪个没写透的决策或代价值得单独成文`
+      : `【任务模式：新鲜选题】
+- 生成当下仍值得写、读者愿点开的新题；可参考作者赛道，但不要复述旧文`;
 
   const prompt: ChatMessage[] = [
     {
       role: "system",
-      content: `你是资深${
-        isGeneralCategory ? "公众号" : "技术"
-      }内容策划，长期跟踪${
-        isGeneralCategory
-          ? "职场、商业、副业、生活、健康、写作等领域"
-          : "前端、全栈、AI、AI Agent、程序员效率领域的社区动态（GitHub、Hacker News、掘金、X、公众号）"
-      }。
+      content: `你是资深公众号选题编辑。任务：生成 ${count} 个**彼此明显不同**、能直接开写的选题。
 
-【任务】生成 ${count} 个「当下有讨论度」的公众号选题。
+${intentBlock}
 
-【硬性要求】
-- 选题贴合 ${today} 前后 3-6 个月内的${
-        isGeneralCategory ? "" : "技术"
-      }热点：新发布的工具/框架/模型、正在演进的实践、持续争议的工程话题
-- 领域聚焦：${focusAreas}
-${categoryLabel ? `- **本次分类**：${categoryLabel}，选题必须围绕该分类展开，不要跨到其他领域` : ""}
-- **比例约束**：${
-        isGeneralCategory
-          ? "全部选题属于该分类，内容要具体、可落地、有真实场景，避免空泛鸡汤和口号"
-          : "至少 80% 选题属于前端 / 全栈 / AI / Agent / 工程效率；综合向（职场鸡汤、理财、生活）最多 1 条，且必须和技术人处境强相关"
-      }
-- 每个选题要落到**具体**工具名 / 版本 / 协议 / 实践（如 MCP、Cursor Rules、RSC、Tailwind v4、向量数据库、Next.js），禁止"AI 时代""大模型趋势"这类空泛大词
-- 避免写烂的入门科普（什么是 React / JS 基础语法），面向有 1-3 年经验的工程师
-- 角度多样：踩坑复盘 / 对比选型 / 工程落地 / 趋势判断 / 效率工具，至少覆盖 3 种
-- 选题 12-24 字，可含具体技术名词；不要标题党、不要震惊体
-${batch > 0 ? `- 这是第 ${batch + 1} 批刷新：请给出与常见首批选题明显不同的新角度/新工具，避免重复上一批` : ""}
-${avoid.length > 0 ? `- **避免重复**：以下选题近期已展示给用户，禁止原样或换词出现（最多可换角度，但不建议）：${avoid.join("；")}` : ""}
+【贴合谁】
+${persona ? `- 账号人设：${persona}\n- 选题口吻、场景、读者必须符合人设；人设偏职场/生活时不要硬塞框架选型文` : "- 未提供人设：按分类与下方领域写"}
+${recentTopics.length ? `- 作者近期写过（可沿赛道，禁止同题换皮）：${recentTopics.join("；")}` : "- 暂无历史：不要臆造作者经历"}
+- 领域关键词：${focusAreas}
+${categoryLabel ? `- **本次分类「${categoryLabel}」**：全部选题必须落在此分类；跨类直接丢弃` : ""}
+
+【一条好选题长什么样】
+- 好：含具体名词 + 一个张力（代价/取舍/边界），读者能想象「这篇会帮我决定什么」
+- 坏：空泛趋势、鸡汤口号、百科入门、标题党、同一句式批量换词
+- 好例：\`MCP 工具接进现有后台后，超时和权限该谁兜\` / \`试用期第三个月还要不要跳：薪资涨幅之外的三个信号\`
+- 反例：\`AI 时代如何提升效率\` / \`你必须知道的 5 个职场真相\` / \`全面解析大模型趋势\`
+
+【新鲜与去重】
+- 贴合 ${today} 前后仍值得写的具体矛盾/工具/场景；禁止「AI 时代 / 大模型趋势 / 赋能 / 闭环 / 底层逻辑」
+- ${count} 条之间：主题名词、角度、句式不得雷同（至少 3 种：踩坑/对比/落地/边界/复盘/反对常见建议…）
+- 禁止批量套用：「XXX：我会先做的 3 个关键动作」「旧方案 vs 新方案」「给入门的人写避坑清单」
+${batch > 0 ? `- 第 ${batch + 1} 批刷新：必须换工具名/场景/冲突，禁止上一批换词` : ""}
+${avoid.length ? `- **严禁原样或换词重复**：${avoid.join("；")}` : ""}
+
+【质量】
+${
+  isGeneralCategory
+    ? "- 具体场景可落地，禁鸡汤；每题含可感知代价或决策点"
+    : isAllCategory
+      ? "- 「综合」按人设与近期文章配比；无人设时技术向约占 2/3，其余可为职场/写作交叉，但须具体"
+      : "- 落到具体工具/协议/实践名词；面向有经验读者，禁入门科普"
+}
+- 选题 12-24 字；不要标题党、震惊体、感叹号堆叠
 
 【输出】
 JSON：{ "topics": [{ "topic": string, "angle": string, "tags": string[] }] }
-- topic：选题（12-24 字）
-- angle：一句话说明"为什么现在写这篇有人看"（≤30 字）
-- tags：2-3 个标签（优先：前端 / 全栈 / AI / Agent / 工程）`,
+- angle：≤30 字，必须点出「读者卡点或搞错代价」，不要写「很火/值得关注」
+- tags：2-3 个具体标签（贴分类，不要全写成「热点」）`,
     },
     {
       role: "user",
       content: JSON.stringify({
         date: today,
         section: input.section ?? "all",
+        category: categoryLabel || "综合",
+        intent,
         focusAreas,
+        persona: persona || null,
+        recentTopics,
+        avoid,
         count,
         batch,
         refresh: batch > 0,
@@ -1936,14 +1974,14 @@ JSON：{ "topics": [{ "topic": string, "angle": string, "tags": string[] }] }
   try {
     const raw = await callChat(prompt, {
       jsonMode: true,
-      maxTokens: 1500,
+      maxTokens: 1800,
       role: "topic-ideas",
-      temperature: 0.85,
+      temperature: 0.92,
     });
     const parsed = safeParse<{
       topics?: Array<{ topic?: string; angle?: string; tags?: string[] }>;
     }>(raw, {});
-    return (parsed.topics ?? [])
+    const items = (parsed.topics ?? [])
       .map((t) => ({
         topic: String(t.topic ?? "").trim(),
         angle: String(t.angle ?? "").trim(),
@@ -1951,8 +1989,22 @@ JSON：{ "topics": [{ "topic": string, "angle": string, "tags": string[] }] }
           ? t.tags.map((x) => String(x).trim()).filter(Boolean).slice(0, 3)
           : [],
       }))
-      .filter((t) => t.topic.length >= 8 && t.topic.length <= 32)
-      .slice(0, count);
+      .filter((t) => t.topic.length >= 8 && t.topic.length <= 32);
+
+    // 二次去同质：批内相似度过高的丢掉
+    const unique: typeof items = [];
+    for (const item of items) {
+      const tooClose = unique.some((u) => {
+        const a = new Set(item.topic.replace(/\s+/g, "").split(""));
+        const b = new Set(u.topic.replace(/\s+/g, "").split(""));
+        let inter = 0;
+        for (const ch of a) if (b.has(ch)) inter += 1;
+        const union = a.size + b.size - inter;
+        return union > 0 && inter / union > 0.55;
+      });
+      if (!tooClose) unique.push(item);
+    }
+    return unique.slice(0, count);
   } catch (error) {
     console.warn(
       "[generateHotTopics] LLM failed, caller should fallback to static seeds:",

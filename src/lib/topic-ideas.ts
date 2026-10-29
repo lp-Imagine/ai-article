@@ -2,6 +2,7 @@ import type { BlogSection } from "@/lib/blog-sync-constants";
 import { BLOG_SECTIONS } from "@/lib/blog-sync-constants";
 import { db } from "@/lib/db";
 import { generateHotTopics } from "@/lib/ai";
+import { getAccountPersona } from "@/lib/ai/prompts/common";
 
 export type TopicIdeaSource = "history" | "template" | "hot" | "mixed";
 
@@ -472,26 +473,14 @@ function buildHistoryCandidates(
     if (!core || core.length < 4) continue;
     // Each seed picks only 1-2 templates, cycling through shuffled list
     const tpl = shuffled[(si * 2) % shuffled.length];
+    // 每个历史主题只延伸 1 条，避免「同一旧题套多种后缀」刷屏
     ideas.push({
       topic: `${core}${tpl.suffix}`,
       reason: `\u6765\u81ea\u4f60\u6700\u8fd1\u6587\u7ae0\u65b9\u5411\uff0c${tpl.reason}`,
       source: "history",
       tags: ["\u5386\u53f2\u504f\u597d", tpl.tag],
-      baseScore: tpl.score,
+      baseScore: tpl.score - 0.08,
     });
-    // Second template for first few seeds only
-    if (si < 4) {
-      const tpl2 = shuffled[(si * 2 + 1) % shuffled.length];
-      if (tpl2 !== tpl) {
-        ideas.push({
-          topic: `${core}${tpl2.suffix}`,
-          reason: `\u6cbf\u7528\u719f\u6089\u4e3b\u9898\uff0c${tpl2.reason}`,
-          source: "history",
-          tags: ["\u5386\u53f2\u504f\u597d", tpl2.tag],
-          baseScore: tpl2.score - 0.02,
-        });
-      }
-    }
   }
 
   if (section) {
@@ -543,15 +532,17 @@ function buildTemplateCandidates(
 
 function buildHotCandidates(seeds: string[], rnd: () => number): Candidate[] {
   const shuffledSeeds = [...seeds].sort(() => rnd() - 0.5);
-  return shuffledSeeds.map((topic) => ({
-    topic,
-    reason: TECH_AFFINITY_RE.test(topic)
-      ? "工程向热点，适合写成可落地的踩坑或选型文。"
-      : "热点向选题，可结合你的写作风格快速开写。",
-    source: "hot" as const,
-    tags: TECH_AFFINITY_RE.test(topic) ? ["热点", "工程"] : ["热点"],
-    baseScore: TECH_AFFINITY_RE.test(topic) ? 0.78 : 0.62,
-  }));
+  return shuffledSeeds
+    .filter((topic) => assessTopicIdeaQuality(topic).ok)
+    .map((topic) => ({
+      topic,
+      reason: TECH_AFFINITY_RE.test(topic)
+        ? "工程向种子题，可改成你自己的踩坑或选型角度。"
+        : "分类种子题，建议结合你的真实场景再落笔。",
+      source: "hot" as const,
+      tags: TECH_AFFINITY_RE.test(topic) ? ["热点", "工程"] : ["热点"],
+      baseScore: TECH_AFFINITY_RE.test(topic) ? 0.72 : 0.58,
+    }));
 }
 
 type LlmHotTopic = { topic: string; angle: string; tags: string[] };
@@ -706,20 +697,30 @@ async function writeDbHotCache(
 async function fetchLlmHotTopics(
   section: BlogSection | null,
   count: number,
-  opts?: { force?: boolean; batch?: number; category?: TopicIdeasCategory; avoid?: string[] },
+  opts?: {
+    force?: boolean;
+    batch?: number;
+    category?: TopicIdeasCategory;
+    avoid?: string[];
+    persona?: string;
+    recentTopics?: string[];
+    intent?: "fresh" | "history-extend";
+  },
 ): Promise<LlmHotTopic[]> {
-  const key = `${section ?? "all"}:${opts?.category ?? "all"}`;
+  const category = opts?.category ?? "all";
+  const intent = opts?.intent ?? "fresh";
+  // persona / 近期主题参与缓存键，避免不同人设共用同一批「技术热点」
+  const personaKey = (opts?.persona ?? "").slice(0, 40);
+  const key = `${section ?? "all"}:${category}:${intent}:${personaKey || "nopersona"}`;
   const force = Boolean(opts?.force);
   const batch = opts?.batch ?? 0;
   const avoid = opts?.avoid ?? [];
 
   if (!force) {
-    // 1) 进程内热点
     const memCached = llmHotCache.get(key);
     if (memCached && memCached.expiresAt > Date.now()) {
       return memCached.topics.slice(0, count);
     }
-    // 2) 同实例的并发请求合并（必须在任何 await 之前判断）
     const pending = llmHotInflight.get(key);
     if (pending) {
       const topics = await pending;
@@ -730,7 +731,6 @@ async function fetchLlmHotTopics(
   const inflightKey = force ? `${key}:force:${batch}:${Date.now()}` : key;
   const task = (async (): Promise<LlmHotTopic[]> => {
     try {
-      // 3) DB 跨实例热点：命中则沿用 DB 行的剩余有效期，不重置 TTL
       if (!force) {
         const dbCached = await readDbHotCache(key);
         if (dbCached) {
@@ -742,29 +742,32 @@ async function fetchLlmHotTopics(
         }
       }
 
-      const topics = await generateHotTopics({
-        section,
-        sectionTags:
-          opts?.category && opts.category !== "all"
-            ? IDEA_CATEGORIES[opts.category].llmTags
+      const cat = IDEA_CATEGORIES[category];
+      const sectionTags =
+        category !== "all"
+          ? cat.llmTags
+          : opts?.persona
+            ? cat.llmTags.slice(0, 4)
             : section
               ? SECTION_TAGS[section]
-              : DEFAULT_FOCUS_TAGS,
-        categoryLabel: opts?.category ? IDEA_CATEGORIES[opts.category].label : undefined,
+              : DEFAULT_FOCUS_TAGS;
+
+      const rawTopics = await generateHotTopics({
+        section,
+        sectionTags,
+        categoryLabel: cat.label,
         avoid,
-        count: Math.min(10, count + 2),
+        persona: opts?.persona,
+        recentTopics: opts?.recentTopics,
+        intent,
+        count: Math.min(10, count + 3),
         batch,
       });
+      const topics = rawTopics.filter((t) => assessTopicIdeaQuality(t.topic, t.angle).ok);
       if (topics.length > 0) {
         const expiresAt = Date.now() + LLM_HOT_CACHE_TTL_MS;
         llmHotCache.set(key, { expiresAt, topics });
-        // DB 写入失败也不应阻断返回（其它实例下一轮再补）
-        writeDbHotCache(
-          key,
-          section,
-          opts?.category ?? null,
-          topics,
-        ).catch((err) => {
+        writeDbHotCache(key, section, category, topics).catch((err) => {
           console.warn(
             "[topic-ideas] writeDbHotCache failed:",
             err instanceof Error ? err.message : err,
@@ -772,7 +775,6 @@ async function fetchLlmHotTopics(
         });
         return topics;
       }
-      // 强制刷新失败时，尽量回退到旧缓存，避免整页空掉
       if (force) {
         const stale = llmHotCache.get(key);
         if (stale?.topics.length) return stale.topics;
@@ -802,13 +804,16 @@ async function fetchLlmHotTopics(
 
 /** LLM 热点候选：baseScore 高于静态热点（0.7），让新鲜选题优先展示 */
 function buildLlmHotCandidates(llmTopics: LlmHotTopic[]): Candidate[] {
-  return llmTopics.map((t) => ({
-    topic: t.topic,
-    reason: t.angle || "来自 AI 生成的当下热点方向，可结合你的写作风格快速落地。",
-    source: "hot" as const,
-    tags: t.tags.length > 0 ? ["AI 热点", ...t.tags].slice(0, 4) : ["AI 热点"],
-    baseScore: 0.86,
-  }));
+  return llmTopics.map((t) => {
+    const quality = assessTopicIdeaQuality(t.topic, t.angle);
+    return {
+      topic: t.topic,
+      reason: t.angle || "具体冲突清晰，适合直接开写一版大纲。",
+      source: "hot" as const,
+      tags: t.tags.length > 0 ? ["AI 热点", ...t.tags].slice(0, 4) : ["AI 热点"],
+      baseScore: Math.min(0.94, 0.82 + quality.score * 0.12),
+    };
+  });
 }
 
 function buildMixedCandidates(
@@ -845,21 +850,78 @@ function buildMixedCandidates(
   return out;
 }
 
+export type PersonaBias = "tech" | "general" | "mixed";
+
+/** 根据账号人设推断综合入口该偏技术还是综合向 */
+export function inferPersonaBias(persona: string | null | undefined): PersonaBias {
+  const p = (persona ?? "").trim();
+  if (!p) return "tech";
+  const general = /职场|商业|生活|写作|理财|育儿|健康|副业|内容|成长|公众号运营/.test(p);
+  const tech = /前端|后端|全栈|AI|Agent|工程|程序员|开发|TypeScript|React|Node/.test(p);
+  if (general && !tech) return "general";
+  if (tech && !general) return "tech";
+  if (general && tech) return "mixed";
+  return "mixed";
+}
+
+const FORMULAIC_TOPIC_RE =
+  /我会先做的\s*\d+\s*个|旧方案\s*vs\s*新方案|给刚入门的人写|避坑清单$|关键动作$/;
+
+const WEAK_TOPIC_RE =
+  /AI\s*时代|大模型趋势|赋能|闭环|底层逻辑|深度好文|全面解析|你必须知道|必看|震惊|如何提升效率$|职场真相|认知升级|打造个人品牌(?!.*具体)/u;
+
+const WEAK_REASON_RE = /很火|值得关注|大家都很关心|持续升温|热度不减|趋势明显/u;
+
+/** 选题质量闸门：过空/鸡汤/公式题直接丢 */
+export function assessTopicIdeaQuality(topic: string, reason?: string): {
+  ok: boolean;
+  score: number;
+  issues: string[];
+} {
+  const t = topic.trim();
+  const issues: string[] = [];
+  let score = 1;
+  if (t.length < 10 || t.length > 28) {
+    issues.push("长度不宜");
+    score -= 0.35;
+  }
+  if (WEAK_TOPIC_RE.test(t) || FORMULAIC_TOPIC_RE.test(t)) {
+    issues.push("空泛或公式题");
+    score -= 0.55;
+  }
+  if (/[！!]{2,}|\?{2,}|？{2,}/.test(t)) {
+    issues.push("标题党标点");
+    score -= 0.3;
+  }
+  // 缺具体张力词时略降权（不完全拒）
+  if (!/[？?：:]|还是|还是该|别再|不要|何时|什么时候|坑|代价|边界|取舍|对比|vs|VS/.test(t)) {
+    score -= 0.08;
+  }
+  if (reason && WEAK_REASON_RE.test(reason)) {
+    issues.push("理由空泛");
+    score -= 0.2;
+  }
+  return { ok: score >= 0.45 && !issues.includes("空泛或公式题"), score, issues };
+}
+
 /**
  * Dedupe + inter-candidate similarity filter + rank.
- * 综合入口偏向技术选题（约 3/4），综合类只占少量席位。
+ * 综合入口按人设偏置；批内相似度阈值更严，减少「换皮重复」。
  */
 function dedupeAndRank(
   candidates: Candidate[],
   historyTopics: string[],
   count: number,
   seed: number,
-  opts?: { general?: boolean; seen?: Set<string> },
+  opts?: {
+    general?: boolean;
+    seen?: Set<string>;
+    personaBias?: PersonaBias;
+  },
 ): TopicIdea[] {
   let pool = candidates;
   if (opts?.seen && opts.seen.size > 0) {
     const fresh = candidates.filter((c) => !opts.seen!.has(normalizeTopic(c.topic)));
-    // 全新候选不足时，才允许回补已看过的，避免列表空掉
     pool = fresh.length >= Math.min(count, 4) ? fresh : [...fresh, ...candidates];
   }
 
@@ -867,19 +929,37 @@ function dedupeAndRank(
   for (const c of pool) {
     const topic = normalizeTopic(c.topic);
     if (!topic || topic.length < 6) continue;
+    const quality = assessTopicIdeaQuality(topic, c.reason);
+    if (!quality.ok) continue;
     const key = topic.toLowerCase();
     if (!deduped.has(key)) {
-      deduped.set(key, { ...c, topic });
+      deduped.set(key, { ...c, topic, baseScore: c.baseScore + (quality.score - 0.7) * 0.1 });
     }
   }
 
+  const bias = opts?.personaBias ?? (opts?.general ? "general" : "tech");
   const rnd = seededRandom(seed + 99);
   const scored = [...deduped.values()].map((c) => {
     const maxSim = historyTopics.reduce((m, h) => Math.max(m, similarity(c.topic, h)), 0);
-    const noveltyBonus = Math.max(0, 0.18 - maxSim * 0.22);
-    const jitter = (rnd() - 0.5) * 0.08;
-    const affinity = opts?.general ? -techAffinityBonus(c) : techAffinityBonus(c);
-    const score = Math.max(0.25, Math.min(0.99, c.baseScore + noveltyBonus + jitter + affinity));
+    const noveltyBonus = Math.max(0, 0.2 - maxSim * 0.28);
+    const jitter = (rnd() - 0.5) * 0.1;
+    let affinity = 0;
+    if (bias === "general") affinity = -techAffinityBonus(c);
+    else if (bias === "tech") affinity = techAffinityBonus(c);
+    else affinity = techAffinityBonus(c) * 0.25;
+    // LLM 热点优先于静态模板 / 机械历史后缀
+    const sourceBonus =
+      c.source === "hot" && c.tags.includes("AI 热点")
+        ? 0.08
+        : c.source === "template"
+          ? -0.06
+          : c.source === "history"
+            ? -0.05
+            : 0;
+    const score = Math.max(
+      0.25,
+      Math.min(0.99, c.baseScore + noveltyBonus + jitter + affinity + sourceBonus),
+    );
     return {
       topic: c.topic,
       reason: c.reason,
@@ -892,13 +972,19 @@ function dedupeAndRank(
 
   scored.sort((a, b) => b.score - a.score);
 
-  const generalCap = opts?.general ? Infinity : Math.max(1, Math.floor(count * 0.25));
+  const generalCap =
+    bias === "general"
+      ? Infinity
+      : bias === "mixed"
+        ? Math.max(2, Math.ceil(count * 0.45))
+        : Math.max(1, Math.floor(count * 0.25));
+  const simThreshold = 0.36;
   const result: TopicIdea[] = [];
   let generalCount = 0;
 
   for (const item of scored) {
     if (result.length >= count) break;
-    const tooSimilar = result.some((r) => similarity(r.topic, item.topic) > 0.45);
+    const tooSimilar = result.some((r) => similarity(r.topic, item.topic) > simThreshold);
     if (tooSimilar) continue;
     if (!item.tech) {
       if (generalCount >= generalCap) continue;
@@ -913,12 +999,11 @@ function dedupeAndRank(
     });
   }
 
-  // 技术候选不够时再回填，避免列表过短
   if (result.length < count) {
     for (const item of scored) {
       if (result.length >= count) break;
       if (result.some((r) => r.topic === item.topic)) continue;
-      const tooSimilar = result.some((r) => similarity(r.topic, item.topic) > 0.45);
+      const tooSimilar = result.some((r) => similarity(r.topic, item.topic) > simThreshold);
       if (tooSimilar) continue;
       result.push({
         topic: item.topic,
@@ -987,69 +1072,95 @@ export async function getTopicIdeas(input: TopicIdeasRequest): Promise<TopicIdea
   if (pending && !refresh) return pending;
 
   const task = (async (): Promise<TopicIdeasResult> => {
-    const [recent, llmHotTopics] = await Promise.all([
-      db.article.findMany({
-        where: { userId: input.userId },
-        orderBy: { updatedAt: "desc" },
-        take: 40,
-        select: {
-          topic: true,
-          title: true,
-          keywords: true,
-        },
-      }),
-      includeHot
-        ? fetchLlmHotTopics(section, mode === "hot" ? 10 : 6, {
-            force: refresh,
-            batch: cursor,
-            category,
-            avoid: seenTopics,
-          })
-        : Promise.resolve([]),
-    ]);
+    const persona = getAccountPersona();
+    const personaBias =
+      category === "all"
+        ? inferPersonaBias(persona)
+        : IDEA_CATEGORIES[category].tech
+          ? "tech"
+          : "general";
+
+    const recent = await db.article.findMany({
+      where: { userId: input.userId },
+      orderBy: { updatedAt: "desc" },
+      take: 40,
+      select: {
+        topic: true,
+        title: true,
+        keywords: true,
+      },
+    });
 
     const historyTopics = recent
       .map((a) => (a.title?.trim() || a.topic || "").trim())
       .filter(Boolean)
       .slice(0, 24);
 
+    // 历史主题也加入 avoid，减少「刚写过的题换皮再推」
+    const avoid = [...new Set([...seenTopics, ...historyTopics])].slice(0, 24);
+
+    const wantLlm = includeHot || (mode === "history" && historyTopics.length > 0);
+    const llmHotTopics = wantLlm
+      ? await fetchLlmHotTopics(section, mode === "hot" || mode === "history" ? 10 : 8, {
+          force: refresh,
+          batch: cursor,
+          category: mode === "history" ? "all" : category,
+          avoid,
+          persona,
+          recentTopics: historyTopics.slice(0, 8),
+          intent: mode === "history" ? "history-extend" : "fresh",
+        })
+      : [];
+
     const seed = seededHash(
-      `${input.userId}-${Date.now()}-${cursor}-${mode}-${section ?? "all"}-${category}-${refresh ? "r" : "c"}`,
+      `${input.userId}-${Date.now()}-${cursor}-${mode}-${section ?? "all"}-${category}-${persona.slice(0, 24)}-${refresh ? "r" : "c"}`,
     );
     const rnd = seededRandom(seed);
 
     const history = buildHistoryCandidates(historyTopics, section, rnd);
     const templates = buildTemplateCandidates(section, rnd, category);
     const mixed = buildMixedCandidates(historyTopics, includeHot, rnd);
-    const llmHot = includeHot ? buildLlmHotCandidates(llmHotTopics) : [];
+    const llmHot = buildLlmHotCandidates(llmHotTopics);
     const hot = includeHot ? buildHotCandidates(IDEA_CATEGORIES[category].seeds, rnd) : [];
 
     let pool: Candidate[] = [];
     let emptyReason: string | null = null;
 
     if (mode === "history") {
-      // 仅历史延伸：不混模板/热点，避免和「热点」看起来一样
-      pool = [...history, ...buildMixedCandidates(historyTopics, false, rnd)];
       if (historyTopics.length === 0) {
         emptyReason = "还没有历史文章。先写几篇，或切换到「热点」看看当下选题。";
-      } else if (pool.length === 0) {
-        emptyReason = "暂时没法从历史文章延伸出选题，试试「综合」或「热点」。";
+        pool = [];
+      } else if (llmHot.length >= 3) {
+        // 历史模式优先 LLM 新角度，后缀模板只作补位
+        pool = [...llmHot, ...history.slice(0, 2)];
+      } else {
+        pool = [...llmHot, ...history.slice(0, Math.max(4, count)), ...mixed.slice(0, 2)];
+        if (pool.length === 0) {
+          emptyReason = "暂时没法从历史文章延伸出选题，试试「综合」或「热点」。";
+        }
       }
     } else if (mode === "hot") {
-      pool = [...llmHot, ...hot];
+      pool = llmHot.length >= 4 ? [...llmHot, ...hot.slice(0, 2)] : [...llmHot, ...hot];
       if (pool.length === 0) {
         emptyReason = "热点暂时不可用，请稍后重试或切到「综合」。";
       }
+    } else if (llmHot.length >= 4) {
+      // LLM 够用时压低静态模板/机械混合，避免整页同一批种子
+      pool = [...llmHot, ...templates.slice(0, 1), ...hot.slice(0, 1)];
     } else {
-      pool = [...llmHot, ...history, ...templates, ...mixed, ...hot];
+      pool = [...llmHot, ...history.slice(0, 3), ...templates, ...hot];
     }
 
-    const general = !IDEA_CATEGORIES[category].tech;
+    const general = personaBias === "general";
     const seen = new Set(seenTopics);
     const ideas =
       pool.length === 0
         ? []
-        : dedupeAndRank(pool, historyTopics, count, seed, { general, seen });
+        : dedupeAndRank(pool, historyTopics, count, seed, {
+            general,
+            seen,
+            personaBias,
+          });
 
     recordSeenTopics(
       input.userId,
