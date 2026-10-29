@@ -864,8 +864,9 @@ ${
 }
 - 只写本章：${section.heading}
 - 必须以 <h2>${section.heading}</h2> 开头
-- 本章目标：${section.summary}
+- 本章大纲意图：${section.summary}
 - 本章约 ${input.perSection} 字（去标签）；禁止重复其他章节内容
+- 像笔记一样写：有判断、有取舍；禁止段首「给出/通过/拆解/输出/锚定」；禁止本章再解释一遍全文背景
 ${
   input.isLastSummary
     ? buildLastSectionSummaryDirective({
@@ -893,10 +894,11 @@ ${sectionDirective(input.blueprint, input.sectionIndex - 1)}`,
               engineering: input.engineering,
               articleAngle: input.blueprint.angle,
               articleThesis: input.blueprint.thesis,
+              readerTension: input.blueprint.readerTension,
             }),
           },
         ],
-        { jsonMode: !plainMode, maxTokens, role: "content", temperature: 0.65, retries: 2 },
+        { jsonMode: !plainMode, maxTokens, role: "content", temperature: 0.72, retries: 2 },
       );
 
       if (!sectionRaw) {
@@ -1004,8 +1006,9 @@ async function generateContentBySections(
 
 【本次任务：标题 + 摘要 + 开篇 + 全篇蓝图】
 输出 JSON：{ "title": string, "summary": string, "openingHtml": string, "blueprint": object }
-- title ≤ 20 字；summary 80-120 字
-- openingHtml：开篇 2-4 段 <p>（直接点题），**不要** <h2>，不要写正文章节
+- title ≤ 20 字；summary 80-120 字，人话写清读者带走什么
+- openingHtml：开篇 2-4 段 <p>（直接点题冲突或判断），**不要** <h2>，不要写正文章节，禁止闲聊代入
+- blueprint 必须承接大纲 positioning 与各章 summary；禁止把全文改写成翻车流水线或百科骨架
 
 ${BLUEPRINT_JSON_INSTRUCTION}`;
   const metaUserPayload = {
@@ -1019,6 +1022,8 @@ ${BLUEPRINT_JSON_INSTRUCTION}`;
       outline: input.outline,
     }),
     task: "meta",
+    outlinePositioning: input.outline.positioning,
+    outlineTitle: input.outline.title,
   };
   const metaMaxTokens = Math.min(4096, 1600 + sections.length * 320);
 
@@ -1035,7 +1040,7 @@ ${BLUEPRINT_JSON_INSTRUCTION}`;
         jsonMode: true,
         maxTokens: metaMaxTokens,
         role: "content",
-        temperature: 0.65,
+        temperature: 0.75,
       },
     );
   } catch (error) {
@@ -1053,7 +1058,7 @@ ${BLUEPRINT_JSON_INSTRUCTION}`;
           jsonMode: true,
           maxTokens: Math.min(8192, Math.round(metaMaxTokens * 1.6)),
           role: "content",
-          temperature: 0.65,
+          temperature: 0.75,
         },
       );
     } catch (error2) {

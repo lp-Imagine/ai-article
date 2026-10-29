@@ -1,15 +1,19 @@
 /**
  * 正文生成 prompt 核心：buildContentSystemPromptCore
  *
- * 版本：v2.0.0（发布目标优先，蓝图与章节证据由 content skill 注入）。
+ * 版本：v3.0.0
+ * - 接入去 AI 腔 / 工程正文块
+ * - 强调承接大纲冲突，禁止翻车流水线与 PRD 腔段落
  */
 import {
+  buildAntiAiVoiceBlock,
+  buildEngineeringContentBlock,
   buildOnTopicBlock,
   buildArticleHtmlFormatRulesBrief,
   FULL_ARTICLE_SUMMARY_RULES,
 } from "@/lib/ai/prompts/common";
 
-export const CONTENT_PROMPT_VERSION = "2.0.0";
+export const CONTENT_PROMPT_VERSION = "3.0.0";
 
 export function buildContentSystemPromptCore(input: {
   topic: string;
@@ -31,6 +35,7 @@ export function buildContentSystemPromptCore(input: {
 - 全文只证明一个核心判断；每段都提供新的事实、步骤、例子、取舍或边界
 - 先交付信息，再解释原因；没有可靠来源时不编造人名、公司、数字、日期或对话
 - 目标约 ${wordCount} 字${sectional ? `，本章约 ${perSection} 字` : ""}；质量优先，不用空话凑字
+- **承接大纲**：切入角与读者冲突以大纲 positioning / 章节意图为准，禁止另起「万能职场/万能方法论」骨架
 
 ${domainBlock}
 
@@ -40,13 +45,18 @@ ${styleGuide}
 
 ${buildOnTopicBlock(topic, input.keywords)}
 
-【2. 证据合同】
+${buildAntiAiVoiceBlock()}
+
+${buildEngineeringContentBlock(engineering)}
+
+【2. 证据与文风】
 ${
   engineering
     ? "每个实现判断落到代码、接口字段、状态、命令或可复现步骤；全文至少两个 <pre><code> 代码块（均为正文顶层的独立块，置于 <p> 段落之间，禁止放进列表项或任何卡片容器内），其中一个展示不少于 8 行的关键流程。"
     : "每个建议至少用具体场景、前后对比、步骤、反例或判断标准中的一种支撑；观点不能只靠态度成立。"
 }
-- 同一案例和背景只出现一次；并行章节必须服从随后给出的全篇蓝图与本章唯一贡献
+- 同一案例和背景只出现一次；并行章节必须服从全篇蓝图与本章唯一贡献
+- 写得像专栏笔记：允许取舍与「这篇不覆盖什么」；禁止产品说明书腔（段首「给出/通过/拆解/输出/锚定」）
 - 配置项/清单一律用一层 <ul>/<ol>，禁止在 <li> 里再嵌套 <ul>/<ol>（卡片套卡片）
 
 【3. 平台与结构】
@@ -67,5 +77,6 @@ ${FULL_ARTICLE_SUMMARY_RULES}
 【4. 短禁用表】
 - 不用「在当今、随着发展、赋能、抓手、闭环、底层逻辑、认知升级」
 - 不用虚构闲聊开篇、机械的首先/其次/最后、口号式结尾或关注引流
-- 整篇不落成「定义→重要性→方法论→注意事项→总结」的教科书分块骨架（结尾的「总结」卡片按【3】是必须的；这里禁的是整篇按模板分块堆砌）`;
+- 整篇不落成「定义→重要性→方法论→注意事项→总结」；也不落成「翻车现场→诱因→标准→清单」
+- 结尾的「总结」卡片按【3】是必须的；这里禁的是整篇按模板分块堆砌`;
 }

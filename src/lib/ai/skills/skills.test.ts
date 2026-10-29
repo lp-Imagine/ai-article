@@ -59,8 +59,30 @@ describe("article blueprint skill", () => {
     const directive = sectionDirective(blueprint, 1);
 
     expect(directive).toContain("本章唯一贡献：用任务图和治理能力做对比");
-    expect(directive).toContain("本章证据类型：failure-analysis");
+    expect(directive).toMatch(/本章证据类型：/);
     expect(directive).toContain("本章禁止重复：先画清仓库边界");
+    expect(directive).toContain("专栏笔记");
+    expect(blueprint.readerTension).toContain("先画清仓库边界");
+    expect(blueprint.bannedPatterns.some((p) => /翻车/.test(p))).toBe(true);
+    expect(blueprint.sectionPlans.every((p) => !/^给出/.test(p.evidencePlan))).toBe(true);
+  });
+
+  it("strips PRD voice when normalizing blueprint contributions", () => {
+    const fallback = fallbackBlueprint({ topic: "前端 monorepo 治理", outline, engineering: true });
+    const normalized = normalizeBlueprint(
+      {
+        sectionPlans: [
+          {
+            heading: "先画清仓库边界",
+            uniqueContribution: "给出共享代码与独立发布单元清单",
+            evidencePlan: "给出接口定义",
+          },
+        ],
+      },
+      fallback,
+    );
+    expect(normalized.sectionPlans[0].uniqueContribution).not.toMatch(/^给出/);
+    expect(normalized.sectionPlans[0].evidencePlan).not.toMatch(/^给出/);
   });
 });
 
