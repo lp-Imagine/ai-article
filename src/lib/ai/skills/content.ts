@@ -1,4 +1,8 @@
-import type { OutlineOption, OutlineSection } from "@/types/article";
+import type {
+  OutlineFramework,
+  OutlineOption,
+  OutlineSection,
+} from "@/types/article";
 import type { SkillDefinition } from "@/lib/ai/skills/types";
 import { CONTENT_PROMPT_VERSION } from "@/lib/ai/prompts/content";
 
@@ -17,6 +21,9 @@ export type EvidenceMode =
   | "boundary-case"
   | "observable-scene";
 
+/** 由大纲 framework 映射的写前增强模式 */
+export type EnhanceMode = "angle" | "density" | "detail" | "voice";
+
 export type SectionPlan = {
   heading: string;
   uniqueContribution: string;
@@ -29,11 +36,43 @@ export type ArticleBlueprint = {
   angle: string;
   thesis: string;
   readerTension: string;
+  /** 读者读完转述给朋友的那一句（全文只钉这一个洞见） */
+  atomicInsight: string;
+  /** 写前增强侧重点 */
+  enhanceMode: EnhanceMode;
   openingMode: string;
   endingMode: string;
   bannedPatterns: string[];
   sectionPlans: SectionPlan[];
 };
+
+export function enhanceModeFromFramework(
+  framework?: OutlineFramework | null,
+): EnhanceMode {
+  switch (framework) {
+    case "hot-take":
+      return "angle";
+    case "list":
+    case "pain":
+      return "density";
+    case "story":
+    case "review":
+      return "detail";
+    case "compare":
+      return "voice";
+    default:
+      return "density";
+  }
+}
+
+function isEnhanceMode(value: unknown): value is EnhanceMode {
+  return (
+    value === "angle" ||
+    value === "density" ||
+    value === "detail" ||
+    value === "voice"
+  );
+}
 
 const GENERAL_EVIDENCE: EvidenceMode[] = [
   "observable-scene",
@@ -181,6 +220,10 @@ function deriveAngle(topic: string, outline: OutlineOption): string {
 }
 
 function deriveTension(topic: string, outline: OutlineOption): string {
+  const locked = outline.readerTension?.trim();
+  if (locked && locked.length >= 4) {
+    return locked.length > 120 ? `${locked.slice(0, 118)}…` : locked;
+  }
   const first = outline.sections[0];
   if (first?.summary?.trim()) {
     return `读者卡在「${first.heading}」：${humanizeContribution(first.summary, first.heading)}`;
@@ -191,24 +234,46 @@ function deriveTension(topic: string, outline: OutlineOption): string {
   return `读者面对「${topic}」时缺的是可执行判断，不是背景百科`;
 }
 
+function deriveAtomicInsight(topic: string, outline: OutlineOption): string {
+  const locked = outline.atomicInsight?.trim();
+  if (locked && locked.length >= 8) {
+    return locked.length > 72 ? `${locked.slice(0, 70)}…` : locked;
+  }
+  const positioning = outline.positioning?.trim();
+  if (positioning && positioning.length >= 10) {
+    return positioning.length > 72 ? `${positioning.slice(0, 70)}…` : positioning;
+  }
+  const sharp = outline.sections
+    .map((s) => humanizeContribution(s.summary ?? "", s.heading))
+    .find((s) => s.length >= 8);
+  if (sharp) {
+    return `关于「${topic}」：${sharp.slice(0, 48)}`;
+  }
+  return `读完应对「${topic}」做出一个以前做不出的具体判断，而不是又听一遍正确废话`;
+}
+
 export function fallbackBlueprint(input: {
   topic: string;
   outline: OutlineOption;
   engineering: boolean;
 }): ArticleBlueprint {
   const usedModes = new Set<EvidenceMode>();
+  const atomicInsight = deriveAtomicInsight(input.topic, input.outline);
   return {
     angle: deriveAngle(input.topic, input.outline),
     thesis: `${input.outline.positioning || input.outline.title}；全文用可核对信息证明它，而不是解释名词。`,
     readerTension: deriveTension(input.topic, input.outline),
-    openingMode: "前两段直接抛出读者冲突或核心判断，禁止闲聊代入与价值口号",
-    endingMode: "收束为可带走的判断或下一步动作；允许写「这篇没覆盖什么」，不做升华鸡汤",
+    atomicInsight,
+    enhanceMode: enhanceModeFromFramework(input.outline.framework),
+    openingMode: "前两段直接抛出读者冲突或核心判断，禁止闲聊代入、百科定义与「今天给大家分享」",
+    endingMode: "收束回扣 Atomic Insight；允许写「这篇没覆盖什么」，禁止希望对你有帮助",
     bannedPatterns: [
       "定义→重要性→方法论→注意事项→总结",
       "翻车现场→核心诱因→判断标准→行动清单",
       "虚构朋友或同事对话开篇",
+      "随着XX的发展 / 在当今社会 / 什么是XX",
       "每章重复解释主题背景",
-      "首先/其次/最后机械排比",
+      "首先/其次/最后机械排比与完美三点并列",
       "段首「给出/通过/拆解/输出/锚定」产品说明书腔",
     ],
     sectionPlans: input.outline.sections.map((section, index, all) =>
@@ -251,10 +316,23 @@ export function normalizeBlueprint(
   });
 
   const mergedBanned = asStringArray(record.bannedPatterns);
+  // 上游大纲洞见优先：meta 只允许锐化（更长/更尖），不允许换成空话或换题短句
+  const llmInsight = asString(record.atomicInsight).trim();
+  const atomicInsight =
+    llmInsight.length >= 8 &&
+    llmInsight.length <= 96 &&
+    !/要坚持|很重要|赋能|底层逻辑/.test(llmInsight)
+      ? llmInsight.slice(0, 72)
+      : fallback.atomicInsight;
+
   return {
     angle: asString(record.angle) || fallback.angle,
     thesis: asString(record.thesis) || fallback.thesis,
     readerTension: asString(record.readerTension) || fallback.readerTension,
+    atomicInsight,
+    enhanceMode: isEnhanceMode(record.enhanceMode)
+      ? record.enhanceMode
+      : fallback.enhanceMode,
     openingMode: asString(record.openingMode) || fallback.openingMode,
     endingMode: asString(record.endingMode) || fallback.endingMode,
     bannedPatterns: mergedBanned.length
@@ -278,6 +356,8 @@ export function sectionDirective(
         : "";
   return `【全篇蓝图（本章必须服从）】
 - 全文切入角：${blueprint.angle}
+- Atomic Insight（全文只钉这句）：${blueprint.atomicInsight}
+- 增强模式：${blueprint.enhanceMode}
 - 全文核心判断：${blueprint.thesis}
 - 读者当前冲突：${blueprint.readerTension}
 - 本章唯一贡献：${plan.uniqueContribution}
@@ -287,7 +367,7 @@ export function sectionDirective(
 ${positionRule}
 - 禁止套用的骨架：${blueprint.bannedPatterns.join("；")}
 - 文风：像人写的专栏笔记，不要产品说明书；段首禁用「给出/通过/拆解/输出/锚定」
-- 写完自检：读者是否多了一个可带走的具体判断（不是又听了一遍正确废话）`;
+- 写完自检：是否在证明 Atomic Insight（不是又听了一遍正确废话）`;
 }
 
 export const BLUEPRINT_JSON_INSTRUCTION = `
@@ -296,6 +376,8 @@ export const BLUEPRINT_JSON_INSTRUCTION = `
   "angle": "承接大纲定位的唯一切入，禁止换成万能角名",
   "thesis": "全文只证明的核心判断（人话）",
   "readerTension": "读者真正卡住的冲突，须含主题/大纲里的具体名词",
+  "atomicInsight": "读者转述给朋友的一句；若大纲已有洞见则只锐化不换题",
+  "enhanceMode": "angle | density | detail | voice（优先沿用大纲 framework 映射，勿无故改换）",
   "openingMode": "开篇方式（禁止闲聊代入）",
   "endingMode": "结尾收束方式（允许写未覆盖边界）",
   "bannedPatterns": ["本篇禁止的模板骨架，须包含对翻车流水线与 PRD 腔的禁令"],
@@ -309,4 +391,4 @@ export const BLUEPRINT_JSON_INSTRUCTION = `
     }
   ]
 }
-sectionPlans 数量和顺序必须与大纲章节完全一致；各章 uniqueContribution / evidenceMode 不得雷同；angle 与 readerTension 必须服务大纲 positioning，禁止整篇改写成「翻车→诱因→标准→清单」。`;
+sectionPlans 数量和顺序必须与大纲章节完全一致；各章 uniqueContribution / evidenceMode 不得雷同；atomicInsight / angle / readerTension 必须服务大纲（含大纲 atomicInsight/framework），禁止整篇改写成「翻车→诱因→标准→清单」。`;

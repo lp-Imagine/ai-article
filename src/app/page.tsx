@@ -132,7 +132,15 @@ export default function HomePage() {
   const { runningTaskIds } = useArticleBackgroundTasks();
 
   // Topic Ideas state
-  type TopicIdea = { topic: string; reason: string; source: string; score: number; tags?: string[] };
+  type TopicIdea = {
+    topic: string;
+    reason: string;
+    source: string;
+    score: number;
+    tags?: string[];
+    atomicInsight?: string;
+    tension?: string;
+  };
   type IdeasFilter = "all" | "history" | "hot";
   type IdeasCategory =
     | "all"
@@ -160,6 +168,9 @@ export default function HomePage() {
   const [ideasCategory, setIdeasCategory] = useState<IdeasCategory>("all");
   const [ideasOpen, setIdeasOpen] = useState(false);
   const [ideasEmptyReason, setIdeasEmptyReason] = useState<string | null>(null);
+  /** 从灵感点选带入，生成大纲时锁定洞见 */
+  const [seedInsight, setSeedInsight] = useState<string | null>(null);
+  const [seedTension, setSeedTension] = useState<string | null>(null);
   // 「先选分类再生成灵感」：点击"给我灵感"先弹分类选择，确认后按所选分类生成
   const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
   const [pendingIdeasCategory, setPendingIdeasCategory] = useState<IdeasCategory>("all");
@@ -469,7 +480,11 @@ export default function HomePage() {
       void fetch(`/api/articles/${articleId}/generate-outline`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ outlineCount: form.outlineCount }),
+        body: JSON.stringify({
+          outlineCount: form.outlineCount,
+          ...(seedInsight ? { seedInsight } : {}),
+          ...(seedTension ? { seedTension } : {}),
+        }),
         signal: ctrl.signal,
       })
         .then(async (res) => {
@@ -569,6 +584,8 @@ export default function HomePage() {
           outlineCount: form.outlineCount,
           autoPush,
           autoPushBlog,
+          ...(seedInsight ? { seedInsight } : {}),
+          ...(seedTension ? { seedTension } : {}),
         }),
       });
       const json = (await res.json()) as ApiResponse<{
@@ -700,7 +717,13 @@ export default function HomePage() {
                     <input
                       type="text"
                       value={form.topic}
-                      onChange={(e) => update("topic", e.target.value)}
+                      onChange={(e) => {
+                        update("topic", e.target.value);
+                        if (seedInsight || seedTension) {
+                          setSeedInsight(null);
+                          setSeedTension(null);
+                        }
+                      }}
                       placeholder={
                         isNarrow
                           ? "例如：AI 对话界面 / 效率提升"
@@ -829,9 +852,13 @@ export default function HomePage() {
                                   type="button"
                                   onClick={() => {
                                     update("topic", idea.topic);
+                                    setSeedInsight(idea.atomicInsight?.trim() || null);
+                                    setSeedTension(idea.tension?.trim() || null);
                                     setIdeasOpen(false);
                                     toast.show({
-                                      message: "已填入主题，可直接生成大纲",
+                                      message: idea.atomicInsight
+                                        ? "已填入主题与洞见，可直接生成大纲"
+                                        : "已填入主题，可直接生成大纲",
                                       variant: "success",
                                       duration: 2500,
                                     });
@@ -854,6 +881,9 @@ export default function HomePage() {
                                     ) : null}
                                   </div>
                                   <p className="topic-idea-title">{idea.topic}</p>
+                                  {idea.atomicInsight ? (
+                                    <p className="topic-idea-insight">洞见：{idea.atomicInsight}</p>
+                                  ) : null}
                                   {idea.reason ? (
                                     <p className="topic-idea-reason">{idea.reason}</p>
                                   ) : null}
@@ -865,6 +895,8 @@ export default function HomePage() {
                                   disabled={loading}
                                   onClick={(e) => {
                                     e.stopPropagation();
+                                    setSeedInsight(idea.atomicInsight?.trim() || null);
+                                    setSeedTension(idea.tension?.trim() || null);
                                     setIdeasOpen(false);
                                     openQuickGenerateConfirm(idea.topic);
                                   }}

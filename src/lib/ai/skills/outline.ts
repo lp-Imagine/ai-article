@@ -1,8 +1,26 @@
-import type { OutlineOption } from "@/types/article";
+import type { OutlineFramework, OutlineOption } from "@/types/article";
 import { OUTLINE_SEED_HINTS } from "@/lib/ai/constants";
 import { OUTLINE_PROMPT_VERSION } from "@/lib/ai/prompts/outline";
-import type { OutlineConflict } from "@/lib/ai/prompts/outline";
+import type {
+  OutlineConflict,
+  OutlineFrameworkHint,
+} from "@/lib/ai/prompts/outline";
 import type { SkillDefinition } from "@/lib/ai/skills/types";
+
+export const OUTLINE_FRAMEWORK_LABELS: Record<OutlineFramework, string> = {
+  pain: "痛点",
+  story: "故事",
+  list: "清单",
+  compare: "对比",
+  "hot-take": "锐评",
+  review: "复盘",
+};
+
+const FRAMEWORK_SET = new Set<string>(Object.keys(OUTLINE_FRAMEWORK_LABELS));
+
+export function isOutlineFramework(value: unknown): value is OutlineFramework {
+  return typeof value === "string" && FRAMEWORK_SET.has(value);
+}
 
 export const OUTLINE_SKILL: SkillDefinition = {
   name: "outline-strategy",
@@ -120,6 +138,23 @@ export function assessOutlineDiversity(outlines: OutlineOption[]): {
     issues.push(`存在 ${prdHits} 处 PRD 腔章节摘要（给出/通过/拆解…）`);
   }
 
+  const frameworks = outlines
+    .map((o) => o.framework)
+    .filter((f): f is OutlineFramework => Boolean(f));
+  if (frameworks.length >= 2 && new Set(frameworks).size === 1) {
+    issues.push("多套大纲写作框架完全相同");
+  }
+
+  const insights = outlines
+    .map((o) => (o.atomicInsight ?? "").trim())
+    .filter((s) => s.length >= 8);
+  if (insights.length >= 2) {
+    const normalized = insights.map((s) => s.replace(/\s/g, "").slice(0, 24));
+    if (new Set(normalized).size === 1) {
+      issues.push("多套大纲洞见几乎相同");
+    }
+  }
+
   return {
     score: Math.max(
       0,
@@ -128,7 +163,8 @@ export function assessOutlineDiversity(outlines: OutlineOption[]): {
           worstSimilarity * 55 -
           generic * 8 -
           crashPipeline.length * 10 -
-          Math.max(0, prdHits - 2) * 4,
+          Math.max(0, prdHits - 2) * 4 -
+          (frameworks.length >= 2 && new Set(frameworks).size === 1 ? 8 : 0),
       ),
     ),
     issues,
@@ -157,20 +193,58 @@ export function assessSingleOutlineQuality(outline: OutlineOption): {
     issues.push("标题套话过重");
   }
 
+  const insight = (outline.atomicInsight ?? "").trim();
+  if (insight && /要坚持|很重要|赋能|底层逻辑/.test(insight)) {
+    issues.push("洞见为空洞正确废话");
+  }
+
   return { ok: issues.length === 0, issues };
 }
 
 export function isValidOutlineConflict(value: unknown): value is OutlineConflict {
-  if (!value || typeof value !== "object") return false;
+  return normalizeOutlineConflict(value) !== null;
+}
+
+/** 冲突归一化：核心四字段必填；洞见/框架缺省时兜底，避免旧模型输出被整批丢掉 */
+export function normalizeOutlineConflict(value: unknown): OutlineConflict | null {
+  if (!value || typeof value !== "object") return null;
   const c = value as Record<string, unknown>;
-  return (
-    typeof c.tension === "string" &&
-    c.tension.trim().length >= 8 &&
-    typeof c.readerMoment === "string" &&
-    c.readerMoment.trim().length >= 4 &&
-    typeof c.stake === "string" &&
-    c.stake.trim().length >= 4 &&
-    typeof c.avoidSkeleton === "string" &&
-    c.avoidSkeleton.trim().length >= 4
-  );
+  const tension = typeof c.tension === "string" ? c.tension.trim() : "";
+  const readerMoment =
+    typeof c.readerMoment === "string" ? c.readerMoment.trim() : "";
+  const stake = typeof c.stake === "string" ? c.stake.trim() : "";
+  const avoidSkeleton =
+    typeof c.avoidSkeleton === "string" ? c.avoidSkeleton.trim() : "";
+  if (
+    tension.length < 8 ||
+    readerMoment.length < 4 ||
+    stake.length < 4 ||
+    avoidSkeleton.length < 4
+  ) {
+    return null;
+  }
+
+  const rawInsight =
+    typeof c.atomicInsight === "string" ? c.atomicInsight.trim() : "";
+  const atomicInsight =
+    rawInsight.length >= 8
+      ? rawInsight.slice(0, 72)
+      : tension.length > 48
+        ? `${tension.slice(0, 46)}…`
+        : tension;
+
+  const rawFramework =
+    typeof c.frameworkHint === "string" ? c.frameworkHint.trim() : "";
+  const frameworkHint: OutlineFrameworkHint = isOutlineFramework(rawFramework)
+    ? rawFramework
+    : "pain";
+
+  return {
+    tension,
+    readerMoment,
+    stake,
+    avoidSkeleton,
+    atomicInsight,
+    frameworkHint,
+  };
 }

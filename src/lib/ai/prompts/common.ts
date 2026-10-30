@@ -8,6 +8,11 @@
  * 这里只放 prompt 字符串 / 纯函数，不放任何 runtime 副作用。
  */
 import { getEnvValue } from "@/lib/config-bridge";
+import { buildStyleSaltBlock } from "@/lib/ai/style-salt";
+import {
+  buildWritingPersonaBlock,
+  buildWritingPreferencesBlock,
+} from "@/lib/ai/writing-personas";
 
 export type WritingParams = {
   topic: string;
@@ -20,6 +25,22 @@ export type WritingParams = {
 
 export function getAccountPersona(): string {
   return getEnvValue("ACCOUNT_PERSONA")?.trim() ?? "";
+}
+
+/**
+ * 账号人设 + 写作人格 + 近作盐 + 学到的偏好。
+ * 正文/大纲 system 共用；空块自动省略。
+ */
+export function buildVoiceIdentityBlocks(options?: {
+  includeStyleSalt?: boolean;
+}): string {
+  const parts = [
+    buildAccountPersonaBlock(),
+    buildWritingPersonaBlock(),
+    buildWritingPreferencesBlock(),
+    options?.includeStyleSalt === false ? "" : buildStyleSaltBlock(),
+  ].filter(Boolean);
+  return parts.join("\n\n");
 }
 
 export function parseKeywords(keywords?: string | null): string[] {
@@ -42,6 +63,12 @@ export function buildAccountPersonaBlock(): string {
     `- 若主题与账号领域一致，可自然带入实践细节（代码、工程、Agent 等），但仍需服务主题本身`
   );
 }
+
+export {
+  buildWritingPersonaBlock,
+  buildWritingPreferencesBlock,
+} from "@/lib/ai/writing-personas";
+export { buildStyleSaltBlock } from "@/lib/ai/style-salt";
 
 export function buildDomainAdaptationBlock(): string {
   return (
@@ -192,16 +219,30 @@ export function buildEngineeringContentBlock(enabled: boolean): string {
 export function buildAntiAiVoiceBlock(): string {
   return `
 【去 AI 腔与夸夸其谈（硬性）】
-- 禁止套话：在当今/随着…发展/赋能/抓手/闭环/底层逻辑/降维/颗粒度/对齐/沉淀方法论/打造闭环/深度思考/认知升级/众所周知/毋庸置疑/值得注意的是
+- 禁止套话：在当今/随着…发展/赋能/抓手/闭环/底层逻辑/降维/颗粒度/对齐/沉淀方法论/打造闭环/深度思考/认知升级/众所周知/毋庸置疑/值得注意的是/值得一提的是/不言而喻/不难发现
+- 禁止结构标记连用：首先/其次/再者/然后/最后/综上所述/总而言之
 - 禁止每个大纲都长成：痛点引入 → 三大误解 → 三步方法论 → 注意事项 → 总结（换词不算创新）
 - 同样禁止：翻车现场 → 核心诱因 → 判断标准 → 行动清单（职场/决策题尤其易中招，换词不算）
 - 标题禁止批量套用同一公式；「XXX实战手册」最多在全部方案里出现 1 次，且该方案必须可落地
 - 少用抽象形容词（赋能、卓越、全面、系统性）；改用可观察事实
 - 允许不完美与取舍：真实感强于完美教条
-- **禁止「闲聊代入」开篇模板**：如「周一/上周和一个朋友聊天」「同事问我」「有读者留言说最近在XXX上花了很多时间，进展却不大」——再接「方向对但顺序要调整」这类万能转折
+- **禁止开篇**：闲聊代入（朋友聊天/同事问我/读者留言）；「今天给大家分享」「随着XX的发展」「在当今社会」「在这个信息爆炸的时代」「众所周知」「什么是XX？XX是指」
 - 大纲 summary 禁止 PRD 腔起句：「给出 / 通过 / 拆解 / 输出 / 锚定 / 全面介绍」
-- 禁止段首机械排比（「首先要明白」「其次需要注意」「最后别忘了」连用）；节奏要像人写的笔记
-- 同一句式开头不得连续出现 3 次以上
+- 禁止段首机械排比；完美三点并列要改成 2 点或 5 点，或深浅不一；对仗故意不对称
+- 同一句式开头不得连续出现 3 次以上；连续三段长度不得几乎一样
+`.trim();
+}
+
+/** 结构层去 AI：供正文与精炼共用 */
+export function buildStructuralDeAiBlock(): string {
+  return `
+【结构去 AI（硬性）】
+- 全文只服务一个 Atomic Insight（读者转述给朋友的那一句）；其余段落都在铺垫、证明或落地它
+- 叙事优先「具体场景 → 判断浮现」，禁止「先下结论再举例」的讲义腔（工程文可用代码当「场景」）
+- 打破对称：若出现「有人A，有人B，有人C」式排比，第三项必须打断节奏或删掉一项
+- 禁止引导过渡：「让我们来看看 / 接下来我们来聊聊 / 下面我们来分析」——直接切入
+- 长短句交替：长段铺开后用一句短判断砸实；禁止连续多段都是中等长度正确废话
+- 至少写出 1 句「可截图转发」的锐利判断（具体、反直觉或点明代价），不要整篇匀速平铺
 `.trim();
 }
 

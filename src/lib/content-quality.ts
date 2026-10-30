@@ -449,6 +449,53 @@ export function analyzeContentQuality(input: {
     });
   }
 
+  // 连续多段长度几乎一样 → 匀速 AI 平铺
+  const paraLens = paragraphs.map((p) => p.length).filter((n) => n >= 40);
+  if (paraLens.length >= 5) {
+    let uniformRuns = 0;
+    for (let i = 1; i < paraLens.length; i += 1) {
+      const a = paraLens[i - 1];
+      const b = paraLens[i];
+      if (Math.abs(a - b) <= Math.max(12, a * 0.12)) uniformRuns += 1;
+    }
+    if (uniformRuns >= 4) {
+      issues.push({
+        code: "uniform_pace",
+        message: "连续多段篇幅过于整齐，缺少长短起伏",
+        severity: "medium",
+      });
+    }
+  }
+
+  // 完美三点并列
+  const threePoint =
+    /首先[\s\S]{0,80}其次[\s\S]{0,80}(?:再者|然后|最后)/.test(plain) ||
+    /第一[，,][\s\S]{0,60}第二[，,][\s\S]{0,60}第三/.test(plain) ||
+    /一是[\s\S]{0,60}二是[\s\S]{0,60}三是/.test(plain);
+  if (threePoint) {
+    issues.push({
+      code: "three_point_parallel",
+      message: "存在「首先/其次/最后」或一二三对称排比，创作度偏低",
+      severity: "medium",
+    });
+  }
+
+  // 缺少可截图转发的短判断句
+  const punchlines = paragraphs.filter(
+    (p) =>
+      p.length >= 12 &&
+      p.length <= 42 &&
+      /(不是|别再|只会|代价|卡在|不如|真正缺的是|关键在于怎么)/.test(p) &&
+      !/首先|其次|综上所述|总而言之|值得注意/.test(p),
+  );
+  if (plain.length > 800 && punchlines.length === 0) {
+    issues.push({
+      code: "missing_punchline",
+      message: "缺少可转发的短判断句，全文偏匀速正确废话",
+      severity: "low",
+    });
+  }
+
   const hasCode = /<pre[\s\S]*?<code/i.test(contentHtml);
   const looksEngineering =
     /代码|封装|组件|接口|API|TypeScript|JavaScript|函数|Hook|上传|分片|React|Vue/.test(
@@ -516,8 +563,14 @@ function buildSuggestions(issues: QualityIssue[], factualFindings: FactualFindin
   if (codes.has("missing_hands_on")) {
     suggestions.push("补上可运行/可粘贴的代码或逐步操作，兑现「实战/手册」承诺");
   }
-  if (codes.has("repetitive_rhythm")) {
-    suggestions.push("打乱段首句式，长短句交替，避免模板排比");
+  if (codes.has("repetitive_rhythm") || codes.has("uniform_pace")) {
+    suggestions.push("打乱段首句式，长短句交替，避免模板排比与匀速平铺");
+  }
+  if (codes.has("three_point_parallel")) {
+    suggestions.push("三点并列改成 2 点或 5 点，或让第三项打断节奏");
+  }
+  if (codes.has("missing_punchline")) {
+    suggestions.push("补一句 20 字左右的锐利判断（代价/反直觉/取舍），方便读者转发");
   }
   if (suggestions.length === 0) {
     suggestions.push("未发现明显低质或事实风险信号；仍建议人工核对案例真实性后再推送");

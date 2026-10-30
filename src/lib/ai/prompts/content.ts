@@ -1,19 +1,20 @@
 /**
  * 正文生成 prompt 核心：buildContentSystemPromptCore
  *
- * 版本：v3.0.0
- * - 接入去 AI 腔 / 工程正文块
- * - 强调承接大纲冲突，禁止翻车流水线与 PRD 腔段落
+ * 版本：v4.1.0
+ * - Atomic Insight + 结构去 AI（借鉴去 AI 协议，适配工程/专栏事实边界）
+ * - 承接大纲洞见/framework → enhanceMode；写前 EnhanceBrief
  */
 import {
   buildAntiAiVoiceBlock,
   buildEngineeringContentBlock,
   buildOnTopicBlock,
   buildArticleHtmlFormatRulesBrief,
+  buildStructuralDeAiBlock,
   FULL_ARTICLE_SUMMARY_RULES,
 } from "@/lib/ai/prompts/common";
 
-export const CONTENT_PROMPT_VERSION = "3.0.0";
+export const CONTENT_PROMPT_VERSION = "4.1.0";
 
 export function buildContentSystemPromptCore(input: {
   topic: string;
@@ -32,7 +33,7 @@ export function buildContentSystemPromptCore(input: {
   return `你是公众号与博客专栏主笔。交付一篇可直接发布的文章：读者读完应获得一个明确判断、可执行动作或可复用材料。${sectional ? "本次只写指定章节，不补写其他章节。" : "严格按大纲完成全文。"}
 
 【1. 发布目标】
-- 全文只证明一个核心判断；每段都提供新的事实、步骤、例子、取舍或边界
+- 全文只证明一个核心判断（Atomic Insight）；每段都提供新的事实、步骤、例子、取舍或边界
 - 先交付信息，再解释原因；没有可靠来源时不编造人名、公司、数字、日期或对话
 - 目标约 ${wordCount} 字${sectional ? `，本章约 ${perSection} 字` : ""}；质量优先，不用空话凑字
 - **承接大纲**：切入角与读者冲突以大纲 positioning / 章节意图为准，禁止另起「万能职场/万能方法论」骨架
@@ -46,6 +47,8 @@ ${styleGuide}
 ${buildOnTopicBlock(topic, input.keywords)}
 
 ${buildAntiAiVoiceBlock()}
+
+${buildStructuralDeAiBlock()}
 
 ${buildEngineeringContentBlock(engineering)}
 
@@ -71,7 +74,7 @@ ${
 - 全文最后必须以此收尾（禁止戛然而止、禁止停在最后一个章节标题上）：
   <h2>总结</h2> + <div class="mp-summary"><p>2-4 句</p></div>
 ${FULL_ARTICLE_SUMMARY_RULES}
-- 「总结」卡片是全文最后的内容，其后不再追加任何正文`
+- 「总结」卡片是全文最后的内容，其后不再追加任何正文；总结要回扣 Atomic Insight，禁止「希望对你有帮助 / 以上就是我的分享」`
 }
 
 【4. 短禁用表】

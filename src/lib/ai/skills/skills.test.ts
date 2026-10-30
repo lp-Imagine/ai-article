@@ -1,13 +1,20 @@
 import { describe, expect, it } from "vitest";
 import type { OutlineOption } from "@/types/article";
 import {
+  enhanceModeFromFramework,
   fallbackBlueprint,
   normalizeBlueprint,
   sectionDirective,
 } from "@/lib/ai/skills/content";
 import {
+  applyEnhanceBriefToBlueprint,
+  insertEditAnchors,
+  normalizeEnhanceBrief,
+} from "@/lib/ai/skills/enhance";
+import {
   assessOutlineDiversity,
   assessSingleOutlineQuality,
+  normalizeOutlineConflict,
   outlineSkeletonSignature,
   pickOutlineSeedHints,
 } from "@/lib/ai/skills/outline";
@@ -17,6 +24,9 @@ const outline: OutlineOption = {
   index: 0,
   title: "Monorepo 选型不是工具投票",
   positioning: "用迁移成本和团队约束做选型",
+  atomicInsight: "选型看迁移成本，不看工具人气",
+  framework: "compare",
+  readerTension: "团队在投 Nx 还是 Turborepo 时卡住",
   sections: [
     { heading: "先画清仓库边界", summary: "列出共享代码与独立发布单元" },
     { heading: "Turborepo 和 Nx 怎么取舍", summary: "用任务图和治理能力做对比" },
@@ -33,6 +43,17 @@ describe("article blueprint skill", () => {
     expect(first.sectionPlans).toHaveLength(3);
     expect(new Set(first.sectionPlans.map((plan) => plan.evidenceMode)).size).toBe(3);
     expect(first.sectionPlans[1].doNotRepeat).toContain("先画清仓库边界");
+    expect(first.atomicInsight).toBe("选型看迁移成本，不看工具人气");
+    expect(first.enhanceMode).toBe("voice");
+    expect(first.readerTension).toContain("Nx");
+  });
+
+  it("maps outline framework to enhanceMode", () => {
+    expect(enhanceModeFromFramework("hot-take")).toBe("angle");
+    expect(enhanceModeFromFramework("list")).toBe("density");
+    expect(enhanceModeFromFramework("pain")).toBe("density");
+    expect(enhanceModeFromFramework("story")).toBe("detail");
+    expect(enhanceModeFromFramework("compare")).toBe("voice");
   });
 
   it("normalizes incomplete model blueprints without changing outline headings", () => {
@@ -62,9 +83,21 @@ describe("article blueprint skill", () => {
     expect(directive).toMatch(/本章证据类型：/);
     expect(directive).toContain("本章禁止重复：先画清仓库边界");
     expect(directive).toContain("专栏笔记");
-    expect(blueprint.readerTension).toContain("先画清仓库边界");
+    expect(directive).toContain("Atomic Insight");
+    expect(directive).toContain("选型看迁移成本");
+    expect(blueprint.readerTension).toContain("Nx");
     expect(blueprint.bannedPatterns.some((p) => /翻车/.test(p))).toBe(true);
     expect(blueprint.sectionPlans.every((p) => !/^给出/.test(p.evidencePlan))).toBe(true);
+  });
+
+  it("keeps upstream insight when normalizing blueprint", () => {
+    const fallback = fallbackBlueprint({ topic: "前端 monorepo 治理", outline, engineering: true });
+    const normalized = normalizeBlueprint(
+      { atomicInsight: "要坚持长期主义赋能", enhanceMode: "angle" },
+      fallback,
+    );
+    expect(normalized.atomicInsight).toBe(fallback.atomicInsight);
+    expect(normalized.enhanceMode).toBe("angle");
   });
 
   it("strips PRD voice when normalizing blueprint contributions", () => {
@@ -152,5 +185,68 @@ describe("outline and refine skills", () => {
     expect(brief).toContain("[high] low_density: 内容缺少具体细节");
     expect(brief).toContain("补充步骤或判断标准");
     expect(brief).toContain("只修复清单命中的问题");
+  });
+
+  it("normalizes outline conflicts with insight/framework fallbacks", () => {
+    const conflict = normalizeOutlineConflict({
+      tension: "选型时只看人气会拖垮迁移",
+      readerMoment: "投工具投票的会上",
+      stake: "半年后拆仓成本翻倍",
+      avoidSkeleton: "不走翻车→诱因→清单",
+    });
+    expect(conflict).not.toBeNull();
+    expect(conflict!.atomicInsight.length).toBeGreaterThanOrEqual(8);
+    expect(conflict!.frameworkHint).toBe("pain");
+  });
+
+  it("flags identical frameworks across schemes", () => {
+    const a = { ...outline, index: 0, framework: "list" as const, title: "方案甲" };
+    const b = {
+      ...outline,
+      index: 1,
+      framework: "list" as const,
+      title: "完全不同的标题乙",
+      atomicInsight: "另一句完全不同的洞见内容",
+      sections: [
+        { heading: "完全不同章一", summary: "另一路径" },
+        { heading: "完全不同章二", summary: "另一对比" },
+        { heading: "完全不同章三", summary: "另一试点" },
+      ],
+    };
+    const result = assessOutlineDiversity([a, b]);
+    expect(result.issues).toContain("多套大纲写作框架完全相同");
+  });
+});
+
+describe("enhance brief skill", () => {
+  it("merges section evidence boosts into blueprint", () => {
+    const blueprint = fallbackBlueprint({
+      topic: "前端 monorepo 治理",
+      outline,
+      engineering: true,
+    });
+    const brief = normalizeEnhanceBrief(
+      {
+        angleSharpen: "先算迁移成本再谈工具",
+        concreteAnchors: ["某中台团队拆仓当晚"],
+        sectionHints: outline.sections.map((s) => ({
+          heading: s.heading,
+          evidenceBoost: `针对「${s.heading}」写清退出条件`,
+        })),
+      },
+      outline,
+    );
+    expect(brief).not.toBeNull();
+    const enhanced = applyEnhanceBriefToBlueprint(blueprint, brief!);
+    expect(enhanced.sectionPlans[0].evidencePlan).toContain("退出条件");
+    expect(enhanced.thesis).toContain("锐化");
+  });
+
+  it("inserts edit anchors between sections", () => {
+    const html = insertEditAnchors(
+      "<p>开篇</p>\n<hr />\n<h2>一</h2><p>内容</p>\n<hr />\n<h2>二</h2><p>更多</p>",
+    );
+    expect(html).toContain("<!-- edit-anchor:");
+    expect((html.match(/<!-- edit-anchor:/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
 });

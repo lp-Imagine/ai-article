@@ -20,6 +20,8 @@ const ENV_KEY_MAP: Record<string, string> = {
   imageApiKey: "IMAGE_API_KEY",
   imageBaseUrl: "IMAGE_BASE_URL",
   accountPersona: "ACCOUNT_PERSONA",
+  writingPersona: "WRITING_PERSONA",
+  writingPreferences: "WRITING_PREFERENCES",
   defaultStyle: "DEFAULT_STYLE",
   blogGithubToken: "BLOG_GITHUB_TOKEN",
   blogGithubRepo: "BLOG_GITHUB_REPO",
@@ -45,6 +47,17 @@ export async function loadUserConfigMap(userId: string): Promise<Record<string, 
 /** 在当前请求上下文中加载并使用该用户的配置（多用户隔离） */
 export async function withUserConfig<T>(userId: string, fn: () => Promise<T>): Promise<T> {
   const map = await loadUserConfigMap(userId);
+  try {
+    // 近作风格盐按用户现算，注入 ALS（非持久化配置键）
+    const { loadStyleContextForUser } = await import("@/lib/ai/style-salt");
+    const { styleSalt } = await loadStyleContextForUser(userId);
+    if (styleSalt) map.STYLE_SALT = styleSalt;
+  } catch (error) {
+    console.warn(
+      "[withUserConfig] style salt skipped:",
+      error instanceof Error ? error.message : error,
+    );
+  }
   return configStore.run(map, fn);
 }
 

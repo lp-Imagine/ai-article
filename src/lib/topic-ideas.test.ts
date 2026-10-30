@@ -36,6 +36,26 @@ describe("assessTopicIdeaQuality", () => {
     ).toBe(true);
   });
 
+  it("rejects hollow insight even when topic is concrete", () => {
+    expect(
+      assessTopicIdeaQuality(
+        "MCP 工具接进后台后，超时该谁兜",
+        "权限边界不清会拖垮联调",
+        "要坚持长期主义",
+      ).ok,
+    ).toBe(false);
+  });
+
+  it("accepts sharp insight with concrete topic", () => {
+    expect(
+      assessTopicIdeaQuality(
+        "MCP 工具接进后台后，超时该谁兜",
+        "权限边界不清会拖垮联调",
+        "超时责任不清时，联调会变成互相甩锅",
+      ).ok,
+    ).toBe(true);
+  });
+
   it("rejects formulaic history suffixes", () => {
     expect(assessTopicIdeaQuality("前端缓存：我会先做的 3 个关键动作").ok).toBe(false);
   });

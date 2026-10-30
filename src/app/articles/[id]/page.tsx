@@ -56,11 +56,30 @@ type PublishRecord = {
 };
 
 type OutlineSection = { heading: string; summary: string };
+type OutlineFramework =
+  | "pain"
+  | "story"
+  | "list"
+  | "compare"
+  | "hot-take"
+  | "review";
 type OutlineOption = {
   index: number;
   title: string;
   positioning: string;
   sections: OutlineSection[];
+  atomicInsight?: string;
+  framework?: OutlineFramework;
+  readerTension?: string;
+};
+
+const OUTLINE_FRAMEWORK_LABELS: Record<OutlineFramework, string> = {
+  pain: "痛点",
+  story: "故事",
+  list: "清单",
+  compare: "对比",
+  "hot-take": "锐评",
+  review: "复盘",
 };
 
 type ArticleRecord = {
@@ -1714,7 +1733,27 @@ export default function ArticlePage({
 
                 {viewingOutline ? (
                   <div className="outline-detail-panel">
+                    {(viewingOutline.framework || viewingOutline.atomicInsight) && (
+                      <div className="outline-detail-meta">
+                        {viewingOutline.framework ? (
+                          <span className="outline-framework-tag">
+                            {OUTLINE_FRAMEWORK_LABELS[viewingOutline.framework] ??
+                              viewingOutline.framework}
+                          </span>
+                        ) : null}
+                        {viewingOutline.atomicInsight ? (
+                          <p className="outline-detail-insight">
+                            洞见：{viewingOutline.atomicInsight}
+                          </p>
+                        ) : null}
+                      </div>
+                    )}
                     <p className="outline-detail-desc">{viewingOutline.positioning}</p>
+                    {viewingOutline.readerTension ? (
+                      <p className="outline-detail-tension">
+                        张力：{viewingOutline.readerTension}
+                      </p>
+                    ) : null}
                     <div className="outline-sections-grid">
                       {viewingOutline.sections.map((s, idx) => {
                         const open = expandedOutlineSection === idx;

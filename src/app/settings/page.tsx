@@ -525,12 +525,57 @@ export default function SettingsPage() {
           {activeSection === "writing" && (
             <SectionCard
               title="写作默认"
-              description="账号背景只影响叙述口吻和举例偏好，不会把每篇文章都写成同一领域。"
+              description="人格与人设只影响口吻和举例偏好；近作风格盐与润色偏好会在生成时自动注入。"
             >
               <div className="info-banner mb-5">
                 <PenLine size={18} className="info-banner-icon" />
-                <p>文章写什么仍由每篇的「主题」决定，这里只设定默认写作风格与人设背景。</p>
+                <p>文章写什么仍由每篇的「主题」决定。选一套写作人格，并可选填账号背景。</p>
               </div>
+
+              <div className="mb-6">
+                <FieldLabel>写作人格</FieldLabel>
+                <p className="mt-1 mb-3 text-xs text-[var(--muted)]">
+                  像选排版主题一样选语气：干货密度 / 锐评态度 / 温暖叙事。
+                </p>
+                <div className="writing-persona-grid">
+                  {(
+                    [
+                      {
+                        id: "notes",
+                        label: "干货笔记",
+                        blurb: "高信息密度，步骤与边界清楚，少情绪铺陈",
+                      },
+                      {
+                        id: "sharp",
+                        label: "锐评观察",
+                        blurb: "态度鲜明、句子干脆，代价与反例先于鸡汤",
+                      },
+                      {
+                        id: "warm",
+                        label: "温暖叙事",
+                        blurb: "场景带动判断，语气亲近，情绪弧柔和但不空",
+                      },
+                    ] as const
+                  ).map((persona) => {
+                    const active = (getValue("writingPersona") || "notes") === persona.id;
+                    return (
+                      <button
+                        key={persona.id}
+                        type="button"
+                        className={clsx(
+                          "writing-persona-card",
+                          active && "writing-persona-card-active",
+                        )}
+                        onClick={() => setValue("writingPersona", persona.id)}
+                      >
+                        <span className="writing-persona-label">{persona.label}</span>
+                        <span className="writing-persona-blurb">{persona.blurb}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div>
                 <FieldLabel>公众号人设 / 简介（可选）</FieldLabel>
                 <textarea
@@ -541,6 +586,45 @@ export default function SettingsPage() {
                   className="mt-2 w-full px-4 py-3 text-sm resize-y min-h-[120px]"
                 />
               </div>
+
+              {getValue("writingPreferences") ? (
+                <div className="mt-6">
+                  <FieldLabel>已学习的润色偏好</FieldLabel>
+                  <p className="mt-1 mb-2 text-xs text-[var(--muted)]">
+                    来自你历史润色前后的差异；下次生成会软注入。清空并保存即可重置。
+                  </p>
+                  <textarea
+                    value={(() => {
+                      try {
+                        const parsed = JSON.parse(getValue("writingPreferences")) as unknown;
+                        return Array.isArray(parsed)
+                          ? parsed.filter((x) => typeof x === "string").join("\n")
+                          : getValue("writingPreferences");
+                      } catch {
+                        return getValue("writingPreferences");
+                      }
+                    })()}
+                    onChange={(e) => {
+                      const lines = e.target.value
+                        .split("\n")
+                        .map((s) => s.trim())
+                        .filter(Boolean)
+                        .slice(0, 8);
+                      setValue(
+                        "writingPreferences",
+                        lines.length ? JSON.stringify(lines) : "",
+                      );
+                    }}
+                    rows={4}
+                    className="mt-2 w-full px-4 py-3 text-sm resize-y min-h-[96px]"
+                    placeholder="暂无；润色几篇后会自动出现"
+                  />
+                </div>
+              ) : (
+                <p className="mt-5 text-xs text-[var(--muted)]">
+                  提示：全文润色后会自动学习 3–5 条偏好（如少套话、更短收束），并在下次写作时生效。
+                </p>
+              )}
             </SectionCard>
           )}
 

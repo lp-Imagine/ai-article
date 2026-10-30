@@ -1,13 +1,14 @@
 /**
  * 大纲生成 prompt：冲突发现 → 成稿。
  *
- * 版本：v3.0.0
+ * 版本：v3.1.0
  * - 先挖主题专属张力，再写大纲（避免固定角表套题）
  * - 削弱「交付物 PRD 腔」；章节 summary 用人话写清「读者带走什么」
+ * - 冲突阶段输出 atomicInsight + frameworkHint；支持灵感 seedInsight 锁定
  */
 import type { ChatMessage } from "@/lib/ai/types";
 import {
-  buildAccountPersonaBlock,
+  buildVoiceIdentityBlocks,
   buildAntiAiVoiceBlock,
   buildDomainAdaptationBlock,
   buildEngineeringOutlineBlock,
@@ -16,7 +17,15 @@ import {
   buildWritingUserPayload,
 } from "@/lib/ai/prompts/common";
 
-export const OUTLINE_PROMPT_VERSION = "3.0.0";
+export const OUTLINE_PROMPT_VERSION = "3.1.0";
+
+export type OutlineFrameworkHint =
+  | "pain"
+  | "story"
+  | "list"
+  | "compare"
+  | "hot-take"
+  | "review";
 
 export type OutlineConflict = {
   /** 这篇要钉住的具体张力（必须含主题专有词） */
@@ -27,6 +36,10 @@ export type OutlineConflict = {
   stake: string;
   /** 本篇故意不走的套路，一句话 */
   avoidSkeleton: string;
+  /** 读者转述给朋友的一句洞见 */
+  atomicInsight: string;
+  /** 建议写作框架 */
+  frameworkHint: OutlineFrameworkHint;
 };
 
 export type OutlinePromptInput = {
@@ -50,6 +63,9 @@ export type OutlinePromptInput = {
   conflicts?: OutlineConflict[] | null;
   /** 软提示（非强制角名），仅作差异化盐粒 */
   seedHint?: string | null;
+  /** 灵感点选带入的洞见（冲突阶段锁定锐化） */
+  seedInsight?: string | null;
+  seedTension?: string | null;
 };
 
 export function buildOutlineConflictPrompt(input: {
@@ -60,8 +76,12 @@ export function buildOutlineConflictPrompt(input: {
   keywords?: string | null;
   count: number;
   engineering: boolean;
+  seedInsight?: string | null;
+  seedTension?: string | null;
 }): ChatMessage[] {
   const { topic, count, audience, style } = input;
+  const seedInsight = input.seedInsight?.trim() || "";
+  const seedTension = input.seedTension?.trim() || "";
   return [
     {
       role: "system",
@@ -69,7 +89,7 @@ export function buildOutlineConflictPrompt(input: {
 
 ${buildDomainAdaptationBlock()}
 
-${buildAccountPersonaBlock()}
+${buildVoiceIdentityBlocks({ includeStyleSalt: false })}
 
 ${buildOnTopicBlock(input.topic, input.keywords)}
 
@@ -78,11 +98,18 @@ ${buildOnTopicBlock(input.topic, input.keywords)}
 - tension / readerMoment 里必须出现与主题相关的**专有词或具体场景名词**（不要用「隐形需求」「底层逻辑」「方法论」这类万能词）
 - ${count} 个张力的论证方向必须不同：例如一个偏时机、一个偏取舍标准、一个偏执行顺序——禁止都落成「先讲翻车再讲正解」
 - avoidSkeleton 写清本条故意避开的流水线，例如「不走：翻车现场→诱因→判断标准→行动清单」
+- atomicInsight：读者读完转述给朋友的一句判断（≤48 字），禁止「要坚持/很重要」正确废话
+- frameworkHint 只能是：pain | story | list | compare | hot-take | review；${count} 条之间框架尽量不全相同
 - 禁止虚构姓名、公司、精确百分比；用匿名可核对场景即可
 - 目标读者：${audience}；风格：${style}；目标：${input.goal?.trim() || "知识分享"}
+${
+  seedInsight
+    ? `\n【灵感锁定洞见】\n- 用户从灵感选定洞见：${seedInsight}${seedTension ? `\n- 张力提示：${seedTension}` : ""}\n- 第 1 条 conflict 必须围绕该洞见锐化（可改写得更尖，不可换题）；其余 ${Math.max(0, count - 1)} 条另开不同框架/冲突`
+    : ""
+}
 
 【输出】
-JSON：{ "conflicts": [ { "tension", "readerMoment", "stake", "avoidSkeleton" } ] }
+JSON：{ "conflicts": [ { "tension", "readerMoment", "stake", "avoidSkeleton", "atomicInsight", "frameworkHint" } ] }
 - conflicts 长度必须为 ${count}`,
     },
     {
@@ -95,6 +122,7 @@ JSON：{ "conflicts": [ { "tension", "readerMoment", "stake", "avoidSkeleton" } 
         goal: input.goal,
         requiredConflictCount: count,
         contentMode: input.engineering ? "engineering-hands-on" : "general",
+        ...(seedInsight ? { seedInsight, seedTension: seedTension || null } : {}),
       }),
     },
   ];
@@ -122,19 +150,22 @@ export function buildOutlinePrompt(input: OutlinePromptInput): ChatMessage[] {
 ${conflicts
   .map(
     (c, i) =>
-      `${i + 1}. 张力：${c.tension}｜卡点：${c.readerMoment}｜代价：${c.stake}｜避开：${c.avoidSkeleton}`,
+      `${i + 1}. 框架：${c.frameworkHint}｜洞见：${c.atomicInsight}｜张力：${c.tension}｜卡点：${c.readerMoment}｜代价：${c.stake}｜避开：${c.avoidSkeleton}`,
   )
   .join("\n")}
-- 论证顺序与结尾落点不得同构；禁止整组都写成翻车流水线`
+- 论证顺序与结尾落点不得同构；禁止整组都写成翻车流水线；framework 尽量不全相同`
       : null;
 
   const lockBlock = conflict
     ? `【锁定冲突——必须围绕它写，不许换成别的万能角】
+- 写作框架：${conflict.frameworkHint}
+- 必须兑现的洞见：${conflict.atomicInsight}
 - 张力：${conflict.tension}
 - 读者卡点：${conflict.readerMoment}
 - 搞错代价：${conflict.stake}
 - 故意避开：${conflict.avoidSkeleton}
-- 标题、章节顺序、结尾落点都必须服务上述张力；禁止改写成「翻车→诱因→标准→清单」等通用流水线`
+- 标题、章节顺序、结尾落点都必须服务上述张力与洞见；禁止改写成「翻车→诱因→标准→清单」等通用流水线
+- atomicInsight 字段原样或仅做锐化，禁止换题`
     : multiConflictBlock
       ? multiConflictBlock
       : angle
@@ -147,6 +178,10 @@ ${conflicts
       ? `- 差异化盐粒（参考，非强制模板名）：${seedHint}`
       : "";
 
+  const frameworkContract = conflict
+    ? frameworkSummaryHint(conflict.frameworkHint)
+    : "按本方案 framework：pain/list→可动手点；hot-take→态度句；compare→取舍边界；story/review→场景转折";
+
   return [
     {
       role: "system",
@@ -158,7 +193,7 @@ ${conflicts
 
 ${buildDomainAdaptationBlock()}
 
-${buildAccountPersonaBlock()}
+${buildVoiceIdentityBlocks({ includeStyleSalt: false })}
 
 ${buildOnTopicBlock(input.topic, input.keywords)}
 
@@ -171,7 +206,10 @@ ${lockBlock}
 ${softSeed}
 - 必须服务同一主题「${topic}」，差异在切入与论证路径，不在换赛道
 - 目标读者：${audience}，写作风格：${style}，文章目标：${input.goal?.trim() || "知识分享"}，目标字数：约 ${wordCount} 字
-- positioning 用 15-30 字写清：这篇独特判断、适合谁、读完能带走什么（人话，不要「交付物/锚定」）
+- positioning 用 15-30 字人话写清：洞见落点、适合谁、读完带走什么（不要「交付物/锚定」）
+- atomicInsight：读者转述给朋友的一句（≤48 字）；有锁定洞见时必须承接
+- framework：pain | story | list | compare | hot-take | review（有锁定则沿用）
+- readerTension：一句话写清读者卡在哪
 
 ${buildStyleGuide(style)}
 
@@ -179,6 +217,7 @@ ${buildStyleGuide(style)}
 - 每个大纲约 ${sectionCount} 章；每章只回答一个别人章回答不了的问题
 - heading ≤ 20 字，尽量带主题专有名词；禁止「什么是 / 为什么重要 / 方法论 / 注意事项 / 总结」
 - summary 用口语写清「读者读完这章能多知道/多会判断什么」；**禁止**以「给出、通过、拆解、输出、锚定、全面介绍」起句
+- 章节合同（按框架）：${frameworkContract}
 - ${
         engineering
           ? "工程主题：至少一半章节落到接口、代码、状态、命令或测试边界（写在 summary 里用具体名词，别空喊实战）。"
@@ -197,7 +236,7 @@ ${
     ? "- outlines 数组长度必须为 1"
     : `- **必须恰好返回 ${count} 个大纲**（outlines 数组长度 = ${count}）`
 }
-- JSON：{ "outlines": [ { "title", "positioning", "sections": [ { "heading", "summary" } ] } ] }`,
+- JSON：{ "outlines": [ { "title", "positioning", "atomicInsight", "framework", "readerTension", "sections": [ { "heading", "summary" } ] } ] }`,
     },
     {
       role: "user",
@@ -226,4 +265,21 @@ ${
       }),
     },
   ];
+}
+
+function frameworkSummaryHint(framework: OutlineFrameworkHint): string {
+  switch (framework) {
+    case "list":
+    case "pain":
+      return "多数章 summary 须含可动手点/检查项（动词+对象）";
+    case "hot-take":
+      return "至少一章 summary 含鲜明态度句（我主张/我反对/别再…）";
+    case "compare":
+      return "至少一章写清取舍边界（什么情况下选 A / 不选 B）";
+    case "story":
+    case "review":
+      return "至少一章用具体场景转折推动洞见，禁止空喊复盘";
+    default:
+      return "summary 须能看出增强方向";
+  }
 }

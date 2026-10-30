@@ -12,11 +12,26 @@ export type OutlineSection = {
   summary: string;
 };
 
+/** 大纲写作框架（精简自常见公众号骨架） */
+export type OutlineFramework =
+  | "pain"
+  | "story"
+  | "list"
+  | "compare"
+  | "hot-take"
+  | "review";
+
 export type OutlineOption = {
   index: number;
   title: string;
   positioning: string;
   sections: OutlineSection[];
+  /** 读者转述给朋友的一句洞见 */
+  atomicInsight?: string;
+  /** 写作框架 */
+  framework?: OutlineFramework;
+  /** 读者当前冲突 */
+  readerTension?: string;
 };
 
 export type ArticleFormValues = {

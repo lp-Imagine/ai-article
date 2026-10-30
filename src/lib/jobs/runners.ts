@@ -69,11 +69,23 @@ async function runOutline(job: GenerationJob, update: ProgressUpdater) {
   });
   if (!article) throw new Error("文章不存在");
 
-  const payload = (job.payload ?? {}) as { outlineCount?: number };
+  const payload = (job.payload ?? {}) as {
+    outlineCount?: number;
+    seedInsight?: string;
+    seedTension?: string;
+  };
   let outlineCount = article.outlineCount ?? 3;
   if (typeof payload.outlineCount === "number" && payload.outlineCount >= 2 && payload.outlineCount <= 6) {
     outlineCount = payload.outlineCount;
   }
+  const seedInsight =
+    typeof payload.seedInsight === "string" && payload.seedInsight.trim()
+      ? payload.seedInsight.trim().slice(0, 72)
+      : undefined;
+  const seedTension =
+    typeof payload.seedTension === "string" && payload.seedTension.trim()
+      ? payload.seedTension.trim().slice(0, 120)
+      : undefined;
 
   await update(20, "调用 AI 生成大纲");
   const outlines = await generateOutline({
@@ -84,6 +96,8 @@ async function runOutline(job: GenerationJob, update: ProgressUpdater) {
     goal: article.goal,
     keywords: article.keywords,
     outlineCount,
+    seedInsight,
+    seedTension,
   });
 
   await update(85, "保存大纲");
@@ -523,6 +537,7 @@ async function runPolish(job: GenerationJob, update: ProgressUpdater) {
   const isReformat = mode === "reformat";
 
   await update(30, isReformat ? "整理格式中" : "润色中");
+  const beforeContent = article.content;
   const content = isReformat
     ? await reformatArticleHtml({
         content: article.content,
@@ -532,6 +547,27 @@ async function runPolish(job: GenerationJob, update: ProgressUpdater) {
         content: article.content,
         mode: mode as "更正式" | "更口语" | "更简洁" | "更营销",
       });
+
+  if (!isReformat && content !== beforeContent) {
+    try {
+      const { learnPreferencesFromPolishDiff } = await import("@/lib/ai/style-salt");
+      const learned = await learnPreferencesFromPolishDiff(
+        job.userId,
+        beforeContent,
+        content,
+      );
+      if (learned.length > 0) {
+        console.info(
+          `[runPolish] learned ${learned.length} preference rule(s) for user ${job.userId}`,
+        );
+      }
+    } catch (error) {
+      console.warn(
+        "[runPolish] preference learn skipped:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
 
   await update(85, "保存");
   await db.articleVersion.create({
@@ -602,11 +638,24 @@ async function runQuickGenerate(job: GenerationJob, update: ProgressUpdater) {
   });
   if (!article) throw new Error("文章不存在");
 
-  const payload = (job.payload ?? {}) as { autoPush?: boolean; autoPushBlog?: boolean };
+  const payload = (job.payload ?? {}) as {
+    autoPush?: boolean;
+    autoPushBlog?: boolean;
+    seedInsight?: string;
+    seedTension?: string;
+  };
 
   // 1) 生成大纲（自动采用第 1 套方案）
   await update(8, "生成大纲");
   const outlineCount = article.outlineCount ?? 3;
+  const seedInsight =
+    typeof payload.seedInsight === "string" && payload.seedInsight.trim()
+      ? payload.seedInsight.trim().slice(0, 72)
+      : undefined;
+  const seedTension =
+    typeof payload.seedTension === "string" && payload.seedTension.trim()
+      ? payload.seedTension.trim().slice(0, 120)
+      : undefined;
   const outlines = await generateOutline({
     topic: article.topic,
     style: article.style,
@@ -615,6 +664,8 @@ async function runQuickGenerate(job: GenerationJob, update: ProgressUpdater) {
     goal: article.goal,
     keywords: article.keywords,
     outlineCount,
+    seedInsight,
+    seedTension,
   });
   const selectedOutline = outlines[0];
   if (!selectedOutline) throw new Error("大纲生成失败：未返回可用方案");

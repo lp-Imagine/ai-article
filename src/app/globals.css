@@ -1276,8 +1276,20 @@ body::before {
   color: var(--accent);
 }
 
-.topic-idea-reason {
+.topic-idea-insight {
   margin: 6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--foreground);
+  opacity: 0.88;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.topic-idea-reason {
+  margin: 4px 0 0;
   font-size: 12px;
   line-height: 1.45;
   color: var(--muted);
@@ -3201,9 +3213,46 @@ body::before {
   overflow-x: hidden;
 }
 
+.outline-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 12px;
+  margin-bottom: 10px;
+}
+
+.outline-framework-tag {
+  flex-shrink: 0;
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+}
+
+.outline-detail-insight {
+  margin: 0;
+  flex: 1;
+  min-width: 12rem;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--foreground);
+}
+
 .outline-detail-desc {
   font-size: 13px;
   line-height: 1.6;
+  color: var(--muted);
+}
+
+.outline-detail-tension {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
   color: var(--muted);
 }
 
@@ -4236,6 +4285,54 @@ body::before {
   .settings-footer-save {
     align-self: flex-end;
   }
+}
+
+.writing-persona-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+@media (min-width: 720px) {
+  .writing-persona-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.writing-persona-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 14px 14px 16px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface, #fff);
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.writing-persona-card:hover {
+  border-color: var(--accent-border);
+}
+
+.writing-persona-card-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent-border);
+}
+
+.writing-persona-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--foreground);
+}
+
+.writing-persona-blurb {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
 }
 
 .info-banner {

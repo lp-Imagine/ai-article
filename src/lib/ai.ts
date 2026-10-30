@@ -35,7 +35,7 @@ type ChatMessage = {
 
 // 抽到子模块的 prompt / 常量
 import {
-  buildAccountPersonaBlock,
+  buildVoiceIdentityBlocks,
   buildDomainAdaptationBlock,
   buildStyleGuide,
   buildWritingUserPayload,
@@ -78,9 +78,16 @@ import {
   type ArticleBlueprint,
 } from "@/lib/ai/skills/content";
 import {
+  applyEnhanceBriefToBlueprint,
+  buildEnhanceBriefPrompt,
+  insertEditAnchors,
+  normalizeEnhanceBrief,
+} from "@/lib/ai/skills/enhance";
+import {
   assessOutlineDiversity,
   assessSingleOutlineQuality,
-  isValidOutlineConflict,
+  isOutlineFramework,
+  normalizeOutlineConflict,
   outlineSkeletonSignature,
   pickOutlineSeedHints,
 } from "@/lib/ai/skills/outline";
@@ -523,7 +530,26 @@ function normalizeOutlineOption(
   topic: string,
   style: string,
   wordCount: number,
+  conflict?: OutlineConflict | null,
 ): OutlineOption {
+  const framework =
+    (isOutlineFramework(opt.framework) ? opt.framework : null) ??
+    conflict?.frameworkHint ??
+    undefined;
+  const atomicInsight =
+    (typeof opt.atomicInsight === "string" && opt.atomicInsight.trim().length >= 8
+      ? opt.atomicInsight.trim().slice(0, 72)
+      : null) ??
+    conflict?.atomicInsight ??
+    undefined;
+  const readerTension =
+    (typeof opt.readerTension === "string" && opt.readerTension.trim().length >= 4
+      ? opt.readerTension.trim().slice(0, 120)
+      : null) ??
+    (conflict
+      ? `${conflict.readerMoment}（代价：${conflict.stake}）`
+      : undefined);
+
   return {
     index: idx,
     title: opt.title ?? `${topic}：方案 ${idx + 1}`,
@@ -532,6 +558,9 @@ function normalizeOutlineOption(
       heading: section.heading ?? "未命名章节",
       summary: section.summary ?? "",
     })),
+    ...(atomicInsight ? { atomicInsight } : {}),
+    ...(framework ? { framework } : {}),
+    ...(readerTension ? { readerTension } : {}),
   };
 }
 
@@ -553,20 +582,35 @@ async function discoverOutlineConflicts(input: {
   keywords?: string | null;
   count: number;
   engineering: boolean;
+  seedInsight?: string | null;
+  seedTension?: string | null;
 }): Promise<OutlineConflict[]> {
   const raw = await callChat(
     buildOutlineConflictPrompt(input),
     {
       jsonMode: true,
-      maxTokens: Math.min(4096, 600 + input.count * 280),
+      maxTokens: Math.min(4096, 600 + input.count * 320),
       role: "outline",
       temperature: 0.85,
     },
   );
   const parsed = safeParse<{ conflicts?: unknown[] }>(raw, {});
   const conflicts = (parsed.conflicts ?? [])
-    .filter(isValidOutlineConflict)
+    .map(normalizeOutlineConflict)
+    .filter((c): c is OutlineConflict => c !== null)
     .slice(0, input.count);
+
+  const seedInsight = input.seedInsight?.trim();
+  if (seedInsight && conflicts[0]) {
+    conflicts[0] = {
+      ...conflicts[0],
+      atomicInsight: seedInsight.slice(0, 72),
+      ...(input.seedTension?.trim()
+        ? { tension: input.seedTension.trim().slice(0, 120) }
+        : {}),
+    };
+  }
+
   if (conflicts.length < input.count) {
     console.warn(
       `[generateOutline] conflict discovery got ${conflicts.length}/${input.count}, seed hints will fill gaps`,
@@ -583,6 +627,8 @@ export async function generateOutline(input: {
   goal?: string | null;
   keywords?: string | null;
   outlineCount?: number | null;
+  seedInsight?: string | null;
+  seedTension?: string | null;
 }): Promise<OutlineOption[]> {
   const style = input.style || "干货型";
   const audience = input.audience || "公众号读者";
@@ -600,6 +646,8 @@ export async function generateOutline(input: {
     keywords: input.keywords,
     count,
     engineering,
+    seedInsight: input.seedInsight,
+    seedTension: input.seedTension,
   });
 
   if ((process.env.OUTLINE_GENERATION_MODE ?? "parallel") !== "monolithic") {
@@ -644,7 +692,14 @@ export async function generateOutline(input: {
       parsed.outlines
         .slice(0, count)
         .map((option, index) =>
-          normalizeOutlineOption(option, index, input.topic, style, wordCount),
+          normalizeOutlineOption(
+            option,
+            index,
+            input.topic,
+            style,
+            wordCount,
+            conflicts[index] ?? null,
+          ),
         ),
     );
   }
@@ -692,6 +747,7 @@ async function generateOutlinesInParallel(
             topic,
             style,
             wordCount,
+            conflict,
           );
           const quality = assessSingleOutlineQuality(normalized);
           if (!quality.ok) {
@@ -973,7 +1029,7 @@ async function generateContentBySections(
   const sections = input.outline.sections ?? [];
   const perSection = Math.max(280, Math.floor(wordCount / Math.max(sections.length, 1)));
   const engineering = isEngineeringTopic(input.topic, input.keywords ?? input.outline.title ?? null);
-  const accountBlock = buildAccountPersonaBlock();
+  const accountBlock = buildVoiceIdentityBlocks({ includeStyleSalt: true });
   const domainBlock = buildDomainAdaptationBlock();
   const styleGuide = buildStyleGuide(style);
   const systemCore = buildContentSystemPromptCore({
@@ -994,7 +1050,7 @@ async function generateContentBySections(
     engineering,
   });
 
-  const totalSteps = 1 + sections.length;
+  const totalSteps = 2 + sections.length;
   let step = 0;
   const report = async (label: string) => {
     await onProgress?.(label, step, totalSteps);
@@ -1008,7 +1064,8 @@ async function generateContentBySections(
 输出 JSON：{ "title": string, "summary": string, "openingHtml": string, "blueprint": object }
 - title ≤ 20 字；summary 80-120 字，人话写清读者带走什么
 - openingHtml：开篇 2-4 段 <p>（直接点题冲突或判断），**不要** <h2>，不要写正文章节，禁止闲聊代入
-- blueprint 必须承接大纲 positioning 与各章 summary；禁止把全文改写成翻车流水线或百科骨架
+- blueprint 必须承接大纲 positioning、atomicInsight、framework 与各章 summary；禁止把全文改写成翻车流水线或百科骨架
+- 若大纲已有 atomicInsight：只允许锐化，禁止换题
 
 ${BLUEPRINT_JSON_INSTRUCTION}`;
   const metaUserPayload = {
@@ -1024,6 +1081,10 @@ ${BLUEPRINT_JSON_INSTRUCTION}`;
     task: "meta",
     outlinePositioning: input.outline.positioning,
     outlineTitle: input.outline.title,
+    lockedAtomicInsight: input.outline.atomicInsight ?? null,
+    lockedFramework: input.outline.framework ?? null,
+    lockedReaderTension: input.outline.readerTension ?? null,
+    preferredEnhanceMode: blueprintFallback.enhanceMode,
   };
   const metaMaxTokens = Math.min(4096, 1600 + sections.length * 320);
 
@@ -1079,7 +1140,7 @@ ${BLUEPRINT_JSON_INSTRUCTION}`;
     }
   }
   const meta = safeParse<Record<string, unknown>>(metaRaw, {});
-  const blueprint = normalizeBlueprint(meta.blueprint, blueprintFallback);
+  let blueprint = normalizeBlueprint(meta.blueprint, blueprintFallback);
   const title =
     (typeof meta.title === "string" && meta.title) ||
     input.outline.title ||
@@ -1089,6 +1150,31 @@ ${BLUEPRINT_JSON_INSTRUCTION}`;
     `围绕「${input.topic}」的一篇${style}稿，读完能带走可执行要点。`;
   const openingHtml =
     extractHtmlFromLlmJson(meta, ["openingHtml", "opening", "content"]) || "";
+
+  await report("写前增强简报");
+  try {
+    const enhanceRaw = await callChat(buildEnhanceBriefPrompt({
+      topic: input.topic,
+      outline: input.outline,
+      blueprint,
+      engineering,
+    }), {
+      jsonMode: true,
+      maxTokens: Math.min(2048, 700 + sections.length * 180),
+      role: "content",
+      temperature: 0.7,
+    });
+    const enhanceParsed = safeParse<Record<string, unknown>>(enhanceRaw, {});
+    const brief = normalizeEnhanceBrief(enhanceParsed, input.outline);
+    if (brief) {
+      blueprint = applyEnhanceBriefToBlueprint(blueprint, brief);
+    }
+  } catch (error) {
+    console.warn(
+      "[generateContentBySections] enhance brief skipped:",
+      error instanceof Error ? error.message : error,
+    );
+  }
 
   // 各章互不依赖（上下文只用大纲标题），并发生成把串行的 N×30s 压成 N/并发数
   const allHeadings = sections.map((s) => s.heading);
@@ -1138,7 +1224,8 @@ ${BLUEPRINT_JSON_INSTRUCTION}`;
     );
   }
 
-  const content = [openingHtml, ...sectionParts].filter(Boolean).join("\n<hr />\n");
+  const merged = [openingHtml, ...sectionParts].filter(Boolean).join("\n<hr />\n");
+  const content = insertEditAnchors(merged);
   if (countPlainTextChars(content) < 200) {
     throw new Error("正文生成失败：分段合并后内容过短，请重试");
   }
@@ -1185,7 +1272,7 @@ export async function generateContent(
   }
 
   const style = input.style || "干货型";
-  const accountBlock = buildAccountPersonaBlock();
+  const accountBlock = buildVoiceIdentityBlocks({ includeStyleSalt: true });
   const domainBlock = buildDomainAdaptationBlock();
   const styleGuide = buildStyleGuide(style);
   const engineering = isEngineeringTopic(
@@ -1871,7 +1958,15 @@ export async function generateHotTopics(input: {
    * history-extend：只沿作者近期文章赛道开新角度（历史模式）
    */
   intent?: "fresh" | "history-extend";
-}): Promise<Array<{ topic: string; angle: string; tags: string[] }>> {
+}): Promise<
+  Array<{
+    topic: string;
+    angle: string;
+    tags: string[];
+    atomicInsight?: string;
+    tension?: string;
+  }>
+> {
   if (!isAiConfigured()) return [];
 
   const count = Math.max(4, Math.min(10, input.count ?? 6));
@@ -1949,8 +2044,10 @@ ${
 - 选题 12-24 字；不要标题党、震惊体、感叹号堆叠
 
 【输出】
-JSON：{ "topics": [{ "topic": string, "angle": string, "tags": string[] }] }
+JSON：{ "topics": [{ "topic": string, "angle": string, "atomicInsight": string, "tension": string, "tags": string[] }] }
 - angle：≤30 字，必须点出「读者卡点或搞错代价」，不要写「很火/值得关注」
+- atomicInsight：≤48 字，读者读完转述给朋友的那一句判断（禁止「要坚持/很重要/赋能」正确废话）
+- tension：≤24 字，搞错的代价或卡点
 - tags：2-3 个具体标签（贴分类，不要全写成「热点」）`,
     },
     {
@@ -1974,17 +2071,25 @@ JSON：{ "topics": [{ "topic": string, "angle": string, "tags": string[] }] }
   try {
     const raw = await callChat(prompt, {
       jsonMode: true,
-      maxTokens: 1800,
+      maxTokens: 2200,
       role: "topic-ideas",
       temperature: 0.92,
     });
     const parsed = safeParse<{
-      topics?: Array<{ topic?: string; angle?: string; tags?: string[] }>;
+      topics?: Array<{
+        topic?: string;
+        angle?: string;
+        tags?: string[];
+        atomicInsight?: string;
+        tension?: string;
+      }>;
     }>(raw, {});
     const items = (parsed.topics ?? [])
       .map((t) => ({
         topic: String(t.topic ?? "").trim(),
         angle: String(t.angle ?? "").trim(),
+        atomicInsight: String(t.atomicInsight ?? "").trim(),
+        tension: String(t.tension ?? "").trim(),
         tags: Array.isArray(t.tags)
           ? t.tags.map((x) => String(x).trim()).filter(Boolean).slice(0, 3)
           : [],

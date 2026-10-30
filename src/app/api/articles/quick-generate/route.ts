@@ -16,6 +16,8 @@ const quickGenerateSchema = z.object({
   audience: z.string().max(100).optional(),
   goal: z.string().max(100).optional(),
   outlineCount: z.number().int().min(2).max(6).optional(),
+  seedInsight: z.string().trim().max(72).optional(),
+  seedTension: z.string().trim().max(120).optional(),
   autoPush: z.boolean().optional(),
   autoPushBlog: z.boolean().optional(),
 });
@@ -52,6 +54,8 @@ export async function POST(request: Request) {
         autoPush: input.autoPush === true,
         // 博客同步仅超级管理员
         autoPushBlog: user.role === "SUPER_ADMIN" && input.autoPushBlog === true,
+        ...(input.seedInsight ? { seedInsight: input.seedInsight } : {}),
+        ...(input.seedTension ? { seedTension: input.seedTension } : {}),
       },
     });
 
