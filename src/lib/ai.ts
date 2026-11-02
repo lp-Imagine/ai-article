@@ -625,13 +625,29 @@ async function discoverOutlineConflicts(input: {
 
   const seedInsight = input.seedInsight?.trim();
   if (seedInsight && conflicts[0]) {
-    conflicts[0] = {
-      ...conflicts[0],
-      atomicInsight: seedInsight.slice(0, 72),
-      ...(input.seedTension?.trim()
-        ? { tension: input.seedTension.trim().slice(0, 120) }
-        : {}),
-    };
+    // 灵感 seed 须像可用洞见；空洞/元话术不锁定，避免绕过冲突硬闸
+    const seedHollow =
+      /要坚持|很重要|持续优化|长期主义|赋能|闭环|底层逻辑|正确的?废话|体系化|抓手|认知升级|方法论|适合快速开写|^写清「|别再堆正确废话/u;
+    const usableInsight =
+      seedInsight.length >= 8 &&
+      seedInsight.length <= 72 &&
+      !seedHollow.test(seedInsight);
+    const seedTension = input.seedTension?.trim() ?? "";
+    const usableTension =
+      seedTension.length >= 6 &&
+      seedTension.length <= 120 &&
+      !seedHollow.test(seedTension);
+    if (usableInsight) {
+      conflicts[0] = {
+        ...conflicts[0],
+        atomicInsight: seedInsight.slice(0, 72),
+        ...(usableTension ? { tension: seedTension.slice(0, 120) } : {}),
+      };
+    } else {
+      console.warn(
+        "[generateOutline] seedInsight rejected as hollow/meta, not locking into conflict",
+      );
+    }
   }
 
   if (conflicts.length < input.count) {
@@ -1550,12 +1566,23 @@ function getRefineMinScore(): number {
   return Number.isFinite(raw) && raw > 0 ? raw : 85;
 }
 
-const FORCE_REFINE_CODES = new Set(["low_density", "hollow_section", "empty_filler"]);
+const FORCE_REFINE_CODES = new Set([
+  "low_density",
+  "hollow_section",
+  "empty_filler",
+  "insight_echo",
+  "opening_echo",
+]);
 
 function shouldForceRefine(
   issues: Array<{ code: string; severity: string }>,
 ): boolean {
-  return issues.some((i) => FORCE_REFINE_CODES.has(i.code) && i.severity === "high");
+  return issues.some(
+    (i) =>
+      (FORCE_REFINE_CODES.has(i.code) && i.severity === "high") ||
+      (i.code === "insight_echo" && (i.severity === "high" || i.severity === "medium")) ||
+      (i.code === "opening_echo" && i.severity === "medium"),
+  );
 }
 
 
@@ -2145,13 +2172,14 @@ ${
       ? "- 「综合」按人设与近期文章配比；无人设时技术向约占 2/3，其余可为职场/写作交叉，但须具体"
       : "- 落到具体工具/协议/实践名词；面向有经验读者，禁入门科普"
 }
-- 选题 12-24 字；不要标题党、震惊体、感叹号堆叠
+- 选题 10-28 字；不要标题党、震惊体、感叹号堆叠
+- **无合格 atomicInsight 的条目视为废题，禁止凑数**；禁止元洞见（「写清取舍」「别再堆废话」「适合快速开写」）
 
 【输出】
 JSON：{ "topics": [{ "topic": string, "angle": string, "atomicInsight": string, "tension": string, "tags": string[] }] }
-- angle：≤30 字，必须点出「读者卡点或搞错代价」，不要写「很火/值得关注」
-- atomicInsight：≤48 字，读者读完转述给朋友的那一句判断（禁止「要坚持/很重要/赋能」正确废话）
-- tension：≤24 字，搞错的代价或卡点
+- angle：≤30 字，必须含具体名词 +「读者卡点或搞错代价」，不要写「很火/值得关注/适合开写」
+- atomicInsight：8-48 字，读者转述给朋友的一句判断（禁止「要坚持/很重要/赋能/体系化/方法论」）
+- tension：6-24 字，搞错的代价或卡点（须与 topic 相关）
 - tags：2-3 个具体标签（贴分类，不要全写成「热点」）`,
     },
     {
@@ -2188,6 +2216,8 @@ JSON：{ "topics": [{ "topic": string, "angle": string, "atomicInsight": string,
         tension?: string;
       }>;
     }>(raw, {});
+    const hollowInsight =
+      /要坚持|很重要|持续优化|长期主义|赋能|闭环|底层逻辑|正确的?废话|体系化|抓手|认知升级|方法论|适合快速开写|^写清「|别再堆正确废话/u;
     const items = (parsed.topics ?? [])
       .map((t) => ({
         topic: String(t.topic ?? "").trim(),
@@ -2198,18 +2228,25 @@ JSON：{ "topics": [{ "topic": string, "angle": string, "atomicInsight": string,
           ? t.tags.map((x) => String(x).trim()).filter(Boolean).slice(0, 3)
           : [],
       }))
-      .filter((t) => t.topic.length >= 8 && t.topic.length <= 32);
+      .filter((t) => {
+        if (t.topic.length < 10 || t.topic.length > 28) return false;
+        if (t.atomicInsight.length < 8 || hollowInsight.test(t.atomicInsight)) return false;
+        if (t.angle && /很火|值得关注|适合开写/.test(t.angle)) return false;
+        return true;
+      });
 
-    // 二次去同质：批内相似度过高的丢掉
+    // 二次去同质：批内字面重叠过高的丢掉
     const unique: typeof items = [];
     for (const item of items) {
       const tooClose = unique.some((u) => {
-        const a = new Set(item.topic.replace(/\s+/g, "").split(""));
-        const b = new Set(u.topic.replace(/\s+/g, "").split(""));
+        const a = item.topic.replace(/\s+/g, "");
+        const b = u.topic.replace(/\s+/g, "");
+        if (!a || !b) return false;
         let inter = 0;
-        for (const ch of a) if (b.has(ch)) inter += 1;
-        const union = a.size + b.size - inter;
-        return union > 0 && inter / union > 0.55;
+        const setB = new Set(b);
+        for (const ch of new Set(a)) if (setB.has(ch)) inter += 1;
+        const union = new Set(a).size + setB.size - inter;
+        return union > 0 && inter / union > 0.52;
       });
       if (!tooClose) unique.push(item);
     }

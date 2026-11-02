@@ -530,15 +530,15 @@ function buildTemplateCandidates(
 
   return pool.map((item) => {
     const reason = isTechHeavyCandidate({ topic: item.topic, tags: item.tags })
-      ? "偏向前端 / AI / 工程向，适合快速开写。"
-      : "来自稳定模板库，适合快速开写。";
+      ? "模板题：建议改成你自己的踩坑或选型边界后再开写。"
+      : "模板题：结合真实场景补一个代价或取舍后再开写。";
     return {
       topic: item.topic,
       reason,
       source: "template" as const,
       tags: item.tags,
       baseScore: isTechHeavyCandidate({ topic: item.topic, tags: item.tags }) ? 0.74 : 0.58,
-      atomicInsight: synthesizeTopicInsight(item.topic, reason),
+      atomicInsight: synthesizeTopicInsight(item.topic),
     };
   });
 }
@@ -548,9 +548,9 @@ function buildHotCandidates(seeds: string[], rnd: () => number): Candidate[] {
   return shuffledSeeds
     .map((topic) => {
       const reason = TECH_AFFINITY_RE.test(topic)
-        ? "工程向种子题，可改成你自己的踩坑或选型角度。"
-        : "分类种子题，建议结合你的真实场景再落笔。";
-      const atomicInsight = synthesizeTopicInsight(topic, reason);
+        ? "种子题：改成你自己的踩坑或选型角度再开写。"
+        : "种子题：结合真实场景补代价或取舍再落笔。";
+      const atomicInsight = synthesizeTopicInsight(topic);
       return {
         topic,
         reason,
@@ -571,17 +571,62 @@ type LlmHotTopic = {
   tension?: string;
 };
 
-const WEAK_INSIGHT_RE =
-  /要坚持|很重要|持续优化|长期主义|赋能|闭环|底层逻辑|正确的废话|全面提升|值得关注/u;
+const WEAK_REASON_RE = /很火|值得关注|大家都很关心|持续升温|热度不减|趋势明显/u;
 
-/** 静态种子无 LLM 洞见时的兜底（仍要求像判断句） */
+/** 与大纲 HOLLOW_WORDS 对齐，灵感洞见同样硬拒 */
+const WEAK_INSIGHT_RE =
+  /要坚持|很重要|持续优化|长期主义|赋能|闭环|底层逻辑|正确的?废话|全面提升|值得关注|体系化|抓手|认知升级|方法论|适合快速开写|稳定模板库|工程向种子/u;
+
+const META_REASON_RE =
+  /适合快速开写|稳定模板库|工程向种子题|分类种子题|降低选题门槛|具体冲突清晰/u;
+
+const SYNTHETIC_INSIGHT_RE =
+  /^写清「|^围绕「|别再堆正确废话|先钉代价再谈方法$/u;
+
+/** 洞见是否可锁定进大纲（拒绝元话术 / 空洞词） */
+export function isUsableTopicInsight(insight: string | null | undefined): boolean {
+  const t = (insight ?? "").trim();
+  if (t.length < 8 || t.length > 72) return false;
+  if (WEAK_INSIGHT_RE.test(t) || WEAK_REASON_RE.test(t) || SYNTHETIC_INSIGHT_RE.test(t)) {
+    return false;
+  }
+  return true;
+}
+
+/** 张力是否可用 */
+export function isUsableTopicTension(tension: string | null | undefined): boolean {
+  const t = (tension ?? "").trim();
+  if (t.length < 6 || t.length > 48) return false;
+  if (WEAK_INSIGHT_RE.test(t) || WEAK_REASON_RE.test(t) || META_REASON_RE.test(t)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * 静态种子无 LLM 洞见时的兜底：尽量从标题压出判断句；
+ * 仍通不过 isUsableTopicInsight 时返回空串（由 QC 决定是否保留题）。
+ */
 export function synthesizeTopicInsight(topic: string, reason?: string): string {
   const tip = (reason ?? "").replace(WEAK_REASON_RE, "").trim();
-  if (tip.length >= 8 && tip.length <= 48 && !WEAK_INSIGHT_RE.test(tip)) {
+  if (
+    tip.length >= 8 &&
+    tip.length <= 48 &&
+    !WEAK_INSIGHT_RE.test(tip) &&
+    !META_REASON_RE.test(tip) &&
+    !SYNTHETIC_INSIGHT_RE.test(tip)
+  ) {
     return tip;
   }
-  const core = topic.replace(/[？?！!。．]/g, "").trim().slice(0, 22);
-  return `写清「${core}」里那个可验证的取舍，别再堆正确废话`;
+  const core = topic.replace(/[？?！!。．]/g, "").trim().slice(0, 36);
+  if (!core) return "";
+  // 标题本身已含冲突词：直接当洞见底稿
+  if (/还是|别再|不要|坑|代价|边界|取舍|对比|vs|VS|何时|什么时候/.test(core)) {
+    return core.slice(0, 48);
+  }
+  // 否则用「代价/边界」压一句，仍可能被 isUsable 接受
+  const guess = `${core.slice(0, 28)}的代价，比方法本身更值得先写清`.slice(0, 48);
+  return isUsableTopicInsight(guess) ? guess : "";
 }
 
 /** 无栏目时默认偏向前端 / AI / 全栈 */
@@ -753,15 +798,23 @@ async function fetchLlmHotTopics(
   const batch = opts?.batch ?? 0;
   const avoid = opts?.avoid ?? [];
 
+  const filterLlmTopics = (raw: LlmHotTopic[]) =>
+    raw.filter((t) =>
+      assessTopicIdeaQuality(t.topic, t.angle, t.atomicInsight, {
+        requireInsight: true,
+        tension: t.tension,
+      }).ok,
+    );
+
   if (!force) {
     const memCached = llmHotCache.get(key);
     if (memCached && memCached.expiresAt > Date.now()) {
-      return memCached.topics.slice(0, count);
+      return filterLlmTopics(memCached.topics).slice(0, count);
     }
     const pending = llmHotInflight.get(key);
     if (pending) {
       const topics = await pending;
-      return topics.slice(0, count);
+      return filterLlmTopics(topics).slice(0, count);
     }
   }
 
@@ -771,11 +824,12 @@ async function fetchLlmHotTopics(
       if (!force) {
         const dbCached = await readDbHotCache(key);
         if (dbCached) {
+          const filtered = filterLlmTopics(dbCached.topics);
           llmHotCache.set(key, {
             expiresAt: dbCached.expiresAt,
-            topics: dbCached.topics,
+            topics: filtered.length > 0 ? filtered : dbCached.topics,
           });
-          return dbCached.topics;
+          if (filtered.length > 0) return filtered;
         }
       }
 
@@ -789,20 +843,27 @@ async function fetchLlmHotTopics(
               ? SECTION_TAGS[section]
               : DEFAULT_FOCUS_TAGS;
 
-      const rawTopics = await generateHotTopics({
-        section,
-        sectionTags,
-        categoryLabel: cat.label,
-        avoid,
-        persona: opts?.persona,
-        recentTopics: opts?.recentTopics,
-        intent,
-        count: Math.min(10, count + 3),
-        batch,
-      });
-      const topics = rawTopics.filter((t) =>
-        assessTopicIdeaQuality(t.topic, t.angle, t.atomicInsight).ok,
-      );
+      const minNeed = Math.min(4, count);
+      let topics: LlmHotTopic[] = [];
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const rawTopics = await generateHotTopics({
+          section,
+          sectionTags,
+          categoryLabel: cat.label,
+          avoid,
+          persona: opts?.persona,
+          recentTopics: opts?.recentTopics,
+          intent,
+          count: Math.min(10, count + 3),
+          batch: batch + attempt,
+        });
+        topics = filterLlmTopics(rawTopics);
+        if (topics.length >= minNeed) break;
+        console.warn(
+          `[topic-ideas] LLM hot attempt ${attempt + 1}: kept ${topics.length}/${minNeed}`,
+        );
+      }
+
       if (topics.length > 0) {
         const expiresAt = Date.now() + LLM_HOT_CACHE_TTL_MS;
         llmHotCache.set(key, { expiresAt, topics });
@@ -816,7 +877,7 @@ async function fetchLlmHotTopics(
       }
       if (force) {
         const stale = llmHotCache.get(key);
-        if (stale?.topics.length) return stale.topics;
+        if (stale?.topics.length) return filterLlmTopics(stale.topics);
       }
       return [];
     } catch (error) {
@@ -826,7 +887,7 @@ async function fetchLlmHotTopics(
       );
       if (force) {
         const stale = llmHotCache.get(key);
-        if (stale?.topics.length) return stale.topics;
+        if (stale?.topics.length) return filterLlmTopics(stale.topics);
       }
       return [];
     } finally {
@@ -843,20 +904,30 @@ async function fetchLlmHotTopics(
 
 /** LLM 热点候选：baseScore 高于静态热点（0.7），让新鲜选题优先展示 */
 function buildLlmHotCandidates(llmTopics: LlmHotTopic[]): Candidate[] {
-  return llmTopics.map((t) => {
-    const insight =
-      (t.atomicInsight ?? "").trim() || synthesizeTopicInsight(t.topic, t.angle);
-    const quality = assessTopicIdeaQuality(t.topic, t.angle, insight);
-    return {
+  const out: Candidate[] = [];
+  for (const t of llmTopics) {
+    const insight = (t.atomicInsight ?? "").trim();
+    const tension = (t.tension ?? "").trim() || undefined;
+    const quality = assessTopicIdeaQuality(t.topic, t.angle, insight, {
+      requireInsight: true,
+      tension,
+    });
+    if (!quality.ok) continue;
+    const reason = (t.angle || "").trim();
+    out.push({
       topic: t.topic,
-      reason: t.angle || "具体冲突清晰，适合直接开写一版大纲。",
-      source: "hot" as const,
+      reason:
+        reason && !META_REASON_RE.test(reason)
+          ? reason
+          : "含具体冲突，可直接开写大纲。",
+      source: "hot",
       tags: t.tags.length > 0 ? ["AI 热点", ...t.tags].slice(0, 4) : ["AI 热点"],
       baseScore: Math.min(0.94, 0.82 + quality.score * 0.12),
       atomicInsight: insight,
-      tension: (t.tension ?? "").trim() || undefined,
-    };
-  });
+      tension,
+    });
+  }
+  return out;
 }
 
 function buildMixedCandidates(
@@ -913,13 +984,12 @@ const FORMULAIC_TOPIC_RE =
 const WEAK_TOPIC_RE =
   /AI\s*时代|大模型趋势|赋能|闭环|底层逻辑|深度好文|全面解析|你必须知道|必看|震惊|如何提升效率$|职场真相|认知升级|打造个人品牌(?!.*具体)/u;
 
-const WEAK_REASON_RE = /很火|值得关注|大家都很关心|持续升温|热度不减|趋势明显/u;
-
 /** 选题质量闸门：过空/鸡汤/公式题/空洞洞见直接丢 */
 export function assessTopicIdeaQuality(
   topic: string,
   reason?: string,
   atomicInsight?: string,
+  opts?: { requireInsight?: boolean; tension?: string | null },
 ): {
   ok: boolean;
   score: number;
@@ -944,26 +1014,41 @@ export function assessTopicIdeaQuality(
   if (!/[？?：:]|还是|还是该|别再|不要|何时|什么时候|坑|代价|边界|取舍|对比|vs|VS/.test(t)) {
     score -= 0.08;
   }
-  if (reason && WEAK_REASON_RE.test(reason)) {
+  if (reason && (WEAK_REASON_RE.test(reason) || META_REASON_RE.test(reason))) {
     issues.push("理由空泛");
-    score -= 0.2;
+    score -= 0.25;
   }
   const insight = (atomicInsight ?? "").trim();
   if (insight) {
-    if (insight.length < 8 || insight.length > 72) {
-      issues.push("洞见长度不宜");
-      score -= 0.25;
-    }
-    if (WEAK_INSIGHT_RE.test(insight) || WEAK_REASON_RE.test(insight)) {
+    if (!isUsableTopicInsight(insight)) {
       issues.push("洞见空泛");
-      score -= 0.45;
+      score -= 0.5;
     }
+  } else if (opts?.requireInsight) {
+    issues.push("洞见空泛");
+    score -= 0.5;
   } else {
-    // LLM 热点应带洞见；静态兜底可后补 synthesize
-    score -= 0.05;
+    score -= 0.12;
   }
+
+  const tension = (opts?.tension ?? "").trim();
+  if (tension) {
+    if (!isUsableTopicTension(tension)) {
+      issues.push("张力空泛");
+      score -= 0.2;
+    } else {
+      score += 0.04;
+    }
+  } else if (opts?.requireInsight) {
+    // LLM 热点缺张力：降权但不一律拒（洞见仍可过）
+    score -= 0.08;
+  }
+
   return {
-    ok: score >= 0.45 && !issues.includes("空泛或公式题") && !issues.includes("洞见空泛"),
+    ok:
+      score >= 0.45 &&
+      !issues.includes("空泛或公式题") &&
+      !issues.includes("洞见空泛"),
     score,
     issues,
   };
@@ -1027,10 +1112,14 @@ function dedupeAndRank(
           : c.source === "history"
             ? -0.05
             : 0;
-    const insightBonus = c.atomicInsight && c.atomicInsight.length >= 10 ? 0.04 : 0;
+    const insightBonus = isUsableTopicInsight(c.atomicInsight) ? 0.05 : 0;
+    const tensionBonus = isUsableTopicTension(c.tension) ? 0.03 : 0;
     const score = Math.max(
       0.25,
-      Math.min(0.99, c.baseScore + noveltyBonus + jitter + affinity + sourceBonus + insightBonus),
+      Math.min(
+        0.99,
+        c.baseScore + noveltyBonus + jitter + affinity + sourceBonus + insightBonus + tensionBonus,
+      ),
     );
     return {
       topic: c.topic,
@@ -1225,8 +1314,22 @@ export async function getTopicIdeas(input: TopicIdeasRequest): Promise<TopicIdea
     } else if (llmHot.length >= 4) {
       // LLM 够用时压低静态模板/机械混合，避免整页同一批种子
       pool = [...llmHot, ...templates.slice(0, 1), ...hot.slice(0, 1)];
+    } else if (llmHot.length > 0) {
+      // 部分命中：少量模板补位，避免整页空壳种子
+      pool = [
+        ...llmHot,
+        ...history.slice(0, 2),
+        ...templates.slice(0, 2),
+        ...hot.slice(0, 2),
+      ];
     } else {
-      pool = [...llmHot, ...history.slice(0, 3), ...templates, ...hot];
+      // 完全降级：限制模板配额，提示用户换一批
+      pool = [
+        ...history.slice(0, 3),
+        ...templates.slice(0, Math.min(4, count)),
+        ...hot.slice(0, 3),
+        ...mixed.slice(0, 2),
+      ];
     }
 
     const general = personaBias === "general";

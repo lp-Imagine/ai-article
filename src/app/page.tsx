@@ -168,6 +168,7 @@ export default function HomePage() {
   const [ideasCategory, setIdeasCategory] = useState<IdeasCategory>("all");
   const [ideasOpen, setIdeasOpen] = useState(false);
   const [ideasEmptyReason, setIdeasEmptyReason] = useState<string | null>(null);
+  const [ideasDegradedHot, setIdeasDegradedHot] = useState(false);
   /** 从灵感点选带入，生成大纲时锁定洞见 */
   const [seedInsight, setSeedInsight] = useState<string | null>(null);
   const [seedTension, setSeedTension] = useState<string | null>(null);
@@ -207,6 +208,7 @@ export default function HomePage() {
     if (filter !== ideasFilter || category !== ideasCategory || opts?.refresh) {
       setIdeas([]);
       setIdeasEmptyReason(null);
+      setIdeasDegradedHot(false);
     }
     setIdeasLoading(true);
     try {
@@ -216,8 +218,8 @@ export default function HomePage() {
         mode: filter,
         category,
       });
-      // 换一批：强制重新调模型生成热点（历史模式本身不走 LLM）
-      if (opts?.refresh && filter !== "history") {
+      // 换一批：强制刷新 LLM 热点（含历史延伸）
+      if (opts?.refresh) {
         params.set("refresh", "1");
       }
       const res = await fetch(`/api/topic-ideas?${params}`, { cache: "no-store" });
@@ -229,6 +231,7 @@ export default function HomePage() {
         setIdeasFilter(filter);
         setIdeasCategory(category);
         setIdeasOpen(true);
+        setIdeasDegradedHot(Boolean(json.data.degradedHot));
         setIdeasEmptyReason(nextIdeas.length ? null : json.data.emptyReason || "暂时没有建议");
         if (!nextIdeas.length && !json.data.emptyReason) {
           toast.show({ message: "暂时没有建议，请稍后再试", variant: "warning" });
@@ -836,6 +839,12 @@ export default function HomePage() {
                           ) : null}
                         </div>
                       ) : (
+                        <>
+                        {ideasDegradedHot ? (
+                          <p className="topic-ideas-degraded" role="status">
+                            当前多为模板/种子灵感，建议点「换一批」拉新热点。
+                          </p>
+                        ) : null}
                         <ul className="topic-ideas-list">
                           {ideas.map((idea, idx) => {
                             const sourceLabel =
@@ -846,19 +855,23 @@ export default function HomePage() {
                                   : idea.source === "mixed"
                                     ? "混合"
                                     : "模板";
+                            const insight = idea.atomicInsight?.trim() || "";
+                            const tension = idea.tension?.trim() || "";
                             return (
                               <li key={`${idea.topic}-${idx}`} className="topic-idea-wrap">
                                 <button
                                   type="button"
                                   onClick={() => {
                                     update("topic", idea.topic);
-                                    setSeedInsight(idea.atomicInsight?.trim() || null);
-                                    setSeedTension(idea.tension?.trim() || null);
+                                    setSeedInsight(insight || null);
+                                    setSeedTension(tension || null);
                                     setIdeasOpen(false);
                                     toast.show({
-                                      message: idea.atomicInsight
-                                        ? "已填入主题与洞见，可直接生成大纲"
-                                        : "已填入主题，可直接生成大纲",
+                                      message: insight
+                                        ? tension
+                                          ? "已填入主题、洞见与卡点，可直接生成大纲"
+                                          : "已填入主题与洞见，可直接生成大纲"
+                                        : "已填入主题；洞见将在生成大纲时补全",
                                       variant: "success",
                                       duration: 2500,
                                     });
@@ -881,8 +894,15 @@ export default function HomePage() {
                                     ) : null}
                                   </div>
                                   <p className="topic-idea-title">{idea.topic}</p>
-                                  {idea.atomicInsight ? (
-                                    <p className="topic-idea-insight">洞见：{idea.atomicInsight}</p>
+                                  {insight ? (
+                                    <p className="topic-idea-insight">洞见：{insight}</p>
+                                  ) : (
+                                    <p className="topic-idea-insight topic-idea-insight-muted">
+                                      洞见待大纲补全
+                                    </p>
+                                  )}
+                                  {tension ? (
+                                    <p className="topic-idea-tension">卡点：{tension}</p>
                                   ) : null}
                                   {idea.reason ? (
                                     <p className="topic-idea-reason">{idea.reason}</p>
@@ -907,6 +927,7 @@ export default function HomePage() {
                             );
                           })}
                         </ul>
+                        </>
                       )}
                     </div>
                   )}

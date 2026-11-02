@@ -9,6 +9,7 @@ import {
   buildAntiAiVoiceBlock,
   buildEngineeringContentBlock,
   buildEvidenceBlock,
+  buildFactualComplianceBlock,
   buildOnTopicBlock,
   buildArticleHtmlFormatRulesBrief,
   buildStructuralDeAiBlock,
@@ -16,7 +17,7 @@ import {
   FULL_ARTICLE_SUMMARY_RULES,
 } from "@/lib/ai/prompts/common";
 
-export const CONTENT_PROMPT_VERSION = "4.2.0";
+export const CONTENT_PROMPT_VERSION = "4.3.0";
 
 export function buildContentSystemPromptCore(input: {
   topic: string;
@@ -56,6 +57,8 @@ ${buildEngineeringContentBlock(engineering)}
 
 ${buildEvidenceBlock(engineering)}
 
+${buildFactualComplianceBlock()}
+
 ${buildWechatPlatformValueBlock()}
 
 【2. 证据与文风】
@@ -87,5 +90,8 @@ ${FULL_ARTICLE_SUMMARY_RULES}
 - 不用「在当今、随着发展、赋能、抓手、闭环、底层逻辑、认知升级」
 - 不用虚构闲聊开篇、机械的首先/其次/最后、口号式结尾或关注引流
 - 整篇不落成「定义→重要性→方法论→注意事项→总结」；也不落成「翻车现场→诱因→标准→清单」
+- **洞见只钉一次**：Atomic Insight 全文最多完整出现一次（总结可回扣）；各章用新证据证明，禁止换词复读
+- **开篇不叠句**：前两段不要同义反复；先一个冲突场面，再往下拆
+- **无出处不写达标率**：禁止「匿名实测 X%」「接近 100% 隔离」「等保通过率 Y%」；对比表用检查项/是否可越权，不用假百分比
 - 结尾的「总结」卡片按【3】是必须的；这里禁的是整篇按模板分块堆砌`;
 }

@@ -90,6 +90,8 @@ describe("article blueprint skill", () => {
     expect(directive).toContain("Atomic Insight");
     expect(directive).toContain("选型看迁移成本");
     expect(directive).toContain("可核对证据单元");
+    expect(directive).toContain("禁止复读洞见");
+    expect(directive).toContain("禁止假精确");
     expect(blueprint.readerTension).toContain("Nx");
     expect(blueprint.bannedPatterns.some((p) => /翻车/.test(p))).toBe(true);
     expect(blueprint.sectionPlans.every((p) => !/^给出/.test(p.evidencePlan))).toBe(true);

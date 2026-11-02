@@ -24,6 +24,16 @@ describe("analyzeFactualClaims", () => {
     expect(findings.some((f) => f.code === "named_person")).toBe(false);
   });
 
+  it("flags fabricated marketing percentages and survey claims", () => {
+    const plain =
+      "某匿名混合Agent集群的实测数据显示，跨角色查询约15%-25%存在泄露隐患。" +
+      "角色粒度分配后隔离效果为接近100%，等保通过率仅35%-45%的旧方案被淘汰。";
+    const findings = analyzeFactualClaims(plain);
+    expect(findings.some((f) => f.code === "precise_percentage")).toBe(true);
+    expect(findings.some((f) => f.code === "fabricated_metric_claim")).toBe(true);
+    expect(findings.filter((f) => f.severity === "high").length).toBeGreaterThan(0);
+  });
+
   it("does not misread 林薇把 as a person name", () => {
     const plain = "主管林薇把任务拆成三步，客诉量随后上升。";
     const findings = analyzeFactualClaims(plain);
@@ -115,6 +125,26 @@ describe("analyzeContentQuality", () => {
 
     expect(result.issues.some((i) => i.code === "missing_hands_on")).toBe(true);
     expect(result.issues.some((i) => i.code === "homogeneous_skeleton")).toBe(true);
+  });
+
+  it("flags insight echo when the same judgment is repeated", () => {
+    const verdict = "给每个Agent绑定对应角色的MCP工具权限，能彻底切断跨角色的数据泄露路径";
+    const result = analyzeContentQuality({
+      title: "MCP 权限隔离",
+      summary: "按角色配置 MCP 权限，避免全量授权",
+      content: `
+        <p>部署混合角色时，全量权限会踩坑。很多人默认开全量，却没意识到权限混淆。</p>
+        <h2>误区</h2>
+        <p>${verdict}。排查时确认没有任何 Agent 的工具范围是星号。</p>
+        <h2>对比</h2>
+        <p>这里的核心判断是：${verdict}。全角色共享是高频风险点。</p>
+        <h2>步骤</h2>
+        <p>按角色绑定工具后再次确认：${verdict}。</p>
+        <h2>总结</h2>
+        <p>上线前用同一规则做校验，避免权限过度开放。</p>
+      `,
+    });
+    expect(result.issues.some((i) => i.code === "insight_echo")).toBe(true);
   });
 
   it("flags hollow sections lacking concrete signals", () => {

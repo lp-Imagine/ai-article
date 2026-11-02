@@ -70,7 +70,29 @@ const CHATTY_OPENERS = [
   /方向对但顺序/,
 ];
 
-const ABSOLUTE_WORDS = ["绝对", "100%", "包过", "稳赚", "唯一选择", "一定要", "必须立刻", "史上最"];
+const ABSOLUTE_WORDS = [
+  "绝对",
+  "100%",
+  "包过",
+  "稳赚",
+  "唯一选择",
+  "一定要",
+  "必须立刻",
+  "史上最",
+  "彻底切断",
+  "彻底解决",
+  "接近100%",
+  "无任何越权",
+  "零风险",
+];
+
+/** 营销/合规口径里的假精确数字语境 */
+const MARKETING_METRIC_CTX =
+  /泄露|审计|通过率|冗余|隔离|合规|等保|风险|隐患|实测数据|匿名.*集群|跨角色/;
+
+function isTechMetricContext(window: string): boolean {
+  return /P\d{2,3}|吞吐|延迟|压测|req\/s|\bms\b|QPS|缓存命中|CPU|内存|模型/i.test(window);
+}
 
 /** 常见非人名词，避免把「我们」「系统」等误判为人名 */
 const NAME_BLOCKLIST = new Set([
@@ -156,14 +178,36 @@ export function analyzeFactualClaims(plain: string): FactualFinding[] {
     });
   }
 
-  // 精确百分比（≥2 处更可疑）
+  // 精确百分比：营销/合规语境一律高风险；仅明确「命中率/CPU」等技术口径可跳过
   const pctMatches = [...plain.matchAll(/\d+(?:\.\d+)?%/g)];
-  for (const m of pctMatches.slice(0, 6)) {
+  for (const m of pctMatches.slice(0, 8)) {
+    const idx = m.index ?? 0;
+    const window = plain.slice(Math.max(0, idx - 28), idx + m[0].length + 20);
+    const techPercent =
+      /缓存命中|命中率|CPU|GPU|内存占用|错误率|成功率/.test(window) &&
+      !MARKETING_METRIC_CTX.test(window) &&
+      !/成本|涨了|降了|客诉/.test(window);
+    if (techPercent) continue;
+    const marketing = MARKETING_METRIC_CTX.test(window);
     pushUniqueFinding(findings, seen, {
       code: "precise_percentage",
+      excerpt: excerptAround(plain, idx, m[0].length),
+      message: marketing
+        ? `无出处的营销/合规百分比「${m[0]}」（如泄露率/通过率），请删除或改成定性描述`
+        : `精确百分比「${m[0]}」若无数据来源，建议改为量级或删除`,
+      severity: marketing || pctMatches.length >= 2 ? "high" : "medium",
+    });
+  }
+
+  // 「匿名集群实测 / 接近100% / 降低90%以上」类假调研腔
+  for (const m of plain.matchAll(
+    /(?:某)?匿名[^。]{0,12}(?:集群|团队)?[^。]{0,8}实测|接近\s*100\s*%|降低\s*\d+\s*%\s*以上|通过率\s*(?:仅|约)?\s*\d+\s*%|隔离效果为接近/g,
+  )) {
+    pushUniqueFinding(findings, seen, {
+      code: "fabricated_metric_claim",
       excerpt: excerptAround(plain, m.index ?? 0, m[0].length),
-      message: `精确百分比「${m[0]}」若无数据来源，建议改为区间或删除`,
-      severity: pctMatches.length >= 2 ? "high" : "medium",
+      message: `疑似编造调研/达标口径「${m[0]}」，无来源时请删掉数字改定性`,
+      severity: "high",
     });
   }
 
@@ -245,19 +289,34 @@ export function sanitizeFactualPlainText(text: string): { text: string; changed:
   );
   apply(new RegExp(`${nameBoundary}[${surnames}][\\u4e00-\\u9fa5]{1,2}把`, "g"), "某负责人把");
 
-  // 不改写技术指标/百分比/时长：表格与性能文里这些是必要信息，模糊化会毁掉展示
   apply(/[^\s，,。]{1,8}[说讲]：[「『"]/g, "团队提到：");
+
+  // 营销/合规语境下的无出处百分比 → 定性（技术对比窗口跳过）
+  out = out.replace(/[^。！？\n]{0,36}\d+(?:\.\d+)?%[^。！？\n]{0,24}/g, (chunk) => {
+    if (isTechMetricContext(chunk)) return chunk;
+    if (!MARKETING_METRIC_CTX.test(chunk) && !/\d+(?:\.\d+)?%\s*[-–—~至到]\s*\d+(?:\.\d+)?%/.test(chunk)) {
+      return chunk;
+    }
+    changed = true;
+    return chunk
+      .replace(/\d+(?:\.\d+)?%\s*[-–—~至到]\s*\d+(?:\.\d+)?%/g, "不少情况")
+      .replace(/(?:接近|高达|仅|约)?\s*\d+(?:\.\d+)?%\s*(?:以上|左右)?/g, "相当一部分");
+  });
+
+  apply(/某匿名[^，。]{0,16}(?:实测数据|集群)/g, "团队内部复盘");
+  apply(/隔离效果为接近100%/g, "跨角色访问被权限层拦下");
+  apply(/无任何越权访问记录/g, "未再观察到同类越权访问");
 
   return { text: out, changed };
 }
 
 export function sanitizeFactualClaimsInHtml(html: string): { content: string; changed: boolean } {
   let changed = false;
-  // 保留 table / pre，避免把对比表、代码里的数字和 P50 等冲掉
+  // pre 原样保留；table 也走清洗（营销假百分比常长在对比表里），技术指标窗口会跳过
   const content = html.replace(
-    /(<table[\s\S]*?<\/table>)|(<pre[\s\S]*?<\/pre>)|([^<]+)/gi,
-    (full, tableBlock, codeBlock, textPart) => {
-      if (tableBlock || codeBlock) return full;
+    /(<pre[\s\S]*?<\/pre>)|([^<]+)|(<[^>]+>)/gi,
+    (full, codeBlock, textPart, tag) => {
+      if (codeBlock || tag) return full;
       if (!textPart) return full;
       const { text, changed: c } = sanitizeFactualPlainText(textPart);
       if (c) changed = true;
@@ -265,6 +324,43 @@ export function sanitizeFactualClaimsInHtml(html: string): { content: string; ch
     },
   );
   return { content, changed };
+}
+
+/** 短判断句/核心短语是否被多章复读（洞见贴片） */
+function countInsightEchoes(plain: string): number {
+  const compact = plain.replace(/\s+/g, "");
+  const sentences = compact
+    .split(/[。！？\n]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 14);
+
+  // 从句子里抽出「判断核」：去掉引导语后取连续 18 字，在全文计数
+  const phraseHits = new Map<string, number>();
+  for (const s of sentences) {
+    const core = s
+      .replace(/^这里的核心判断是[：:]/, "")
+      .replace(/^[^。]{0,16}再次确认[：:]/, "")
+      .replace(/^[^。]{0,10}[：:]/, "");
+    if (core.length < 18) continue;
+    // 用原文片段检索（勿先删「彻底」，否则匹配不到正文）
+    const phrase = core.slice(0, 22);
+    if (phraseHits.has(phrase)) continue;
+    let hits = 0;
+    let from = 0;
+    while (from <= compact.length - phrase.length) {
+      const at = compact.indexOf(phrase, from);
+      if (at < 0) break;
+      hits += 1;
+      from = at + phrase.length;
+    }
+    if (hits >= 2) phraseHits.set(phrase, hits);
+  }
+
+  let echoes = 0;
+  for (const hits of phraseHits.values()) {
+    echoes += hits - 1;
+  }
+  return echoes;
 }
 
 function stripHtml(html: string): string {
@@ -538,6 +634,37 @@ export function analyzeContentQuality(input: {
     });
   }
 
+  const insightEchoes = countInsightEchoes(plain);
+  if (insightEchoes >= 2) {
+    issues.push({
+      code: "insight_echo",
+      message: `核心判断句被复读约 ${insightEchoes} 次，像把同一洞见贴进多章`,
+      severity: insightEchoes >= 3 ? "high" : "medium",
+    });
+  }
+
+  // 开篇前两段同义反复
+  const openingParas = plain
+    .split(/[。！？]+/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 20)
+    .slice(0, 3);
+  if (openingParas.length >= 2) {
+    const a = openingParas[0].replace(/\s+/g, "");
+    const b = openingParas[1].replace(/\s+/g, "");
+    let inter = 0;
+    const setB = new Set(b);
+    for (const ch of new Set(a)) if (setB.has(ch)) inter += 1;
+    const union = new Set(a).size + setB.size - inter;
+    if (union > 0 && inter / union >= 0.42 && a.length > 30 && b.length > 30) {
+      issues.push({
+        code: "opening_echo",
+        message: "开篇前两句信息高度重叠，像同一意思说了两遍",
+        severity: "medium",
+      });
+    }
+  }
+
   const hasCode = /<pre[\s\S]*?<code/i.test(contentHtml);
   const looksEngineering =
     /代码|封装|组件|接口|API|TypeScript|JavaScript|函数|Hook|上传|分片|React|Vue/.test(
@@ -576,9 +703,12 @@ function buildSuggestions(issues: QualityIssue[], factualFindings: FactualFindin
   if (
     factualCodes.has("precise_percentage") ||
     factualCodes.has("precise_metric") ||
-    factualCodes.has("precise_money")
+    factualCodes.has("precise_money") ||
+    factualCodes.has("fabricated_metric_claim")
   ) {
-    suggestions.push("精确数字若无来源，改为区间/量级（如「约三成」「近 2 秒」）或直接删除");
+    suggestions.push(
+      "无出处百分比/「匿名实测」请删除或改成定性（曾出现过、审计会卡住）；技术 P50/吞吐除外",
+    );
   }
   if (factualCodes.has("named_company") || factualCodes.has("precise_date")) {
     suggestions.push("公司名、日期等细节若无出处，请匿名化或模糊化后再发布");
@@ -613,6 +743,12 @@ function buildSuggestions(issues: QualityIssue[], factualFindings: FactualFindin
   }
   if (codes.has("three_point_parallel")) {
     suggestions.push("三点并列改成 2 点或 5 点，或让第三项打断节奏");
+  }
+  if (codes.has("insight_echo")) {
+    suggestions.push("全文只保留一处核心判断原句；其余章改成检查项、反例或失败路径，勿复读洞见");
+  }
+  if (codes.has("opening_echo")) {
+    suggestions.push("开篇两段合并成一段：先冲突场面，再一句判断，不要同义反复");
   }
   if (codes.has("missing_punchline")) {
     suggestions.push("补一句 20 字左右的锐利判断（代价/反直觉/取舍），方便读者转发");

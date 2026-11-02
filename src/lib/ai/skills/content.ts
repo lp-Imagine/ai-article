@@ -366,9 +366,11 @@ export function sectionDirective(
 - 本章禁止重复：${plan.doNotRepeat.length ? plan.doNotRepeat.join("；") : "其他章节已解释的背景"}
 ${positionRule}
 - **硬性**：本章至少 1 个可核对证据单元（步骤/对比/代码/边界/清单/具名匿名场景），禁止只有态度与正确废话
+- **禁止复读洞见**：不要原句或换词重复 Atomic Insight / thesis；用本章新信息去证明它
+- **禁止假精确**：无出处时不要写「约15%-25% / 接近100% / 降低90% / 匿名集群实测」；改定性或可核对配置
 - 禁止套用的骨架：${blueprint.bannedPatterns.join("；")}
 - 文风：像人写的专栏笔记，不要产品说明书；段首禁用「给出/通过/拆解/输出/锚定」
-- 写完自检：是否在证明 Atomic Insight（不是又听了一遍正确废话）`;
+- 写完自检：是否在用**新证据**证明 Atomic Insight（不是又贴了一遍同一句）`;
 }
 
 export const BLUEPRINT_JSON_INSTRUCTION = `
