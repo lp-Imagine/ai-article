@@ -872,7 +872,7 @@ export function convertToWechatHtml(html: string): string {
     },
   );
 
-  // ====== 4. h2 章节标题 → 序号 + 浅蓝底条（微信无伪元素，整块转 section）======
+  // ====== 4. h2 章节标题 → 上序号 + 标题 + 短强调线（无色块，微信友好）======
   {
     let sectionNo = 0;
     result = result.replace(/<h2\b[^>]*>([\s\S]*?)<\/h2>/gi, (_full, inner: string) => {
@@ -882,21 +882,20 @@ export function convertToWechatHtml(html: string): string {
 
       if (isSummary) {
         return (
-          `<section style="margin:36px 0 16px;padding:12px 16px;border-left:4px solid #c5d4f0;background-color:#f8fafc;border-radius:0 10px 10px 0;">` +
-          `<p style="margin:0;font-size:17px;font-weight:700;line-height:1.45;color:#334155;letter-spacing:0.02em;">${titleHtml || "总结"}</p>` +
+          `<section style="margin:36px 0 18px;padding:0 0 12px;border-bottom:1px solid #e8ecf2;">` +
+          `<p style="margin:0;font-size:17px;font-weight:700;line-height:1.4;color:#3a3a3a;letter-spacing:0.02em;">${titleHtml || "总结"}</p>` +
+          `<p style="margin:10px 0 0;width:28px;height:2px;line-height:0;font-size:0;background-color:#94a3b8;border-radius:2px;">&nbsp;</p>` +
           `</section>`
         );
       }
 
       sectionNo += 1;
       const label = String(sectionNo).padStart(2, "0");
-      // 不用 table：避免微信草稿画出单元格框；inline-block 在公众号里足够稳
       return (
-        `<section style="margin:36px 0 18px;padding:14px 16px 14px 14px;background-color:#f3f7ff;border-left:4px solid ${ACCENT};border-radius:0 12px 12px 0;">` +
-        `<p style="margin:0;line-height:1.45;font-size:0;">` +
-        `<span style="display:inline-block;width:36px;font-size:12px;font-weight:700;line-height:1.45;color:${ACCENT};letter-spacing:0.06em;vertical-align:top;">${label}</span>` +
-        `<span style="display:inline-block;max-width:88%;font-size:18px;font-weight:700;line-height:1.45;color:#111111;letter-spacing:0.01em;vertical-align:top;">${titleHtml}</span>` +
-        `</p>` +
+        `<section style="margin:40px 0 20px;padding:0 0 12px;border-bottom:1px solid #eef1f6;">` +
+        `<p style="margin:0 0 8px;font-size:11px;font-weight:700;line-height:1;color:${ACCENT};letter-spacing:0.14em;">${label}</p>` +
+        `<p style="margin:0;font-size:19px;font-weight:700;line-height:1.4;color:#111111;letter-spacing:0.015em;">${titleHtml}</p>` +
+        `<p style="margin:10px 0 0;width:40px;height:3px;line-height:0;font-size:0;background-color:${ACCENT};border-radius:2px;">&nbsp;</p>` +
         `</section>`
       );
     });

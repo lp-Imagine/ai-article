@@ -5171,52 +5171,61 @@ textarea::placeholder {
   counter-reset: mp-section;
 }
 
+/* 章节标题：序号叠在上方 + 短强调线，去掉色块底板 */
 .mp-preview h2 {
   counter-increment: mp-section;
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  font-size: 18.5px;
+  position: relative;
+  font-size: 19px;
   font-weight: 700;
-  line-height: 1.45;
-  margin: 40px 0 18px;
+  line-height: 1.4;
+  margin: 42px 0 20px;
+  padding: 22px 0 12px;
   color: #111111;
-  padding: 14px 16px 14px 14px;
-  letter-spacing: 0.01em;
-  background: linear-gradient(
-    90deg,
-    rgba(0, 113, 227, 0.09) 0%,
-    rgba(0, 113, 227, 0.035) 55%,
-    rgba(0, 113, 227, 0) 100%
-  );
-  border-left: 4px solid #0071e3;
-  border-radius: 0 12px 12px 0;
-  box-sizing: border-box;
+  letter-spacing: 0.015em;
+  background: none;
+  border: none;
+  border-bottom: 1px solid #eef1f6;
 }
 
 .mp-preview h2::before {
   content: counter(mp-section, decimal-leading-zero);
-  flex-shrink: 0;
-  min-width: 1.75em;
-  margin-top: 1px;
-  font-size: 12px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  font-size: 11px;
   font-weight: 700;
-  line-height: 1.45;
-  letter-spacing: 0.06em;
+  line-height: 1;
+  letter-spacing: 0.14em;
   color: #0071e3;
   font-variant-numeric: tabular-nums;
 }
 
-/* 总结章不加序号，弱化为收束标题 */
+.mp-preview h2::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 40px;
+  height: 2.5px;
+  background: #0071e3;
+  border-radius: 2px;
+}
+
+/* 总结：无序号，细灰线收束 */
 .mp-preview h2.mp-h2-summary {
   counter-increment: none;
-  background: #f8fafc;
-  border-left-color: #c5d4f0;
+  padding-top: 8px;
+  color: #3a3a3a;
+  border-bottom-color: #e8ecf2;
 }
 
 .mp-preview h2.mp-h2-summary::before {
   content: none;
-  display: none;
+}
+
+.mp-preview h2.mp-h2-summary::after {
+  width: 28px;
+  background: #94a3b8;
 }
 
 .mp-preview h3 {
@@ -5734,10 +5743,9 @@ textarea::placeholder {
   }
 
   .mp-preview h2 {
-    font-size: 17px;
-    margin: 32px 0 14px;
-    padding: 12px 14px 12px 12px;
-    gap: 10px;
+    font-size: 17.5px;
+    margin: 34px 0 16px;
+    padding: 20px 0 10px;
   }
 
   .mp-preview blockquote {

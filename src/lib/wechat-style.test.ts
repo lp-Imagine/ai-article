@@ -132,29 +132,35 @@ describe("convertToWechatHtml", () => {
 
   it("renders hr as a text-only WeChat-safe divider (no table boxes)", () => {
     const wechat = convertToWechatHtml("<p>上</p><hr /><h2>下</h2>");
+    const divider = wechat.match(
+      /<section style="margin:36px 0;text-align:center;[\s\S]*?<\/section>/,
+    )?.[0];
 
     expect(wechat).not.toMatch(/<hr/i);
     expect(wechat).not.toMatch(/<table/i);
-    expect(wechat).not.toMatch(/border-bottom/i);
-    expect(wechat).not.toMatch(/position:\s*(absolute|relative)/i);
-    expect(wechat).not.toMatch(/linear-gradient/i);
+    expect(divider).toBeTruthy();
+    expect(divider).not.toMatch(/border-bottom/i);
+    expect(divider).not.toMatch(/position:\s*(absolute|relative)/i);
+    expect(divider).not.toMatch(/linear-gradient/i);
     expect(wechat).toContain("✦");
     expect(wechat).toContain("────────");
     expect(wechat).toContain("#b9a88c");
   });
 
-  it("styles chapter h2 as numbered soft bar for WeChat", () => {
+  it("styles chapter h2 as stacked index + accent rule for WeChat", () => {
     const wechat = convertToWechatHtml(
       "<h2>Express vs Koa中间件调度压测代码</h2><p>正文</p><h2>总结</h2>",
     );
 
     expect(wechat).not.toMatch(/<h2/i);
-    expect(wechat).toContain("background-color:#f3f7ff");
-    expect(wechat).toContain("border-left:4px solid #3e7bfa");
-    expect(wechat).toContain(">01</span>");
+    expect(wechat).not.toContain("background-color:#f3f7ff");
+    expect(wechat).not.toContain("border-left:4px solid");
+    expect(wechat).toContain(">01</p>");
     expect(wechat).toContain("Express vs Koa中间件调度压测代码");
+    expect(wechat).toContain("letter-spacing:0.14em");
+    expect(wechat).toContain("width:40px;height:3px");
     expect(wechat).toContain("总结");
-    expect(wechat).toContain("background-color:#f8fafc");
+    expect(wechat).toContain("width:28px;height:2px");
     expect(wechat).not.toMatch(/>02</);
   });
 
