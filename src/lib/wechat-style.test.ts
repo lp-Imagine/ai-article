@@ -147,6 +147,35 @@ describe("convertToWechatHtml", () => {
     expect(wechat).toContain("#b9a88c");
   });
 
+  it("styles opening paragraph as lead strip with badge drop cap", () => {
+    const wechat = convertToWechatHtml(
+      "<p>你要把旧Express项目改Koa，纠结是替换所有中间件还是留兼容层？</p><p>第二段</p>",
+    );
+
+    expect(wechat).toContain('data-mp-lead="1"');
+    expect(wechat).toContain("background-color:#f5f8ff");
+    expect(wechat).toContain("border-left:3px solid #3e7bfa");
+    expect(wechat).toContain('data-mp-dropcap="1"');
+    expect(wechat).toContain("border-radius:10px");
+    expect(wechat).toContain(">你</span>");
+    expect(wechat).not.toMatch(/font-size:52px/);
+    expect(wechat).toContain("第二段");
+  });
+
+  it("styles titled unordered list as soft cards with accent rule", () => {
+    const wechat = convertToWechatHtml(
+      "<ul><li><strong>当前QPS与延迟指标</strong>：Express 约 1850 QPS</li><li><strong>核心中间件数量</strong>两边都是 3 个</li></ul>",
+    );
+
+    expect(wechat).not.toMatch(/<ul|<li/i);
+    expect(wechat).not.toContain("border-left:4px solid");
+    expect(wechat).toContain("border-radius:12px");
+    expect(wechat).toContain("width:28px;height:2.5px");
+    expect(wechat).toContain("当前QPS与延迟指标");
+    expect(wechat).toContain("Express 约 1850 QPS");
+    expect(wechat).not.toMatch(/>：Express/);
+  });
+
   it("styles chapter h2 as stacked index + accent rule for WeChat", () => {
     const wechat = convertToWechatHtml(
       "<h2>Express vs Koa中间件调度压测代码</h2><p>正文</p><h2>总结</h2>",
@@ -224,8 +253,10 @@ describe("convertToWechatHtml", () => {
       expect(table).not.toMatch(/data-mp-cb|<pre\b|use client/i);
     }
 
-    // 纯文字项仍走 table 卡片
-    expect(wechat).toMatch(/<table[\s\S]*?状态定义[\s\S]*?<\/table>/);
+    // 纯文字标题项也走 section 卡片（短强调线，无厚蓝条）
+    expect(wechat).toContain("状态定义");
+    expect(wechat).toContain("border-radius:12px");
+    expect(wechat).not.toContain("border-left:4px solid");
   });
 });
 

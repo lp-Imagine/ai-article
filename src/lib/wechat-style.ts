@@ -47,14 +47,27 @@ const SUMMARY = {
   text: "#3d3d3d",
 };
 
+/** 开篇字标：圆角底 + 居中首字（替代裸大字下沉） */
 const DROP_CAP_STYLE =
-  "float:left;font-size:52px;font-weight:900;color:#0071e3;line-height:0.82;margin:2px 10px 0 0;font-family:Georgia,serif;";
+  "float:left;width:42px;height:42px;margin:1px 12px 4px 0;" +
+  "background-color:#e8f1ff;color:#0071e3;border-radius:10px;" +
+  "font-size:24px;font-weight:800;line-height:42px;text-align:center;" +
+  "font-family:Georgia,'Noto Serif SC',serif;";
+
+const OPENING_LEAD_SECTION_STYLE =
+  "margin:0 0 22px;padding:16px 18px;" +
+  "background-color:#f5f8ff;border-left:3px solid #3e7bfa;" +
+  "border-radius:0 12px 12px 0;";
+
+const OPENING_LEAD_P_STYLE =
+  "margin:0;font-size:16.5px;line-height:1.9;color:#3d3d3d;text-align:justify;font-weight:400;";
 
 const LIST_CARD = {
-  bg: "#f8fbff",
-  border: "#dbeafe",
-  title: "#1a1a1a",
-  body: "#555555",
+  bg: "#ffffff",
+  border: "#e8eef7",
+  title: "#111111",
+  body: "#5a5a5a",
+  rule: ACCENT,
 };
 
 const STRONG_STYLE = "color:#111111;font-weight:bold;";
@@ -244,6 +257,12 @@ export function normalizeArticleMarkup(html: string): string {
   result = result.replace(/<div class="blockquote">([\s\S]*?)<\/div>/gi, "<blockquote>$1</blockquote>");
   result = result.replace(/<div class="quote">([\s\S]*?)<\/div>/gi, "<blockquote>$1</blockquote>");
 
+  // 列表「标题 + 说明」常见写法：</strong>：正文 —— 去掉标题后多余冒号
+  result = result.replace(
+    /(<\/strong>)\s*[：:]\s*/gi,
+    "$1",
+  );
+
   const preservedFigures: string[] = [];
   result = result.replace(/<figure[^>]*>([\s\S]*?)<\/figure>/gi, (full, inner: string) => {
     if (!/data-progress=/i.test(full)) return "";
@@ -287,25 +306,24 @@ function simplifyFiguresForWechat(html: string): string {
 
 function buildOrderedListCard(counter: number, title: string, body: string): string {
   return (
-    `<table style="width:100%;border-collapse:collapse;margin:0 0 12px;border:1px solid ${LIST_CARD.border};background-color:${LIST_CARD.bg};border-radius:10px;">` +
-    `<tr>` +
-    `<td style="width:44px;padding:14px 0 14px 12px;vertical-align:top;border:none;">` +
-    `<span style="display:inline-block;width:26px;height:26px;line-height:26px;text-align:center;background-color:${ACCENT};color:#ffffff;border-radius:50%;font-size:13px;font-weight:bold;">${counter}</span>` +
-    `</td>` +
-    `<td style="padding:14px 14px 14px 0;vertical-align:top;border:none;">` +
-    `<section style="font-size:15px;font-weight:bold;color:${LIST_CARD.title};margin:0 0 6px;line-height:1.5;">${title}</section>` +
-    `<section style="font-size:14px;color:${LIST_CARD.body};line-height:1.75;margin:0;text-align:justify;">${body}</section>` +
-    `</td></tr></table>`
+    `<section style="margin:0 0 14px;padding:16px 18px;background-color:${LIST_CARD.bg};border:1px solid ${LIST_CARD.border};border-radius:12px;">` +
+    `<p style="margin:0 0 8px;line-height:1.45;font-size:0;">` +
+    `<span style="display:inline-block;width:22px;height:22px;line-height:22px;text-align:center;background-color:${ACCENT};color:#ffffff;border-radius:50%;font-size:12px;font-weight:bold;margin-right:10px;vertical-align:middle;">${counter}</span>` +
+    `<span style="display:inline-block;max-width:88%;font-size:15px;font-weight:700;line-height:1.45;color:${LIST_CARD.title};vertical-align:middle;">${title}</span>` +
+    `</p>` +
+    `<p style="margin:0 0 10px;width:28px;height:2px;line-height:0;font-size:0;background-color:${LIST_CARD.rule};border-radius:2px;">&nbsp;</p>` +
+    `<p style="margin:0;font-size:14px;color:${LIST_CARD.body};line-height:1.75;text-align:justify;">${body}</p>` +
+    `</section>`
   );
 }
 
 function buildUnorderedListCard(title: string, body: string): string {
   return (
-    `<table style="width:100%;border-collapse:collapse;margin:0 0 12px;border:1px solid ${LIST_CARD.border};border-left:4px solid ${ACCENT};background-color:${LIST_CARD.bg};border-radius:0 10px 10px 0;">` +
-    `<tr><td style="padding:14px 16px;border:none;">` +
-    `<section style="font-size:15px;font-weight:bold;color:${LIST_CARD.title};margin:0 0 6px;line-height:1.5;">${title}</section>` +
-    `<section style="font-size:14px;color:${LIST_CARD.body};line-height:1.75;margin:0;text-align:justify;">${body}</section>` +
-    `</td></tr></table>`
+    `<section style="margin:0 0 14px;padding:16px 18px;background-color:${LIST_CARD.bg};border:1px solid ${LIST_CARD.border};border-radius:12px;">` +
+    `<p style="margin:0 0 8px;font-size:15px;font-weight:700;line-height:1.45;color:${LIST_CARD.title};">${title}</p>` +
+    `<p style="margin:0 0 10px;width:28px;height:2.5px;line-height:0;font-size:0;background-color:${LIST_CARD.rule};border-radius:2px;">&nbsp;</p>` +
+    `<p style="margin:0;font-size:14px;color:${LIST_CARD.body};line-height:1.75;text-align:justify;">${body}</p>` +
+    `</section>`
   );
 }
 
@@ -345,24 +363,24 @@ function parseListItemTitleBodyKeepCode(inner: string): { title: string; body: s
 
 function buildOrderedListSectionCard(counter: number, title: string, bodyHtml: string): string {
   return (
-    `<section style="margin:0 0 12px;border:1px solid ${LIST_CARD.border};background-color:${LIST_CARD.bg};border-radius:10px;overflow:visible;">` +
-    `<section style="padding:14px 16px;">` +
-    `<section style="margin:0 0 8px;line-height:1.5;">` +
-    `<span style="display:inline-block;width:26px;height:26px;line-height:26px;text-align:center;background-color:${ACCENT};color:#ffffff;border-radius:50%;font-size:13px;font-weight:bold;margin-right:10px;vertical-align:middle;">${counter}</span>` +
-    `<span style="font-size:15px;font-weight:bold;color:${LIST_CARD.title};vertical-align:middle;">${title}</span>` +
-    `</section>` +
+    `<section style="margin:0 0 14px;padding:16px 18px;background-color:${LIST_CARD.bg};border:1px solid ${LIST_CARD.border};border-radius:12px;overflow:visible;">` +
+    `<p style="margin:0 0 8px;line-height:1.45;font-size:0;">` +
+    `<span style="display:inline-block;width:22px;height:22px;line-height:22px;text-align:center;background-color:${ACCENT};color:#ffffff;border-radius:50%;font-size:12px;font-weight:bold;margin-right:10px;vertical-align:middle;">${counter}</span>` +
+    `<span style="display:inline-block;max-width:88%;font-size:15px;font-weight:700;line-height:1.45;color:${LIST_CARD.title};vertical-align:middle;">${title}</span>` +
+    `</p>` +
+    `<p style="margin:0 0 10px;width:28px;height:2px;line-height:0;font-size:0;background-color:${LIST_CARD.rule};border-radius:2px;">&nbsp;</p>` +
     `<section style="font-size:14px;color:${LIST_CARD.body};line-height:1.75;margin:0;text-align:justify;">${bodyHtml}</section>` +
-    `</section></section>`
+    `</section>`
   );
 }
 
 function buildUnorderedListSectionCard(title: string, bodyHtml: string): string {
   return (
-    `<section style="margin:0 0 12px;border:1px solid ${LIST_CARD.border};border-left:4px solid ${ACCENT};background-color:${LIST_CARD.bg};border-radius:0 10px 10px 0;overflow:visible;">` +
-    `<section style="padding:14px 16px;">` +
-    `<section style="font-size:15px;font-weight:bold;color:${LIST_CARD.title};margin:0 0 6px;line-height:1.5;">${title}</section>` +
+    `<section style="margin:0 0 14px;padding:16px 18px;background-color:${LIST_CARD.bg};border:1px solid ${LIST_CARD.border};border-radius:12px;overflow:visible;">` +
+    `<p style="margin:0 0 8px;font-size:15px;font-weight:700;line-height:1.45;color:${LIST_CARD.title};">${title}</p>` +
+    `<p style="margin:0 0 10px;width:28px;height:2.5px;line-height:0;font-size:0;background-color:${LIST_CARD.rule};border-radius:2px;">&nbsp;</p>` +
     `<section style="font-size:14px;color:${LIST_CARD.body};line-height:1.75;margin:0;text-align:justify;">${bodyHtml}</section>` +
-    `</section></section>`
+    `</section>`
   );
 }
 
@@ -771,31 +789,45 @@ function findFirstVisibleCharIndex(html: string): number {
   return -1;
 }
 
-/** 首段首字下沉：微信不支持 ::first-letter，用 float span 模拟 */
+/**
+ * 开篇导语：浅蓝底条 + 左侧强调线 + 圆角字标。
+ * 微信不支持 ::first-letter / 多数伪元素，整块转 section + float span。
+ */
 function applyDropCapToOpeningParagraph(html: string): string {
+  if (/data-mp-lead=["']1["']/i.test(html)) return html;
+
   const match = html.match(/<p(?:\s[^>]*)?>([\s\S]*?)<\/p>/i);
   if (!match || match.index === undefined) return html;
 
   const full = match[0];
   const innerStart = html.indexOf(">", match.index) + 1;
   const innerEnd = match.index + full.length - "</p>".length;
-  const inner = html.slice(innerStart, innerEnd);
+  let inner = html.slice(innerStart, innerEnd);
 
-  if (/float:left;font-size:52px|data-mp-dropcap/i.test(inner)) return html;
+  // 兼容旧版裸大字下沉，统一收成新字标
+  inner = inner.replace(
+    /<span\s+style="[^"]*float:\s*left;font-size:\s*52px[^"]*"[^>]*>([\s\S]*?)<\/span>/i,
+    "$1",
+  );
 
-  const charIdx = findFirstVisibleCharIndex(inner);
-  if (charIdx === -1) return html;
+  if (!/data-mp-dropcap/i.test(inner)) {
+    const charIdx = findFirstVisibleCharIndex(inner);
+    if (charIdx !== -1) {
+      const char = inner[charIdx];
+      if (/[\u4e00-\u9fffA-Za-z0-9]/.test(char)) {
+        inner =
+          inner.slice(0, charIdx) +
+          `<span data-mp-dropcap="1" style="${DROP_CAP_STYLE}">${char}</span>` +
+          inner.slice(charIdx + 1);
+      }
+    }
+  }
 
-  const char = inner[charIdx];
-  if (!/[\u4e00-\u9fffA-Za-z0-9]/.test(char)) return html;
+  const replacement =
+    `<section data-mp-lead="1" style="${OPENING_LEAD_SECTION_STYLE}">` +
+    `<p style="${OPENING_LEAD_P_STYLE}">${inner}</p>` +
+    `</section>`;
 
-  const newInner =
-    inner.slice(0, charIdx) +
-    `<span style="${DROP_CAP_STYLE}">${char}</span>` +
-    inner.slice(charIdx + 1);
-
-  const openTag = html.slice(match.index, innerStart);
-  const replacement = openTag + newInner + "</p>";
   return html.slice(0, match.index) + replacement + html.slice(match.index + full.length);
 }
 
