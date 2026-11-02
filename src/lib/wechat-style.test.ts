@@ -143,6 +143,21 @@ describe("convertToWechatHtml", () => {
     expect(wechat).toContain("#b9a88c");
   });
 
+  it("styles chapter h2 as numbered soft bar for WeChat", () => {
+    const wechat = convertToWechatHtml(
+      "<h2>Express vs Koa中间件调度压测代码</h2><p>正文</p><h2>总结</h2>",
+    );
+
+    expect(wechat).not.toMatch(/<h2/i);
+    expect(wechat).toContain("background-color:#f3f7ff");
+    expect(wechat).toContain("border-left:4px solid #3e7bfa");
+    expect(wechat).toContain(">01</span>");
+    expect(wechat).toContain("Express vs Koa中间件调度压测代码");
+    expect(wechat).toContain("总结");
+    expect(wechat).toContain("background-color:#f8fafc");
+    expect(wechat).not.toMatch(/>02</);
+  });
+
   it("styles bare data tables with inline styles and drops thead/tbody", () => {
     const html =
       "<table><thead><tr><th>场景</th><th>QPS</th></tr></thead><tbody><tr><td>A</td><td>1850</td></tr></tbody></table>";

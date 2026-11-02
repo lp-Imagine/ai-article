@@ -5167,27 +5167,56 @@ textarea::placeholder {
   border-bottom: 1px solid #f0e8d5;
 }
 
-.mp-preview h2 {
-  font-size: 20px;
-  font-weight: 700;
-  line-height: 1.5;
-  margin: 38px 0 16px;
-  color: #1a1a1a;
-  padding: 0 0 0 16px;
-  border-left: 4px solid #0071e3;
-  position: relative;
+.mp-preview article {
+  counter-reset: mp-section;
 }
 
-.mp-preview h2::after {
-  content: "";
-  position: absolute;
-  bottom: -6px;
-  left: 16px;
-  width: 32px;
-  height: 2px;
-  background: #0071e3;
-  opacity: 0.3;
-  border-radius: 1px;
+.mp-preview h2 {
+  counter-increment: mp-section;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 18.5px;
+  font-weight: 700;
+  line-height: 1.45;
+  margin: 40px 0 18px;
+  color: #111111;
+  padding: 14px 16px 14px 14px;
+  letter-spacing: 0.01em;
+  background: linear-gradient(
+    90deg,
+    rgba(0, 113, 227, 0.09) 0%,
+    rgba(0, 113, 227, 0.035) 55%,
+    rgba(0, 113, 227, 0) 100%
+  );
+  border-left: 4px solid #0071e3;
+  border-radius: 0 12px 12px 0;
+  box-sizing: border-box;
+}
+
+.mp-preview h2::before {
+  content: counter(mp-section, decimal-leading-zero);
+  flex-shrink: 0;
+  min-width: 1.75em;
+  margin-top: 1px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+  letter-spacing: 0.06em;
+  color: #0071e3;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 总结章不加序号，弱化为收束标题 */
+.mp-preview h2.mp-h2-summary {
+  counter-increment: none;
+  background: #f8fafc;
+  border-left-color: #c5d4f0;
+}
+
+.mp-preview h2.mp-h2-summary::before {
+  content: none;
+  display: none;
 }
 
 .mp-preview h3 {
@@ -5705,8 +5734,10 @@ textarea::placeholder {
   }
 
   .mp-preview h2 {
-    font-size: 18px;
-    margin: 30px 0 12px;
+    font-size: 17px;
+    margin: 32px 0 14px;
+    padding: 12px 14px 12px 12px;
+    gap: 10px;
   }
 
   .mp-preview blockquote {

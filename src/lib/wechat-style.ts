@@ -727,7 +727,22 @@ export function consolidateArticleSummaries(html: string): string {
 export function wrapSummarySection(html: string): string {
   const consolidated = consolidateArticleSummaries(html);
 
-  return consolidated.replace(
+  const withSummaryClass = consolidated.replace(
+    /<h2([^>]*)>\s*总结\s*<\/h2>/gi,
+    (_full, attrs: string) => {
+      if (/\bclass\s*=/i.test(attrs)) {
+        const nextAttrs = attrs.replace(
+          /class\s*=\s*(["'])([^"']*)\1/i,
+          (_m: string, q: string, cls: string) =>
+            `class=${q}${cls.includes("mp-h2-summary") ? cls : `${cls} mp-h2-summary`.trim()}${q}`,
+        );
+        return `<h2${nextAttrs}>总结</h2>`;
+      }
+      return `<h2${attrs} class="mp-h2-summary">总结</h2>`;
+    },
+  );
+
+  return withSummaryClass.replace(
     /(<h2[^>]*>\s*总结\s*<\/h2>)([\s\S]*?)(?=\s*(?:<hr[\s/>]|<h2\b|$))/i,
     (_full, h2: string, body: string) => {
       const trimmed = body.trim();
@@ -857,10 +872,35 @@ export function convertToWechatHtml(html: string): string {
     },
   );
 
-  // ====== 4. h2 章节标题 → 左侧蓝色竖线 ======
-  result = result.replace(/<h2([^>]*)>/gi, (_full, attrs: string) => {
-    return `<h2${attrs} style="font-size:20px;font-weight:700;line-height:1.5;margin:38px 0 16px;color:#1a1a1a;padding-left:16px;border-left:4px solid ${ACCENT};">`;
-  });
+  // ====== 4. h2 章节标题 → 序号 + 浅蓝底条（微信无伪元素，整块转 section）======
+  {
+    let sectionNo = 0;
+    result = result.replace(/<h2\b[^>]*>([\s\S]*?)<\/h2>/gi, (_full, inner: string) => {
+      const titleHtml = String(inner).trim();
+      const titleText = stripTags(titleHtml);
+      const isSummary = /^总结$/.test(titleText);
+
+      if (isSummary) {
+        return (
+          `<section style="margin:36px 0 16px;padding:12px 16px;border-left:4px solid #c5d4f0;background-color:#f8fafc;border-radius:0 10px 10px 0;">` +
+          `<p style="margin:0;font-size:17px;font-weight:700;line-height:1.45;color:#334155;letter-spacing:0.02em;">${titleHtml || "总结"}</p>` +
+          `</section>`
+        );
+      }
+
+      sectionNo += 1;
+      const label = String(sectionNo).padStart(2, "0");
+      // 不用 table：避免微信草稿画出单元格框；inline-block 在公众号里足够稳
+      return (
+        `<section style="margin:36px 0 18px;padding:14px 16px 14px 14px;background-color:#f3f7ff;border-left:4px solid ${ACCENT};border-radius:0 12px 12px 0;">` +
+        `<p style="margin:0;line-height:1.45;font-size:0;">` +
+        `<span style="display:inline-block;width:36px;font-size:12px;font-weight:700;line-height:1.45;color:${ACCENT};letter-spacing:0.06em;vertical-align:top;">${label}</span>` +
+        `<span style="display:inline-block;max-width:88%;font-size:18px;font-weight:700;line-height:1.45;color:#111111;letter-spacing:0.01em;vertical-align:top;">${titleHtml}</span>` +
+        `</p>` +
+        `</section>`
+      );
+    });
+  }
 
   // ====== 5. h3 小节标题 → 左侧米色竖线 ======
   result = result.replace(/<h3([^>]*)>/gi, (_full, attrs: string) => {
