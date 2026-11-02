@@ -2206,6 +2206,8 @@ JSON：{ "topics": [{ "topic": string, "angle": string, "atomicInsight": string,
       maxTokens: 2200,
       role: "topic-ideas",
       temperature: 0.92,
+      // 灵感接口走同步 HTTP，禁止内层再叠 2～3 次重试把网关打成 504
+      retries: 1,
     });
     const parsed = safeParse<{
       topics?: Array<{

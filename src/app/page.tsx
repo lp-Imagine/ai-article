@@ -223,7 +223,11 @@ export default function HomePage() {
         params.set("refresh", "1");
       }
       const res = await fetch(`/api/topic-ideas?${params}`, { cache: "no-store" });
-      const json = await res.json();
+      const json = await readApiResponse<{
+        ideas?: TopicIdea[];
+        emptyReason?: string | null;
+        degradedHot?: boolean;
+      }>(res);
       if (json.code === 0 && json.data) {
         const nextIdeas = (json.data.ideas ?? []) as TopicIdea[];
         setIdeas(nextIdeas);
@@ -239,8 +243,14 @@ export default function HomePage() {
       } else {
         toast.show({ message: "暂时没有建议，请稍后再试", variant: "warning" });
       }
-    } catch {
-      toast.show({ message: "获取灵感失败，请重试", variant: "error" });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "获取灵感失败，请重试";
+      toast.show({
+        message: /504|超时|网关/.test(msg)
+          ? "灵感请求超时，已可点「换一批」重试；慢时可先用模板题开写"
+          : msg,
+        variant: "error",
+      });
     } finally {
       setIdeasLoading(false);
     }

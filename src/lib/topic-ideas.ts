@@ -809,6 +809,7 @@ async function fetchLlmHotTopics(
   if (!force) {
     const memCached = llmHotCache.get(key);
     if (memCached && memCached.expiresAt > Date.now()) {
+      // 缓存命中即返回（含空数组）：避免旧缓存被新质检刷空后每次同步打 LLM → 504
       return filterLlmTopics(memCached.topics).slice(0, count);
     }
     const pending = llmHotInflight.get(key);
@@ -827,9 +828,10 @@ async function fetchLlmHotTopics(
           const filtered = filterLlmTopics(dbCached.topics);
           llmHotCache.set(key, {
             expiresAt: dbCached.expiresAt,
-            topics: filtered.length > 0 ? filtered : dbCached.topics,
+            topics: filtered,
           });
-          if (filtered.length > 0) return filtered;
+          // 即使质检后为空也视为命中，走静态降级，不在同步请求里重打模型
+          return filtered;
         }
       }
 
@@ -843,9 +845,19 @@ async function fetchLlmHotTopics(
               ? SECTION_TAGS[section]
               : DEFAULT_FOCUS_TAGS;
 
+      // 网关常见 60s；灵感接口必须快速降级，禁止 3×超时叠成 504
+      const startedAt = Date.now();
+      const budgetMs = force ? 28_000 : 22_000;
       const minNeed = Math.min(4, count);
+      const maxAttempts = force ? 2 : 1;
       let topics: LlmHotTopic[] = [];
-      for (let attempt = 0; attempt < 3; attempt += 1) {
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        if (Date.now() - startedAt > budgetMs) {
+          console.warn(
+            `[topic-ideas] LLM hot budget exceeded after ${attempt} attempt(s), degrade`,
+          );
+          break;
+        }
         const rawTopics = await generateHotTopics({
           section,
           sectionTags,
@@ -859,8 +871,15 @@ async function fetchLlmHotTopics(
         });
         topics = filterLlmTopics(rawTopics);
         if (topics.length >= minNeed) break;
+        // 已有部分合格题：直接用，勿为凑满再抽一轮（易 504）
+        if (topics.length > 0) {
+          console.warn(
+            `[topic-ideas] LLM hot partial ${topics.length}/${minNeed}, accept to avoid gateway timeout`,
+          );
+          break;
+        }
         console.warn(
-          `[topic-ideas] LLM hot attempt ${attempt + 1}: kept ${topics.length}/${minNeed}`,
+          `[topic-ideas] LLM hot attempt ${attempt + 1}: kept 0/${minNeed}`,
         );
       }
 
