@@ -42,25 +42,26 @@ const WARN = {
 };
 
 const SUMMARY = {
-  bg: "#f0f4ff",
-  border: "#2563eb",
-  text: "#3d3d3d",
+  /** 不用浅色底：微信深色模式不会反转实心底，会留下刺眼亮块 */
+  border: "#3e7bfa",
+  label: "#3e7bfa",
 };
 
-/** 开篇字标：圆角底 + 居中首字（替代裸大字下沉） */
+/**
+ * 开篇字标：仅强调色大字，无浅底色块（深色模式友好）
+ * 不写死正文色，交给微信随主题适配
+ */
 const DROP_CAP_STYLE =
-  "float:left;width:42px;height:42px;margin:1px 12px 4px 0;" +
-  "background-color:#e8f1ff;color:#0071e3;border-radius:10px;" +
-  "font-size:24px;font-weight:800;line-height:42px;text-align:center;" +
+  "float:left;margin:0 10px 2px 0;" +
+  "font-size:30px;font-weight:800;line-height:1.1;color:#3e7bfa;" +
   "font-family:Georgia,'Noto Serif SC',serif;";
 
 const OPENING_LEAD_SECTION_STYLE =
-  "margin:0 0 22px;padding:16px 18px;" +
-  "background-color:#f5f8ff;border-left:3px solid #3e7bfa;" +
-  "border-radius:0 12px 12px 0;";
+  "margin:0 0 22px;padding:2px 0 14px 14px;" +
+  "border-left:3px solid #3e7bfa;background:transparent;";
 
 const OPENING_LEAD_P_STYLE =
-  "margin:0;font-size:16.5px;line-height:1.9;color:#3d3d3d;text-align:justify;font-weight:400;";
+  "margin:0;font-size:16.5px;line-height:1.9;text-align:justify;font-weight:400;";
 
 const LIST_CARD = {
   bg: "#ffffff",
@@ -790,11 +791,21 @@ function findFirstVisibleCharIndex(html: string): number {
 }
 
 /**
- * 开篇导语：浅蓝底条 + 左侧强调线 + 圆角字标。
+ * 开篇导语：左边线 + 强调色首字（无浅色底，深色模式友好）。
  * 微信不支持 ::first-letter / 多数伪元素，整块转 section + float span。
+ * 仅作用于文首段落，跳过总结/提示等卡片内的 <p>。
  */
 function applyDropCapToOpeningParagraph(html: string): string {
   if (/data-mp-lead=["']1["']/i.test(html)) return html;
+
+  const firstP = html.search(/<p\b/i);
+  if (firstP < 0) return html;
+  const firstH2 = html.search(/<h2\b/i);
+  const firstCallout = html.search(
+    /<(?:div|section)\b[^>]*(?:mp-summary|mp-tip|mp-warning|data-mp-lead)/i,
+  );
+  if (firstH2 >= 0 && firstH2 < firstP) return html;
+  if (firstCallout >= 0 && firstCallout < firstP) return html;
 
   const match = html.match(/<p(?:\s[^>]*)?>([\s\S]*?)<\/p>/i);
   if (!match || match.index === undefined) return html;
@@ -834,9 +845,11 @@ function applyDropCapToOpeningParagraph(html: string): string {
 function buildSummaryBox(inner: string): string {
   const cleanInner = inner.trim();
   return (
-    `<section style="margin:16px 0 24px;padding:18px 20px;background-color:${SUMMARY.bg};` +
-    `border-left:4px solid ${SUMMARY.border};border-radius:0 10px 10px 0;` +
-    `color:${SUMMARY.text};line-height:1.85;font-size:15px;text-align:justify;">${cleanInner}</section>`
+    `<section style="margin:16px 0 24px;padding:2px 0 4px 14px;border-left:3px solid ${SUMMARY.border};background:transparent;">` +
+    `<p style="margin:0 0 8px;font-size:12px;font-weight:700;line-height:1;letter-spacing:0.14em;color:${SUMMARY.label};">总结要点</p>` +
+    `<p style="margin:0 0 12px;width:28px;height:2px;line-height:0;font-size:0;background-color:${SUMMARY.border};border-radius:2px;">&nbsp;</p>` +
+    `<section style="margin:0;line-height:1.85;font-size:15px;text-align:justify;">${cleanInner}</section>` +
+    `</section>`
   );
 }
 
@@ -882,7 +895,7 @@ export function convertToWechatHtml(html: string): string {
       }),
   );
 
-  // ====== 2b. mp-summary 总结卡片 → 浅蓝底 + 左侧蓝条 ======
+  // ====== 2b. mp-summary 总结卡片 → 左边线 + 标签（无浅色底，深色模式友好）======
   result = result.replace(
     /<div class="mp-summary">([\s\S]*?)<\/div>/gi,
     (_full, inner: string) => buildSummaryBox(inner),

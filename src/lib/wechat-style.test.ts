@@ -147,19 +147,32 @@ describe("convertToWechatHtml", () => {
     expect(wechat).toContain("#b9a88c");
   });
 
-  it("styles opening paragraph as lead strip with badge drop cap", () => {
+  it("styles opening paragraph as border-only lead (dark-mode friendly)", () => {
     const wechat = convertToWechatHtml(
       "<p>你要把旧Express项目改Koa，纠结是替换所有中间件还是留兼容层？</p><p>第二段</p>",
     );
 
     expect(wechat).toContain('data-mp-lead="1"');
-    expect(wechat).toContain("background-color:#f5f8ff");
+    expect(wechat).toContain("background:transparent");
     expect(wechat).toContain("border-left:3px solid #3e7bfa");
+    expect(wechat).not.toContain("background-color:#f5f8ff");
+    expect(wechat).not.toContain("background-color:#e8f1ff");
     expect(wechat).toContain('data-mp-dropcap="1"');
-    expect(wechat).toContain("border-radius:10px");
     expect(wechat).toContain(">你</span>");
     expect(wechat).not.toMatch(/font-size:52px/);
     expect(wechat).toContain("第二段");
+  });
+
+  it("styles summary without light fill for WeChat dark mode", () => {
+    const wechat = convertToWechatHtml(
+      '<h2 class="mp-h2-summary">总结</h2><div class="mp-summary"><p>高并发下先看 QPS 再谈兼容层。</p></div>',
+    );
+
+    expect(wechat).toContain("总结要点");
+    expect(wechat).toContain("background:transparent");
+    expect(wechat).not.toContain("background-color:#f0f4ff");
+    expect(wechat).toContain("border-left:3px solid #3e7bfa");
+    expect(wechat).toContain("高并发下先看 QPS");
   });
 
   it("styles titled unordered list as soft cards with accent rule", () => {

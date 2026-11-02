@@ -5238,7 +5238,7 @@ textarea::placeholder {
   border-left: 3px solid var(--divider-soft);
 }
 
-/* ====== 正文段落 / 开篇导语 ====== */
+/* ====== 正文段落 / 开篇导语（无浅色底，兼容微信深色模式） ====== */
 
 .mp-preview article > p:first-of-type,
 .mp-preview article > section[data-mp-lead="1"] {
@@ -5246,26 +5246,17 @@ textarea::placeholder {
   line-height: 1.9;
   color: #3d3d3d;
   margin: 0 0 22px;
-  padding: 16px 18px;
+  padding: 2px 0 14px 14px;
   font-weight: 400;
-  background: linear-gradient(
-    90deg,
-    rgba(0, 113, 227, 0.07) 0%,
-    rgba(0, 113, 227, 0.03) 55%,
-    rgba(0, 113, 227, 0) 100%
-  );
+  background: transparent;
   border-left: 3px solid #0071e3;
-  border-radius: 0 12px 12px 0;
+  border-radius: 0;
   box-sizing: border-box;
-}
-
-.mp-preview article > section[data-mp-lead="1"] {
-  background: #f5f8ff;
 }
 
 .mp-preview article > section[data-mp-lead="1"] > p {
   margin: 0;
-  color: #3d3d3d;
+  color: inherit;
   font-size: 16.5px;
   line-height: 1.9;
   text-align: justify;
@@ -5273,32 +5264,26 @@ textarea::placeholder {
 
 .mp-preview article > p:first-of-type::first-letter {
   float: left;
-  width: 1.35em;
-  height: 1.35em;
-  margin: 0.05em 0.4em 0.12em 0;
+  margin: 0 10px 2px 0;
   padding: 0;
-  font-size: 1.45em;
+  font-size: 30px;
   font-weight: 800;
-  line-height: 1.35em;
-  text-align: center;
+  line-height: 1.1;
   color: #0071e3;
-  background: #e8f1ff;
-  border-radius: 10px;
+  background: none;
+  border-radius: 0;
   font-family: "Noto Serif SC", "Source Han Serif", Georgia, serif;
 }
 
 .mp-preview [data-mp-dropcap="1"] {
   float: left;
-  width: 42px;
-  height: 42px;
-  margin: 1px 12px 4px 0;
-  background: #e8f1ff;
+  margin: 0 10px 2px 0;
+  background: none;
   color: #0071e3;
-  border-radius: 10px;
-  font-size: 24px;
+  border-radius: 0;
+  font-size: 30px;
   font-weight: 800;
-  line-height: 42px;
-  text-align: center;
+  line-height: 1.1;
   font-family: "Noto Serif SC", "Source Han Serif", Georgia, serif;
 }
 
@@ -5682,18 +5667,33 @@ textarea::placeholder {
   padding: 12px 14px 14px;
 }
 
-/* ====== 总结卡片 ====== */
+/* ====== 总结卡片（无浅色底，兼容微信深色模式） ====== */
 
 .mp-preview .mp-summary {
   margin: 16px 0 24px;
-  padding: 18px 20px;
-  background: #f0f4ff;
-  border-left: 4px solid var(--accent);
-  border-radius: 0 10px 10px 0;
-  color: #3d3d3d;
+  padding: 2px 0 4px 14px;
+  background: transparent;
+  border-left: 3px solid var(--accent);
+  border-radius: 0;
+  color: inherit;
   line-height: 1.85;
   font-size: 15px;
   text-align: justify;
+}
+
+.mp-preview .mp-summary::before {
+  content: "总结要点";
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  margin: 0 0 12px;
+  padding: 0 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.14em;
+  color: var(--accent);
+  border-bottom: 2px solid var(--accent);
 }
 
 .mp-preview .mp-summary p {
@@ -5794,11 +5794,11 @@ textarea::placeholder {
   .mp-preview article > section[data-mp-lead="1"],
   .mp-preview article > section[data-mp-lead="1"] > p {
     font-size: 15.5px;
-    padding: 14px 14px;
   }
 
-  .mp-preview article > p:first-of-type::first-letter {
-    font-size: 1.35em;
+  .mp-preview article > p:first-of-type::first-letter,
+  .mp-preview [data-mp-dropcap="1"] {
+    font-size: 26px;
   }
 
   .mp-preview h2 {
