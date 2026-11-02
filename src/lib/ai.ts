@@ -80,12 +80,15 @@ import {
 import {
   applyEnhanceBriefToBlueprint,
   buildEnhanceBriefPrompt,
+  buildLocalEnhanceBrief,
   insertEditAnchors,
   normalizeEnhanceBrief,
 } from "@/lib/ai/skills/enhance";
+import { gatherArticleMaterialCards } from "@/lib/ai/web-search";
 import {
   assessOutlineDiversity,
   assessSingleOutlineQuality,
+  isHardDiversityIssue,
   isOutlineFramework,
   normalizeOutlineConflict,
   outlineSkeletonSignature,
@@ -585,20 +588,40 @@ async function discoverOutlineConflicts(input: {
   seedInsight?: string | null;
   seedTension?: string | null;
 }): Promise<OutlineConflict[]> {
-  const raw = await callChat(
-    buildOutlineConflictPrompt(input),
-    {
+  const parseConflicts = (raw: string): OutlineConflict[] => {
+    const parsed = safeParse<{ conflicts?: unknown[] }>(raw, {});
+    return (parsed.conflicts ?? [])
+      .map((item) =>
+        normalizeOutlineConflict(item, {
+          topic: input.topic,
+          keywords: input.keywords,
+        }),
+      )
+      .filter((c): c is OutlineConflict => c !== null);
+  };
+
+  let conflicts: OutlineConflict[] = [];
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const raw = await callChat(buildOutlineConflictPrompt(input), {
       jsonMode: true,
       maxTokens: Math.min(4096, 600 + input.count * 320),
       role: "outline",
-      temperature: 0.85,
-    },
-  );
-  const parsed = safeParse<{ conflicts?: unknown[] }>(raw, {});
-  const conflicts = (parsed.conflicts ?? [])
-    .map(normalizeOutlineConflict)
-    .filter((c): c is OutlineConflict => c !== null)
-    .slice(0, input.count);
+      temperature: 0.85 + attempt * 0.05,
+    });
+    if (!raw) {
+      console.warn(`[generateOutline] conflict attempt ${attempt + 1}: empty LLM response`);
+      continue;
+    }
+    conflicts = parseConflicts(raw).slice(0, input.count);
+    const frameworks = new Set(conflicts.map((c) => c.frameworkHint));
+    const ok =
+      conflicts.length >= input.count &&
+      (input.count < 2 || frameworks.size >= Math.min(2, input.count));
+    if (ok) break;
+    console.warn(
+      `[generateOutline] conflict attempt ${attempt + 1}: got ${conflicts.length}/${input.count}, frameworks=${frameworks.size}`,
+    );
+  }
 
   const seedInsight = input.seedInsight?.trim();
   if (seedInsight && conflicts[0]) {
@@ -613,7 +636,7 @@ async function discoverOutlineConflicts(input: {
 
   if (conflicts.length < input.count) {
     console.warn(
-      `[generateOutline] conflict discovery got ${conflicts.length}/${input.count}, seed hints will fill gaps`,
+      `[generateOutline] conflict discovery got ${conflicts.length}/${input.count}, seed hints will fill gaps (stricter QC)`,
     );
   }
   return conflicts;
@@ -688,23 +711,77 @@ export async function generateOutline(input: {
   );
   const parsed = safeParse<{ outlines?: OutlineOption[] }>(raw, {});
   if (parsed.outlines?.length) {
-    return reportOutlineDiversity(
-      parsed.outlines
-        .slice(0, count)
-        .map((option, index) =>
-          normalizeOutlineOption(
-            option,
-            index,
-            input.topic,
-            style,
-            wordCount,
-            conflicts[index] ?? null,
-          ),
+    const normalized = parsed.outlines
+      .slice(0, count)
+      .map((option, index) =>
+        normalizeOutlineOption(
+          option,
+          index,
+          input.topic,
+          style,
+          wordCount,
+          conflicts[index] ?? null,
         ),
-    );
+      )
+      .filter((opt) =>
+        assessSingleOutlineQuality(opt, {
+          engineering,
+          topic: input.topic,
+          strictSeed: !conflicts[opt.index],
+        }).ok,
+      );
+    if (normalized.length === 0) {
+      throw new Error("大纲生成失败：AI 未能生成有效大纲，请稍后重试");
+    }
+    return reportOutlineDiversity(dedupeOutlinesByDiversity(normalized));
   }
 
   throw new Error("大纲生成失败：AI 未能生成有效大纲，请稍后重试");
+}
+
+function dedupeOutlinesByDiversity(kept: OutlineOption[]): OutlineOption[] {
+  const diversity = assessOutlineDiversity(kept);
+  if (!diversity.issues.some(isHardDiversityIssue)) {
+    return kept.map((opt, idx) => ({ ...opt, index: idx }));
+  }
+
+  const seenSig = new Set<string>();
+  const seenFramework = new Set<string>();
+  const seenInsight = new Set<string>();
+  const deduped: OutlineOption[] = [];
+
+  for (const opt of kept) {
+    const sig = outlineSkeletonSignature(opt) || `unique:${opt.index}`;
+    const insightKey = (opt.atomicInsight ?? "").replace(/\s/g, "").slice(0, 24);
+    const fw = opt.framework ?? "";
+
+    if (seenSig.has(sig)) {
+      console.warn(`[generateOutline] drop scheme ${opt.index + 1}: duplicate skeleton ${sig}`);
+      continue;
+    }
+    if (fw && seenFramework.has(fw) && diversity.issues.some((i) => /写作框架完全相同/.test(i))) {
+      // 允许保留第一套该框架；后续同框架且已有硬问题则丢
+      if (deduped.some((d) => d.framework === fw)) {
+        console.warn(`[generateOutline] drop scheme ${opt.index + 1}: duplicate framework ${fw}`);
+        continue;
+      }
+    }
+    if (
+      insightKey &&
+      seenInsight.has(insightKey) &&
+      diversity.issues.some((i) => /洞见几乎相同/.test(i))
+    ) {
+      console.warn(`[generateOutline] drop scheme ${opt.index + 1}: duplicate insight`);
+      continue;
+    }
+
+    seenSig.add(sig);
+    if (fw) seenFramework.add(fw);
+    if (insightKey) seenInsight.add(insightKey);
+    deduped.push(opt);
+  }
+
+  return deduped.map((opt, idx) => ({ ...opt, index: idx }));
 }
 
 
@@ -714,7 +791,8 @@ async function generateOutlinesInParallel(
     conflicts?: OutlineConflict[];
   },
 ): Promise<OutlineOption[]> {
-  const { topic, style, wordCount, count, sectionCount, conflicts = [] } = input;
+  const { topic, style, wordCount, count, sectionCount, conflicts = [], engineering } =
+    input;
   const maxTokens = Math.min(8192, 1800 + sectionCount * 450);
   const seedHints = pickOutlineSeedHints(count, topic);
 
@@ -749,7 +827,11 @@ async function generateOutlinesInParallel(
             wordCount,
             conflict,
           );
-          const quality = assessSingleOutlineQuality(normalized);
+          const quality = assessSingleOutlineQuality(normalized, {
+            engineering,
+            topic,
+            strictSeed: !conflict,
+          });
           if (!quality.ok) {
             throw new Error(
               `scheme ${i + 1}/${count}: outline quality: ${quality.issues.join("；")}`,
@@ -778,27 +860,7 @@ async function generateOutlinesInParallel(
   );
 
   const kept = results.filter((opt): opt is OutlineOption => opt !== null);
-
-  // 若仍有同构流水线，丢弃重复骨架中靠后的套，避免用户看到三套同一模板
-  const diversity = assessOutlineDiversity(kept);
-  if (diversity.issues.some((issue) => /流水线|修辞骨架相同/.test(issue))) {
-    const seen = new Set<string>();
-    const deduped: OutlineOption[] = [];
-    for (const opt of kept) {
-      const sig = outlineSkeletonSignature(opt) || `unique:${opt.index}`;
-      if (seen.has(sig)) {
-        console.warn(
-          `[generateOutline] drop scheme ${opt.index + 1}: duplicate skeleton ${sig}`,
-        );
-        continue;
-      }
-      seen.add(sig);
-      deduped.push(opt);
-    }
-    return deduped.map((opt, idx) => ({ ...opt, index: idx }));
-  }
-
-  return kept.map((opt, idx) => ({ ...opt, index: idx }));
+  return dedupeOutlinesByDiversity(kept);
 }
 
 export type ContentProgressCallback = (
@@ -1152,28 +1214,59 @@ ${BLUEPRINT_JSON_INSTRUCTION}`;
     extractHtmlFromLlmJson(meta, ["openingHtml", "opening", "content"]) || "";
 
   await report("写前增强简报");
-  try {
-    const enhanceRaw = await callChat(buildEnhanceBriefPrompt({
-      topic: input.topic,
-      outline: input.outline,
-      blueprint,
-      engineering,
-    }), {
-      jsonMode: true,
-      maxTokens: Math.min(2048, 700 + sections.length * 180),
-      role: "content",
-      temperature: 0.7,
-    });
-    const enhanceParsed = safeParse<Record<string, unknown>>(enhanceRaw, {});
-    const brief = normalizeEnhanceBrief(enhanceParsed, input.outline);
-    if (brief) {
-      blueprint = applyEnhanceBriefToBlueprint(blueprint, brief);
+  {
+    let materialCards: Awaited<ReturnType<typeof gatherArticleMaterialCards>> = [];
+    try {
+      materialCards = await gatherArticleMaterialCards({
+        topic: input.topic,
+        atomicInsight: blueprint.atomicInsight,
+        firstHeading: sections[0]?.heading,
+      });
+      if (materialCards.length > 0) {
+        console.info(
+          `[generateContentBySections] web search cards: ${materialCards.length}`,
+        );
+      }
+    } catch (error) {
+      console.warn(
+        "[generateContentBySections] web search skipped:",
+        error instanceof Error ? error.message : error,
+      );
     }
-  } catch (error) {
-    console.warn(
-      "[generateContentBySections] enhance brief skipped:",
-      error instanceof Error ? error.message : error,
-    );
+
+    let brief = null as ReturnType<typeof normalizeEnhanceBrief>;
+    try {
+      const enhanceRaw = await callChat(
+        buildEnhanceBriefPrompt({
+          topic: input.topic,
+          outline: input.outline,
+          blueprint,
+          engineering,
+          materialCards,
+        }),
+        {
+          jsonMode: true,
+          maxTokens: Math.min(2048, 700 + sections.length * 180),
+          role: "content",
+          temperature: 0.7,
+        },
+      );
+      const enhanceParsed = safeParse<Record<string, unknown>>(enhanceRaw, {});
+      brief = normalizeEnhanceBrief(enhanceParsed, input.outline);
+    } catch (error) {
+      console.warn(
+        "[generateContentBySections] enhance LLM failed, using local brief:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+
+    if (!brief) {
+      brief = buildLocalEnhanceBrief(blueprint, input.outline, {
+        engineering,
+        materialCards,
+      });
+    }
+    blueprint = applyEnhanceBriefToBlueprint(blueprint, brief);
   }
 
   // 各章互不依赖（上下文只用大纲标题），并发生成把串行的 N×30s 压成 N/并发数
@@ -1451,8 +1544,18 @@ async function processHtmlBlocksInParallel(
 }
 
 function getRefineMinScore(): number {
-  const raw = Number(process.env.CONTENT_REFINE_MIN_SCORE ?? "");
-  return Number.isFinite(raw) ? raw : 78;
+  const raw = Number(
+    getEnvValue("CONTENT_REFINE_MIN_SCORE") ?? process.env.CONTENT_REFINE_MIN_SCORE ?? "",
+  );
+  return Number.isFinite(raw) && raw > 0 ? raw : 85;
+}
+
+const FORCE_REFINE_CODES = new Set(["low_density", "hollow_section", "empty_filler"]);
+
+function shouldForceRefine(
+  issues: Array<{ code: string; severity: string }>,
+): boolean {
+  return issues.some((i) => FORCE_REFINE_CODES.has(i.code) && i.severity === "high");
 }
 
 
@@ -1540,7 +1643,8 @@ export async function refineContentQuality(input: {
     content: input.content,
   });
   const repairBrief = buildQualityRepairBrief(preCheck);
-  if (preCheck.score >= getRefineMinScore()) {
+  const forceRefine = shouldForceRefine(preCheck.issues);
+  if (preCheck.score >= getRefineMinScore() && !forceRefine) {
     const hasHighFactual = preCheck.factualFindings.some((f) => f.severity === "high");
     if (!hasHighFactual) {
       return { content: input.content, refined: false, skipped: true };

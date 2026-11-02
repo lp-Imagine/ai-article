@@ -116,4 +116,25 @@ describe("analyzeContentQuality", () => {
     expect(result.issues.some((i) => i.code === "missing_hands_on")).toBe(true);
     expect(result.issues.some((i) => i.code === "homogeneous_skeleton")).toBe(true);
   });
+
+  it("flags hollow sections lacking concrete signals", () => {
+    const result = analyzeContentQuality({
+      title: "团队协作的本质",
+      summary: "讲讲协作认知与体系化方法",
+      content: `
+        <h2>协作的意义</h2>
+        <p>我们需要认识到协作本质上是认知问题。真正的关键在于体系化，大家要对齐方法论，持续优化闭环，才能赋能业务抓手。</p>
+        <p>很多人以为协作只是开会，其实关键在于长期主义。我们要对齐认知，打造完整闭环，实现真正的认知升级。</p>
+        <h2>如何提升</h2>
+        <p>归根结底还是态度。方向对了就好。持续优化、不断迭代、小步快跑，就能沉淀方法论，实现赋能。</p>
+        <p>真正的问题是抓手不够。我们需要体系化思考，打造闭环，才能在这个时代保持竞争力，实现真正的价值。</p>
+        <h2>总结展望</h2>
+        <p>综上所述，协作的底层逻辑决定上限。只要坚持长期主义，就能小步快跑，持续优化，不断迭代。</p>
+      `,
+    });
+
+    expect(result.issues.some((i) => i.code === "hollow_section" || i.code === "low_density")).toBe(
+      true,
+    );
+  });
 });

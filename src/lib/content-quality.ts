@@ -287,16 +287,25 @@ function countOccurrences(text: string, needle: string): number {
   return count;
 }
 
+/** 强具体信号：去掉「如果/然后」等弱连接词 */
+function hasConcreteSignal(text: string): boolean {
+  return (
+    /\d/.test(text) ||
+    /[「『"“].{2,40}[」』"”]/.test(text) ||
+    /比如|例如|当时|报错|步骤|会发现|对比|之前|之后|当晚|联调|边界|检查|清单|代价|取舍/.test(
+      text,
+    ) ||
+    /[A-Za-z]{3,}(?:\(|\.)/.test(text) ||
+    /<code|<pre|`[A-Za-z]/.test(text)
+  );
+}
+
 /** 段落信息密度粗估：过短或过长且无具体信号的段落 */
 function estimateLowDensityParagraphs(plainParagraphs: string[]): number {
   let low = 0;
   for (const p of plainParagraphs) {
     if (p.length < 20) continue;
-    const hasConcrete =
-      /\d/.test(p) ||
-      /[「『"“].{2,40}[」』"”]/.test(p) ||
-      /比如|例如|当时|报错|步骤|首先|然后|如果|会发现|对比|之前|之后/.test(p) ||
-      /[A-Za-z]{2,}/.test(p);
+    const hasConcrete = hasConcreteSignal(p);
     const isVague =
       /本质上|认知|体系|赋能|闭环|方法论|重要|关键|真正/.test(p) && !hasConcrete;
     if (isVague || (p.length > 80 && !hasConcrete && /我们|大家|人们/.test(p))) {
@@ -304,6 +313,30 @@ function estimateLowDensityParagraphs(plainParagraphs: string[]): number {
     }
   }
   return low;
+}
+
+/** 按 h2 切章粗检：无数字/列表/代码/具名场景 → hollow */
+function countHollowSections(contentHtml: string, plain: string): number {
+  const chunks = contentHtml
+    ? contentHtml.split(/<h2\b[^>]*>/i).slice(1)
+    : plain.split(/(?=第[一二三四五六七八九十]|#{1,3}\s)/).filter(Boolean);
+  if (chunks.length < 2) {
+    // 无明确分章时：全文缺具体信号也算一处 hollow
+    return hasConcreteSignal(plain) ? 0 : plain.length > 600 ? 1 : 0;
+  }
+  let hollow = 0;
+  for (const chunk of chunks) {
+    const text = stripHtml(chunk);
+    if (text.length < 80) continue;
+    const hasList = /<(?:ul|ol)\b/i.test(chunk) || /(?:^|\n)\s*[-•\d]+[.)、]/.test(chunk);
+    const hasCode = /<(?:pre|code)\b/i.test(chunk);
+    const hasScene =
+      /某(?:中台|团队|业务|产品|同学)|联调|当晚|报错|对比|代价|取舍|检查表|清单/.test(text);
+    if (!hasConcreteSignal(text) && !hasList && !hasCode && !hasScene) {
+      hollow += 1;
+    }
+  }
+  return hollow;
 }
 
 export function analyzeContentQuality(input: {
@@ -417,6 +450,15 @@ export function analyzeContentQuality(input: {
     });
   }
 
+  const hollowSections = countHollowSections(contentHtml, plain);
+  if (hollowSections > 0) {
+    issues.push({
+      code: "hollow_section",
+      message: `约 ${hollowSections} 个章节缺少数字/列表/代码/具名场景，信息密度偏低`,
+      severity: hollowSections >= 2 ? "high" : "medium",
+    });
+  }
+
   // 教科书同质骨架信号
   const skeletonHits = [
     /什么是/,
@@ -492,7 +534,7 @@ export function analyzeContentQuality(input: {
     issues.push({
       code: "missing_punchline",
       message: "缺少可转发的短判断句，全文偏匀速正确废话",
-      severity: "low",
+      severity: "medium",
     });
   }
 
@@ -548,8 +590,11 @@ function buildSuggestions(issues: QualityIssue[], factualFindings: FactualFindin
   if (codes.has("chatty_opener")) {
     suggestions.push("开篇直接点题：问题、结论或一个可核对的现象，不要虚构闲聊");
   }
-  if (codes.has("low_density") || codes.has("too_short")) {
-    suggestions.push("每段保证一个信息增量：读者读完能多会做/多知道一件事");
+  if (codes.has("low_density") || codes.has("too_short") || codes.has("hollow_section")) {
+    suggestions.push("每段保证一个信息增量：读者读完能多会做/多知道一件事；每章补步骤/对比/代码或具名场景");
+  }
+  if (codes.has("missing_punchline")) {
+    suggestions.push("加一句 12–40 字的可转发短判断（代价、边界或「别再…」）");
   }
   if (codes.has("homogeneous_skeleton")) {
     suggestions.push("换切入角：先翻车后正解、对比选型、最小可用切片，避免百科目录");

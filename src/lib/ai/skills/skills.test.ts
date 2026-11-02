@@ -8,17 +8,21 @@ import {
 } from "@/lib/ai/skills/content";
 import {
   applyEnhanceBriefToBlueprint,
+  buildEnhanceBriefPrompt,
+  buildLocalEnhanceBrief,
   insertEditAnchors,
   normalizeEnhanceBrief,
 } from "@/lib/ai/skills/enhance";
 import {
   assessOutlineDiversity,
   assessSingleOutlineQuality,
+  isHardDiversityIssue,
   normalizeOutlineConflict,
   outlineSkeletonSignature,
   pickOutlineSeedHints,
 } from "@/lib/ai/skills/outline";
 import { buildQualityRepairBrief } from "@/lib/ai/skills/refine";
+import { isContentWebSearchEnabled } from "@/lib/ai/web-search";
 
 const outline: OutlineOption = {
   index: 0,
@@ -85,6 +89,7 @@ describe("article blueprint skill", () => {
     expect(directive).toContain("专栏笔记");
     expect(directive).toContain("Atomic Insight");
     expect(directive).toContain("选型看迁移成本");
+    expect(directive).toContain("可核对证据单元");
     expect(blueprint.readerTension).toContain("Nx");
     expect(blueprint.bannedPatterns.some((p) => /翻车/.test(p))).toBe(true);
     expect(blueprint.sectionPlans.every((p) => !/^给出/.test(p.evidencePlan))).toBe(true);
@@ -187,16 +192,63 @@ describe("outline and refine skills", () => {
     expect(brief).toContain("只修复清单命中的问题");
   });
 
-  it("normalizes outline conflicts with insight/framework fallbacks", () => {
-    const conflict = normalizeOutlineConflict({
-      tension: "选型时只看人气会拖垮迁移",
-      readerMoment: "投工具投票的会上",
-      stake: "半年后拆仓成本翻倍",
-      avoidSkeleton: "不走翻车→诱因→清单",
-    });
-    expect(conflict).not.toBeNull();
-    expect(conflict!.atomicInsight.length).toBeGreaterThanOrEqual(8);
-    expect(conflict!.frameworkHint).toBe("pain");
+  it("rejects conflicts missing insight/framework or using hollow words", () => {
+    expect(
+      normalizeOutlineConflict({
+        tension: "选型时只看人气会拖垮迁移",
+        readerMoment: "投工具投票的会上",
+        stake: "半年后拆仓成本翻倍",
+        avoidSkeleton: "不走翻车→诱因→清单",
+      }),
+    ).toBeNull();
+
+    expect(
+      normalizeOutlineConflict({
+        tension: "要坚持长期主义赋能闭环",
+        readerMoment: "认知升级的关键时刻",
+        stake: "方法论抓手",
+        avoidSkeleton: "百科骨架",
+        atomicInsight: "关键在于体系化",
+        frameworkHint: "pain",
+      }),
+    ).toBeNull();
+
+    const ok = normalizeOutlineConflict(
+      {
+        tension: "Monorepo 选型只看人气会拖垮迁移成本",
+        readerMoment: "投 Nx 还是 Turborepo 的会上",
+        stake: "半年后拆仓成本翻倍",
+        avoidSkeleton: "不走翻车→诱因→清单",
+        atomicInsight: "选型看迁移成本，不看工具人气",
+        frameworkHint: "compare",
+      },
+      { topic: "前端 monorepo 治理" },
+    );
+    expect(ok).not.toBeNull();
+    expect(ok!.frameworkHint).toBe("compare");
+  });
+
+  it("rejects outlines when fewer than half sections are concrete", () => {
+    const hollow: OutlineOption = {
+      index: 0,
+      title: "治理很重要",
+      positioning: "讲清楚治理",
+      atomicInsight: "要坚持长期主义",
+      framework: "list",
+      sections: [
+        { heading: "认识治理", summary: "治理很重要，要体系化" },
+        { heading: "提升认知", summary: "赋能团队持续优化" },
+        { heading: "总结展望", summary: "把握抓手打造闭环" },
+      ],
+    };
+    const result = assessSingleOutlineQuality(hollow, { engineering: true });
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((i) => /具体章节不足|空洞|洞见/.test(i))).toBe(true);
+  });
+
+  it("marks hard diversity issues for drop", () => {
+    expect(isHardDiversityIssue("多套大纲写作框架完全相同")).toBe(true);
+    expect(isHardDiversityIssue("轻微语气差异")).toBe(false);
   });
 
   it("flags identical frameworks across schemes", () => {
@@ -242,11 +294,57 @@ describe("enhance brief skill", () => {
     expect(enhanced.thesis).toContain("锐化");
   });
 
+  it("builds non-empty local enhance brief by evidenceMode", () => {
+    const blueprint = fallbackBlueprint({
+      topic: "前端 monorepo 治理",
+      outline,
+      engineering: true,
+    });
+    const local = buildLocalEnhanceBrief(blueprint, outline, { engineering: true });
+    expect(local.concreteAnchors.length).toBeGreaterThanOrEqual(2);
+    expect(local.sectionHints).toHaveLength(outline.sections.length);
+    expect(local.sectionHints.every((h) => h.evidenceBoost.length >= 8)).toBe(true);
+    const enhanced = applyEnhanceBriefToBlueprint(blueprint, local);
+    expect(enhanced.sectionPlans[0].evidencePlan).toContain("加料");
+  });
+
+  it("injects material cards into enhance prompt", () => {
+    const blueprint = fallbackBlueprint({
+      topic: "前端 monorepo 治理",
+      outline,
+      engineering: true,
+    });
+    const messages = buildEnhanceBriefPrompt({
+      topic: "前端 monorepo 治理",
+      outline,
+      blueprint,
+      engineering: true,
+      materialCards: [
+        {
+          title: "Turborepo docs",
+          url: "https://example.com/turbo",
+          snippet: "Remote caching reduces CI time for monorepos",
+        },
+      ],
+    });
+    expect(messages[0].content).toContain("Turborepo docs");
+    expect(messages[0].content).toContain("Remote caching");
+  });
+
   it("inserts edit anchors between sections", () => {
     const html = insertEditAnchors(
       "<p>开篇</p>\n<hr />\n<h2>一</h2><p>内容</p>\n<hr />\n<h2>二</h2><p>更多</p>",
     );
     expect(html).toContain("<!-- edit-anchor:");
     expect((html.match(/<!-- edit-anchor:/g) ?? []).length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("web search gate", () => {
+  it("disables search when no Tavily key", () => {
+    const prev = process.env.TAVILY_API_KEY;
+    delete process.env.TAVILY_API_KEY;
+    expect(isContentWebSearchEnabled()).toBe(false);
+    if (prev !== undefined) process.env.TAVILY_API_KEY = prev;
   });
 });

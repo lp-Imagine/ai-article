@@ -5,7 +5,9 @@ type SecretKey =
   | "AI_API_KEY"
   | "AUXILIARY_AI_API_KEY"
   | "WECHAT_APP_SECRET"
-  | "BLOG_GITHUB_TOKEN";
+  | "BLOG_GITHUB_TOKEN"
+  | "TAVILY_API_KEY"
+  | "tavilyApiKey";
 
 const ENV_KEY_MAP: Record<string, string> = {
   aiApiKey: "AI_API_KEY",
@@ -27,6 +29,8 @@ const ENV_KEY_MAP: Record<string, string> = {
   blogGithubRepo: "BLOG_GITHUB_REPO",
   blogGithubBranch: "BLOG_GITHUB_BRANCH",
   blogSiteUrl: "BLOG_SITE_URL",
+  tavilyApiKey: "TAVILY_API_KEY",
+  contentWebSearch: "CONTENT_WEB_SEARCH",
 };
 
 const configStore = new AsyncLocalStorage<Record<string, string>>();
@@ -78,7 +82,14 @@ export function isSecretKey(envKey: string): envKey is SecretKey {
     envKey === "AI_API_KEY" ||
     envKey === "AUXILIARY_AI_API_KEY" ||
     envKey === "WECHAT_APP_SECRET" ||
-    envKey === "BLOG_GITHUB_TOKEN"
+    envKey === "BLOG_GITHUB_TOKEN" ||
+    envKey === "TAVILY_API_KEY" ||
+    envKey === "tavilyApiKey" ||
+    envKey === "aiApiKey" ||
+    envKey === "auxiliaryAiApiKey" ||
+    envKey === "wechatAppSecret" ||
+    envKey === "blogGithubToken" ||
+    envKey === "imageApiKey"
   );
 }
 

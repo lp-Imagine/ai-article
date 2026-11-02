@@ -8,13 +8,15 @@
 import {
   buildAntiAiVoiceBlock,
   buildEngineeringContentBlock,
+  buildEvidenceBlock,
   buildOnTopicBlock,
   buildArticleHtmlFormatRulesBrief,
   buildStructuralDeAiBlock,
+  buildWechatPlatformValueBlock,
   FULL_ARTICLE_SUMMARY_RULES,
 } from "@/lib/ai/prompts/common";
 
-export const CONTENT_PROMPT_VERSION = "4.1.0";
+export const CONTENT_PROMPT_VERSION = "4.2.0";
 
 export function buildContentSystemPromptCore(input: {
   topic: string;
@@ -51,6 +53,10 @@ ${buildAntiAiVoiceBlock()}
 ${buildStructuralDeAiBlock()}
 
 ${buildEngineeringContentBlock(engineering)}
+
+${buildEvidenceBlock(engineering)}
+
+${buildWechatPlatformValueBlock()}
 
 【2. 证据与文风】
 ${

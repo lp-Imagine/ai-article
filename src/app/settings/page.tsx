@@ -587,6 +587,31 @@ export default function SettingsPage() {
                 />
               </div>
 
+              <div className="mt-6">
+                <FieldLabel>写前外搜锚定（Tavily，可选）</FieldLabel>
+                <p className="mt-1 mb-3 text-xs text-[var(--muted)]">
+                  填 Key 后，正文写前会检索 1–2 次主题素材卡注入加料；失败则自动降级本地硬加料，不阻断生成。
+                </p>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  value={getValue("tavilyApiKey")}
+                  onChange={(e) => setValue("tavilyApiKey", e.target.value)}
+                  placeholder="tvly-..."
+                  className="mt-1 w-full px-4 py-2.5 text-sm"
+                />
+                <label className="mt-3 flex items-center gap-2 text-sm text-[var(--foreground)]">
+                  <input
+                    type="checkbox"
+                    checked={(getValue("contentWebSearch") || "on") !== "off"}
+                    onChange={(e) =>
+                      setValue("contentWebSearch", e.target.checked ? "on" : "off")
+                    }
+                  />
+                  启用内容外搜（有 Key 时默认开启）
+                </label>
+              </div>
+
               {getValue("writingPreferences") ? (
                 <div className="mt-6">
                   <FieldLabel>已学习的润色偏好</FieldLabel>
